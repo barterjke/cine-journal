@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CinéJournal - Feed</title>
+<!-- Google Fonts: Hanken Grotesk, JetBrains Mono & Material Symbols -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:ital,wght@0,100..900;1,100..900&amp;family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="css/app.css" rel="stylesheet"/>
+</head>
+<body class="bg-background text-on-background min-h-screen font-body-md text-body-md overflow-x-hidden selection:bg-primary-container selection:text-on-primary-container">
+<!-- TopAppBar (Web) -->
+<header class="w-full top-0 sticky z-50 bg-surface dark:bg-on-background border-b border-surface-variant dark:border-outline-variant hidden md:flex">
+<div class="flex justify-between items-center px-margin-mobile md:px-margin-desktop py-md w-full max-w-[1440px] mx-auto">
+<div class="flex items-center gap-xl">
+<h1 class="font-headline-md text-headline-md font-bold text-primary dark:text-primary-fixed tracking-tight">CinéJournal</h1>
+<nav class="flex items-center gap-lg">
+<a class="text-primary dark:text-primary-fixed font-bold border-b-2 border-primary py-2 hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" href="#">Feed</a>
+<a class="text-on-surface-variant dark:text-outline py-2 hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" href="#">Movies</a>
+<a class="text-on-surface-variant dark:text-outline py-2 hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" href="review.html">Friends</a>
+<a class="text-on-surface-variant dark:text-outline py-2 hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" href="#">Profile</a>
+</nav>
+</div>
+<div class="flex items-center gap-md">
+<div class="relative hidden lg:block">
+<span class="material-symbols-outlined absolute left-sm top-1/2 -translate-y-1/2 text-outline" style="font-size: 20px;">search</span>
+<input class="bg-surface-container-low border-none rounded-full py-2 pl-xl pr-md font-label-sm text-label-sm text-on-surface focus:ring-1 focus:ring-primary w-64" placeholder="Search films..." type="text"/>
+</div>
+<button class="text-on-surface-variant hover:text-primary transition-colors p-sm cursor-pointer active:opacity-70">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="text-on-surface-variant hover:text-primary transition-colors p-sm cursor-pointer active:opacity-70">
+<span class="material-symbols-outlined">cast</span>
+</button>
+</div>
+</div>
+</header>
+<!-- Main Content Grid -->
+<main class="max-w-[1440px] mx-auto px-margin-mobile md:px-margin-desktop py-xl md:py-xxl grid grid-cols-1 md:grid-cols-12 gap-gutter">
+<!-- Left/Main Column: Film Feed -->
+<section class="md:col-span-8 lg:col-span-9 flex flex-col gap-xxl">
+<!-- Live Discussion Section -->
+<div class="flex flex-col gap-lg">
+<div class="flex items-center gap-sm">
+<span class="w-2 h-2 rounded-full bg-secondary animate-pulse"></span>
+<h2 class="font-label-sm text-label-sm text-secondary uppercase tracking-widest">Live Now</h2>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-gutter">
+<!-- Live Card 1 -->
+<div class="bg-surface-container-lowest rounded-xl p-md flex gap-md items-start soft-shadow border border-surface-variant group cursor-pointer transition-transform hover:-translate-y-1">
+<div class="w-24 h-36 shrink-0 rounded-lg overflow-hidden inner-stroke relative">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" alt="A striking minimalist movie poster for a sci-fi film featuring a solitary astronaut on a desolate, bright white landscape." src="img/poster-silence-of-space.jpg"/>
+</div>
+<div class="flex flex-col gap-xs flex-grow">
+<div class="flex justify-between items-start">
+<h3 class="font-headline-md text-headline-md text-on-background line-clamp-2">The Silence of Space</h3>
+<span class="bg-surface-container px-2 py-1 rounded font-label-sm text-label-sm text-on-surface-variant">2024</span>
+</div>
+<div class="flex items-center gap-xs text-tertiary">
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]">star_half</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant mt-sm text-sm line-clamp-3">Join the discussion room. 142 members currently debating the ambiguous ending.</p>
+<div class="mt-auto pt-sm flex -space-x-2">
+<div class="w-6 h-6 rounded-full bg-surface-variant border-2 border-surface-container-lowest overflow-hidden">
+<img class="w-full h-full object-cover" alt="A black and white studio portrait of a woman looking thoughtfully off-camera." src="img/avatar-live-1.jpg"/>
+</div>
+<div class="w-6 h-6 rounded-full bg-surface-variant border-2 border-surface-container-lowest overflow-hidden">
+<img class="w-full h-full object-cover" alt="A black and white studio portrait of a man with glasses looking directly at the camera." src="img/avatar-live-2.jpg"/>
+</div>
+<div class="w-6 h-6 rounded-full bg-surface-container-high border-2 border-surface-container-lowest flex items-center justify-center font-label-sm text-label-sm text-[10px] text-on-surface">
+                                    +14
+                                </div>
+</div>
+</div>
+</div>
+<!-- Live Card 2 -->
+<div class="bg-surface-container-lowest rounded-xl p-md flex gap-md items-start soft-shadow border border-surface-variant group cursor-pointer transition-transform hover:-translate-y-1">
+<div class="w-24 h-36 shrink-0 rounded-lg overflow-hidden inner-stroke relative">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" alt="An abstract, minimalist movie poster featuring a blurred, motion-heavy shot of a city street at dawn." src="img/poster-morning-haze.jpg"/>
+</div>
+<div class="flex flex-col gap-xs flex-grow">
+<div class="flex justify-between items-start">
+<h3 class="font-headline-md text-headline-md text-on-background line-clamp-2">Morning Haze</h3>
+<span class="bg-surface-container px-2 py-1 rounded font-label-sm text-label-sm text-on-surface-variant">1998</span>
+</div>
+<div class="flex items-center gap-xs text-tertiary">
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant mt-sm text-sm line-clamp-3">Live watch party starting in 10 minutes. Grab your coffee.</p>
+<div class="mt-auto pt-sm flex -space-x-2">
+<div class="w-6 h-6 rounded-full bg-surface-variant border-2 border-surface-container-lowest overflow-hidden">
+<img class="w-full h-full object-cover" alt="A black and white studio portrait of a woman laughing." src="img/avatar-live-3.jpg"/>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Main Grid -->
+<div class="flex flex-col gap-lg">
+<div class="flex justify-between items-end border-b border-surface-variant pb-sm">
+<h2 class="font-headline-lg text-headline-lg text-on-background">Recent Entries</h2>
+<div class="flex gap-sm">
+<button class="p-xs text-on-surface-variant hover:text-primary transition-colors"><span class="material-symbols-outlined">grid_view</span></button>
+<button class="p-xs text-outline hover:text-primary transition-colors"><span class="material-symbols-outlined">view_list</span></button>
+</div>
+</div>
+<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-gutter gap-y-xl">
+<!-- Poster Item 1 -->
+<div class="flex flex-col gap-sm group cursor-pointer">
+<div class="aspect-[2/3] w-full rounded-lg overflow-hidden inner-stroke soft-shadow relative bg-surface-container-low">
+<img class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" alt="A vintage-inspired movie poster for a French New Wave film, a stark black and white photograph of a woman smoking in a cafe overlaid with bold primary blue geometric shapes." src="img/poster-le-souffle.jpg"/>
+<!-- Overlay on hover -->
+<div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center backdrop-blur-sm">
+<button class="w-12 h-12 rounded-full bg-white/20 border border-white/50 flex items-center justify-center text-white hover:bg-white hover:text-black transition-colors">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">add</span>
+</button>
+</div>
+</div>
+<div class="flex flex-col">
+<div class="flex justify-between items-baseline gap-2">
+<h3 class="font-headline-md text-[16px] leading-tight text-on-background font-bold truncate">Le Souffle</h3>
+<span class="font-label-sm text-label-sm text-on-surface-variant shrink-0">1960</span>
+</div>
+<div class="flex items-center gap-xs text-primary mt-1">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+</div>
+</div>
+</div>
+<!-- Poster Item 2 -->
+<div class="flex flex-col gap-sm group cursor-pointer">
+<div class="aspect-[2/3] w-full rounded-lg overflow-hidden inner-stroke soft-shadow relative bg-surface-container-low">
+<img class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" alt="A hyper-minimalist poster for a modern thriller: an off-white cream canvas with a tiny, hyper-detailed photograph of a dropped set of keys casting a long, sharp black shadow." src="img/poster-the-drop.jpg"/>
+<div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center backdrop-blur-sm">
+<button class="w-12 h-12 rounded-full bg-white/20 border border-white/50 flex items-center justify-center text-white hover:bg-white hover:text-black transition-colors">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">add</span>
+</button>
+</div>
+</div>
+<div class="flex flex-col">
+<div class="flex justify-between items-baseline gap-2">
+<h3 class="font-headline-md text-[16px] leading-tight text-on-background font-bold truncate">The Drop</h3>
+<span class="font-label-sm text-label-sm text-on-surface-variant shrink-0">2023</span>
+</div>
+<div class="flex items-center gap-xs text-primary mt-1">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]">star</span>
+<span class="material-symbols-outlined text-[14px]">star</span>
+</div>
+</div>
+</div>
+<!-- Poster Item 3 -->
+<div class="flex flex-col gap-sm group cursor-pointer">
+<div class="aspect-[2/3] w-full rounded-lg overflow-hidden inner-stroke soft-shadow relative bg-surface-container-low">
+<img class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" alt="An atmospheric, moody poster for a period drama: a soft-focus, painterly image of a grand estate shrouded in thick, pale morning fog." src="img/poster-estate-of-mind.jpg"/>
+<div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center backdrop-blur-sm">
+<button class="w-12 h-12 rounded-full bg-white/20 border border-white/50 flex items-center justify-center text-white hover:bg-white hover:text-black transition-colors">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">add</span>
+</button>
+</div>
+</div>
+<div class="flex flex-col">
+<div class="flex justify-between items-baseline gap-2">
+<h3 class="font-headline-md text-[16px] leading-tight text-on-background font-bold truncate">Estate of Mind</h3>
+<span class="font-label-sm text-label-sm text-on-surface-variant shrink-0">2019</span>
+</div>
+<div class="flex items-center gap-xs text-primary mt-1">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+</div>
+</div>
+</div>
+<!-- Poster Item 4 -->
+<div class="flex flex-col gap-sm group cursor-pointer">
+<div class="aspect-[2/3] w-full rounded-lg overflow-hidden inner-stroke soft-shadow relative bg-surface-container-low">
+<img class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" alt="A striking documentary poster: a high-contrast black and white portrait of a jazz musician playing a saxophone, with bold brutalist bright red typography cutting across the frame." src="img/poster-blue-notes.jpg"/>
+<div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center backdrop-blur-sm">
+<button class="w-12 h-12 rounded-full bg-white/20 border border-white/50 flex items-center justify-center text-white hover:bg-white hover:text-black transition-colors">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">add</span>
+</button>
+</div>
+</div>
+<div class="flex flex-col">
+<div class="flex justify-between items-baseline gap-2">
+<h3 class="font-headline-md text-[16px] leading-tight text-on-background font-bold truncate">Blue Notes</h3>
+<span class="font-label-sm text-label-sm text-on-surface-variant shrink-0">2021</span>
+</div>
+<div class="flex items-center gap-xs text-primary mt-1">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]">star</span>
+<span class="material-symbols-outlined text-[14px]">star</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Right Column: Friends Activity Sidebar -->
+<aside class="hidden md:flex md:col-span-4 lg:col-span-3 flex-col gap-xl">
+<div class="sticky top-32 flex flex-col gap-lg">
+<div class="flex items-center gap-sm border-b border-surface-variant pb-sm">
+<span class="material-symbols-outlined text-on-surface-variant">group</span>
+<h2 class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-widest">Friends Activity</h2>
+</div>
+<div class="flex flex-col gap-lg">
+<!-- Activity Item 1 -->
+<div class="flex gap-md group cursor-pointer">
+<div class="w-10 h-10 shrink-0 rounded-full bg-surface-variant overflow-hidden inner-stroke">
+<img class="w-full h-full object-cover grayscale transition-all duration-300 group-hover:grayscale-0" alt="A bright, airy profile photo of a young man smiling outdoors in soft sunlight." src="img/avatar-alex-m.jpg"/>
+</div>
+<div class="flex flex-col gap-xs w-full">
+<div class="flex items-baseline gap-2 justify-between">
+<span class="font-headline-md text-[14px] font-bold text-on-background">Alex M.</span>
+<span class="font-label-sm text-[10px] text-outline">2h ago</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-body-md text-sm text-on-surface-variant">watched</span>
+<span class="font-headline-md text-sm font-bold text-primary">The Silence of Space</span>
+</div>
+<div class="flex items-center gap-xs text-tertiary my-1">
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+</div>
+<p class="font-body-md text-sm text-on-surface-variant italic border-l-2 border-surface-variant pl-3 py-1">"A masterpiece of visual storytelling. The silence is deafening in the best way possible."</p>
+</div>
+</div>
+<!-- Activity Item 2 -->
+<div class="flex gap-md group cursor-pointer">
+<div class="w-10 h-10 shrink-0 rounded-full bg-surface-variant overflow-hidden inner-stroke">
+<img class="w-full h-full object-cover grayscale transition-all duration-300 group-hover:grayscale-0" alt="A bright, high-key studio portrait of a woman with short hair against a crisp white background." src="img/avatar-sarah-k.jpg"/>
+</div>
+<div class="flex flex-col gap-xs w-full">
+<div class="flex items-baseline gap-2 justify-between">
+<span class="font-headline-md text-[14px] font-bold text-on-background">Sarah K.</span>
+<span class="font-label-sm text-[10px] text-outline">5h ago</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-body-md text-sm text-on-surface-variant">added</span>
+<span class="font-headline-md text-sm font-bold text-primary">Morning Haze</span>
+<span class="font-body-md text-sm text-on-surface-variant">to Watchlist</span>
+</div>
+</div>
+</div>
+<!-- Activity Item 3 -->
+<div class="flex gap-md group cursor-pointer">
+<div class="w-10 h-10 shrink-0 rounded-full bg-surface-variant overflow-hidden inner-stroke">
+<img class="w-full h-full object-cover grayscale transition-all duration-300 group-hover:grayscale-0" alt="A black and white portrait photo of a man looking off to the side with cinematic lighting." src="img/avatar-david-p.jpg"/>
+</div>
+<div class="flex flex-col gap-xs w-full">
+<div class="flex items-baseline gap-2 justify-between">
+<span class="font-headline-md text-[14px] font-bold text-on-background">David P.</span>
+<span class="font-label-sm text-[10px] text-outline">Yesterday</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-body-md text-sm text-on-surface-variant">watched</span>
+<span class="font-headline-md text-sm font-bold text-primary">Le Souffle</span>
+</div>
+<div class="flex items-center gap-xs text-tertiary my-1">
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[12px]">star</span>
+<span class="material-symbols-outlined text-[12px]">star</span>
+</div>
+<p class="font-body-md text-sm text-on-surface-variant italic border-l-2 border-surface-variant pl-3 py-1">"Style over substance, perhaps. But what style it is."</p>
+</div>
+</div>
+</div>
+</div>
+</aside>
+</main>
+<!-- BottomNavBar (Mobile) -->
+<nav class="fixed bottom-0 w-full z-50 bg-surface/90 backdrop-blur-md border-t border-surface-variant md:hidden">
+<div class="flex justify-around items-center px-4 h-16 w-full">
+<button class="flex flex-col items-center justify-center text-primary font-bold bg-primary-container/10 rounded-xl px-4 py-1 active:scale-95 transition-transform duration-150">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">home</span>
+<span class="font-label-sm text-label-sm mt-1 text-[10px]">Feed</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-container-high px-4 py-1 rounded-xl active:scale-95 transition-transform duration-150">
+<span class="material-symbols-outlined">movie</span>
+<span class="font-label-sm text-label-sm mt-1 text-[10px]">Movies</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-container-high px-4 py-1 rounded-xl active:scale-95 transition-transform duration-150">
+<span class="material-symbols-outlined">group</span>
+<span class="font-label-sm text-label-sm mt-1 text-[10px]">Friends</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-container-high px-4 py-1 rounded-xl active:scale-95 transition-transform duration-150">
+<span class="material-symbols-outlined">person</span>
+<span class="font-label-sm text-label-sm mt-1 text-[10px]">Profile</span>
+</button>
+</div>
+</nav>
+</body>
+</html>

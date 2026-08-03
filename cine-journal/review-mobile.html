@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Friend's Review - CinéJournal</title>
+<!-- Google Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="css/app.css" rel="stylesheet"/>
+<style>
+        body {
+            background-color: #fcf9f8;
+            color: #1c1b1b;
+        }
+    </style>
+</head>
+<!-- NB: `md:hidden` on <body> is kept verbatim from the Stitch export — this screen
+     was generated as a mobile-only view, so the page is intentionally blank at
+     widths >= 768px. View it in a narrow window / device emulation. -->
+<body class="bg-surface text-on-surface font-body-md min-h-screen flex flex-col pb-24 md:hidden">
+<!-- Top App Bar (a detail/transactional view, so a simple back nav replaces the full bar) -->
+<header class="sticky top-0 w-full bg-surface/90 backdrop-blur-md z-40 px-margin-mobile py-md flex items-center justify-between border-b border-surface-variant">
+<a class="flex items-center text-on-surface-variant hover:text-primary transition-colors cursor-pointer active:opacity-70" href="feed-mobile.html">
+<span class="material-symbols-outlined mr-sm">arrow_back</span>
+<span class="font-label-sm text-label-sm">Back</span>
+</a>
+<span class="font-headline-md text-headline-md font-bold text-primary">CinéJournal</span>
+<div class="w-8"></div> <!-- Spacer for balance -->
+</header>
+<main class="flex-grow flex flex-col items-center pt-lg px-margin-mobile w-full max-w-md mx-auto">
+<!-- Friend Context -->
+<div class="flex items-center w-full mb-lg">
+<div class="w-12 h-12 rounded-full overflow-hidden bg-surface-variant mr-md border border-surface-variant">
+<img class="w-full h-full object-cover" alt="A portrait of a young person in a brightly lit, modern setting wearing stylish minimalist clothing." src="img/avatar-alex-mercer.jpg"/>
+</div>
+<div>
+<h2 class="font-headline-md text-headline-md text-on-surface">Alex Mercer</h2>
+<p class="font-label-sm text-label-sm text-on-surface-variant">Reviewed yesterday</p>
+</div>
+</div>
+<!-- Movie Poster -->
+<div class="w-full aspect-[2/3] rounded-lg overflow-hidden poster-shadow inner-stroke mb-lg relative bg-surface-variant">
+<img class="w-full h-full object-cover absolute inset-0" alt="A striking, minimalist movie poster featuring abstract geometric shapes and a stark contrast between pure white and vibrant primary blue, with a single figure lost in a vast, empty architectural space." src="img/poster-architecture-of-silence.jpg"/>
+</div>
+<!-- Movie Title & Rating -->
+<div class="w-full flex justify-between items-start mb-md">
+<div>
+<h1 class="font-headline-lg-mobile text-headline-lg-mobile text-on-surface mb-xs">The Architecture of Silence</h1>
+<div class="flex flex-wrap gap-sm">
+<span class="bg-surface-container-low text-on-surface font-label-sm text-label-sm px-2 py-1 rounded">Documentary</span>
+<span class="bg-surface-container-low text-on-surface font-label-sm text-label-sm px-2 py-1 rounded">2023</span>
+</div>
+</div>
+<div class="flex flex-col items-end">
+<div class="flex items-center text-tertiary">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">star_half</span>
+</div>
+<span class="font-label-sm text-label-sm text-on-surface-variant mt-xs">4.5 / 5</span>
+</div>
+</div>
+<hr class="w-full border-t border-surface-variant my-md"/>
+<!-- Review Text -->
+<article class="w-full font-body-lg text-body-lg text-on-surface mb-xl">
+<p class="mb-md">An absolute masterclass in visual storytelling. The director manages to convey profound isolation without uttering a single line of dialogue for the first forty minutes.</p>
+<p>I was particularly struck by the framing—every shot feels like it could be hung in a gallery. The use of negative space in the urban environments perfectly mirrors the protagonist's internal emptiness. It's not a fast-paced film, but if you let it wash over you, it's incredibly moving.</p>
+<p class="mt-md font-label-sm text-label-sm text-primary uppercase tracking-widest">#Cinematography #MustWatch</p>
+</article>
+</main>
+<!-- Prominent Comment Input (Sticky Bottom) -->
+<div class="fixed bottom-0 left-0 w-full bg-surface/90 backdrop-blur-md border-t border-surface-variant p-margin-mobile z-50">
+<form class="flex items-center gap-md max-w-md mx-auto w-full">
+<div class="flex-grow relative">
+<input class="w-full bg-surface-container-low border-none rounded-full py-3 px-4 font-body-md text-on-surface focus:ring-1 focus:ring-primary focus:outline-none placeholder-outline" placeholder="Add a comment..." type="text"/>
+</div>
+<button class="bg-primary text-on-primary rounded-full w-12 h-12 flex items-center justify-center hover:bg-primary-fixed-dim transition-colors flex-shrink-0" type="submit">
+<span class="material-symbols-outlined">send</span>
+</button>
+</form>
+</div>
+</body>
+</html>

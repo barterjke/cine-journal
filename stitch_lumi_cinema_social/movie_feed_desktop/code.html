@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CinéJournal - Feed</title>
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Google Fonts: Hanken Grotesk & JetBrains Mono -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:ital,wght@0,100..900;1,100..900&amp;family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-primary-container": "#e3e6ff",
+                        "error-container": "#ffdad6",
+                        "on-error-container": "#93000a",
+                        "background": "#fcf9f8",
+                        "outline": "#737688",
+                        "error": "#ba1a1a",
+                        "surface-container": "#f0eded",
+                        "surface-variant": "#e5e2e1",
+                        "secondary-container": "#e2241f",
+                        "surface-container-highest": "#e5e2e1",
+                        "on-surface-variant": "#434656",
+                        "surface-container-high": "#eae7e7",
+                        "tertiary-container": "#c13301",
+                        "surface-tint": "#004dea",
+                        "secondary-fixed": "#ffdad5",
+                        "inverse-primary": "#b6c4ff",
+                        "surface-dim": "#dcd9d9",
+                        "surface-bright": "#fcf9f8",
+                        "on-tertiary-fixed": "#3b0900",
+                        "on-secondary-fixed-variant": "#930005",
+                        "on-primary-fixed-variant": "#0039b3",
+                        "surface-container-lowest": "#ffffff",
+                        "tertiary": "#972500",
+                        "primary-fixed-dim": "#b6c4ff",
+                        "on-secondary-container": "#fffbff",
+                        "on-tertiary-container": "#ffe1d9",
+                        "on-background": "#1c1b1b",
+                        "secondary": "#bc000a",
+                        "on-primary": "#ffffff",
+                        "outline-variant": "#c3c5d9",
+                        "primary-fixed": "#dce1ff",
+                        "primary-container": "#0055ff",
+                        "tertiary-fixed": "#ffdbd1",
+                        "on-secondary": "#ffffff",
+                        "secondary-fixed-dim": "#ffb4aa",
+                        "on-tertiary": "#ffffff",
+                        "surface-container-low": "#f6f3f2",
+                        "on-secondary-fixed": "#410001",
+                        "surface": "#fcf9f8",
+                        "on-primary-fixed": "#001551",
+                        "inverse-surface": "#313030",
+                        "primary": "#0041c8",
+                        "on-error": "#ffffff",
+                        "inverse-on-surface": "#f3f0ef",
+                        "tertiary-fixed-dim": "#ffb5a0",
+                        "on-tertiary-fixed-variant": "#872100",
+                        "on-surface": "#1c1b1b"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "xxl": "80px",
+                        "xs": "4px",
+                        "margin-desktop": "64px",
+                        "lg": "24px",
+                        "margin-mobile": "16px",
+                        "unit": "4px",
+                        "xl": "48px",
+                        "gutter": "24px",
+                        "md": "16px",
+                        "sm": "8px"
+                    },
+                    "fontFamily": {
+                        "body-md": ["Hanken Grotesk"],
+                        "headline-md": ["Hanken Grotesk"],
+                        "label-sm": ["JetBrains Mono"],
+                        "display-lg": ["Hanken Grotesk"],
+                        "headline-lg-mobile": ["Hanken Grotesk"],
+                        "headline-lg": ["Hanken Grotesk"],
+                        "body-lg": ["Hanken Grotesk"]
+                    },
+                    "fontSize": {
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "label-sm": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "500" }],
+                        "display-lg": ["48px", { "lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "headline-lg-mobile": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "body-lg": ["18px", { "lineHeight": "28px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .inner-stroke {
+            box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+        }
+        .soft-shadow {
+            box-shadow: 0px 4px 20px rgba(0,0,0,0.04);
+        }
+        .hairline-bottom {
+            border-bottom: 1px solid #F2F2F7;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background min-h-screen font-body-md text-body-md overflow-x-hidden selection:bg-primary-container selection:text-on-primary-container">
+<!-- TopAppBar (Web) -->
+<header class="w-full top-0 sticky z-50 bg-surface dark:bg-on-background border-b border-surface-variant dark:border-outline-variant flat no shadows hidden md:flex">
+<div class="flex justify-between items-center px-margin-mobile md:px-margin-desktop py-md w-full max-w-[1440px] mx-auto">
+<div class="flex items-center gap-xl">
+<h1 class="font-headline-md text-headline-md font-bold text-primary dark:text-primary-fixed tracking-tight">CinéJournal</h1>
+<nav class="flex items-center gap-lg">
+<a class="text-primary dark:text-primary-fixed font-bold border-b-2 border-primary py-2 hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" href="#">Feed</a>
+<a class="text-on-surface-variant dark:text-outline py-2 hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" href="#">Movies</a>
+<a class="text-on-surface-variant dark:text-outline py-2 hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" href="#">Friends</a>
+<a class="text-on-surface-variant dark:text-outline py-2 hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" href="#">Profile</a>
+</nav>
+</div>
+<div class="flex items-center gap-md">
+<div class="relative hidden lg:block">
+<span class="material-symbols-outlined absolute left-sm top-1/2 -translate-y-1/2 text-outline" style="font-size: 20px;">search</span>
+<input class="bg-surface-container-low border-none rounded-full py-2 pl-xl pr-md font-label-sm text-label-sm text-on-surface focus:ring-1 focus:ring-primary w-64" placeholder="Search films..." type="text"/>
+</div>
+<button class="text-on-surface-variant hover:text-primary transition-colors p-sm cursor-pointer active:opacity-70">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="text-on-surface-variant hover:text-primary transition-colors p-sm cursor-pointer active:opacity-70">
+<span class="material-symbols-outlined">cast</span>
+</button>
+</div>
+</div>
+</header>
+<!-- Main Content Grid -->
+<main class="max-w-[1440px] mx-auto px-margin-mobile md:px-margin-desktop py-xl md:py-xxl grid grid-cols-1 md:grid-cols-12 gap-gutter">
+<!-- Left/Main Column: Film Feed -->
+<section class="md:col-span-8 lg:col-span-9 flex flex-col gap-xxl">
+<!-- Live Discussion Section -->
+<div class="flex flex-col gap-lg">
+<div class="flex items-center gap-sm">
+<span class="w-2 h-2 rounded-full bg-secondary animate-pulse"></span>
+<h2 class="font-label-sm text-label-sm text-secondary uppercase tracking-widest">Live Now</h2>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-gutter">
+<!-- Live Card 1 -->
+<div class="bg-surface-container-lowest rounded-xl p-md flex gap-md items-start soft-shadow border border-surface-variant group cursor-pointer transition-transform hover:-translate-y-1">
+<div class="w-24 h-36 shrink-0 rounded-lg overflow-hidden inner-stroke relative">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" data-alt="A striking minimalist movie poster for a sci-fi film featuring a solitary astronaut on a desolate, bright white landscape. The composition is highly asymmetric with vast negative space. The lighting is harsh and bright, evoking a stark, clinical atmosphere. The color palette is strictly white, deep black, and a single accent of vivid red." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDUMh8evzOiZ_u7Lsl9nNL9gPikjGQYyDsTgnnOryiYVSe9fmFCQlvPet5IycJ9mjS4QDocejiUl2ae4Fd2ntNRq_GEbYJDnuDzFWzKRW_MXviieYEv6fmW31_ge6lVncT4DWWD_4xkId1zKk0WDJjOHltVPsEndy5vmjo676h1exaROeEx0GyvTcDgaFDk5NGVbsJcj_7lzJeLvHl6M5BP74STKsjRFhgnzbCbBKWXPmESBkOk"/>
+</div>
+<div class="flex flex-col gap-xs flex-grow">
+<div class="flex justify-between items-start">
+<h3 class="font-headline-md text-headline-md text-on-background line-clamp-2">The Silence of Space</h3>
+<span class="bg-surface-container px-2 py-1 rounded font-label-sm text-label-sm text-on-surface-variant">2024</span>
+</div>
+<div class="flex items-center gap-xs text-tertiary">
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]">star_half</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant mt-sm text-sm line-clamp-3">Join the discussion room. 142 members currently debating the ambiguous ending.</p>
+<div class="mt-auto pt-sm flex -space-x-2">
+<div class="w-6 h-6 rounded-full bg-surface-variant border-2 border-surface-container-lowest overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="A black and white studio portrait of a woman looking thoughtfully off-camera, soft even lighting, highly professional, bright background." src="https://lh3.googleusercontent.com/aida-public/AB6AXuA_duDjgktlSw_LJfeajufER5pGyqhX3lrkV201VAWSFBC_eTVXVSTXh-i3QrxJCHqqhgCP2sYR3vhSRCg1q_17br9id2R8o07eMkQrKWX_fBcTRz5UUoxsKIh3rg_DTLWwDLlO2NmLrbdPcqdcVAp-8rsaeDqduwJY_LKIuEsjda-Swlgr5hm-HShNpPj1GBPLn9REU_ofh1d8SXojbjR5xzJtwsu_1_hMO6UcScb6HlOMjnfv"/>
+</div>
+<div class="w-6 h-6 rounded-full bg-surface-variant border-2 border-surface-container-lowest overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="A black and white studio portrait of a man with glasses looking directly at the camera, soft even lighting, highly professional, bright background." src="https://lh3.googleusercontent.com/aida-public/AB6AXuA_gaWmhXQuOSmCBxIMGbLEd4A5lCqZneOrOvFYYk4yMUEtAsnmABHExVpzcSsUGjGwmFVC3f-15kDTG22fmKILFJ0hOiBNBLiJM6vArBXkZKmdtxBKaQaYdeYquOE5LgOecBw1avIpCAUe3_hcfGYhLziakSBcrXkGOVGtwDyHYqQH-9hiATyfV5g-Y5h70I2h9nByjq6OXdHiYrE5A81IOdHz8M7emkZinyXbbngkngd8n2Dh"/>
+</div>
+<div class="w-6 h-6 rounded-full bg-surface-container-high border-2 border-surface-container-lowest flex items-center justify-center font-label-sm text-label-sm text-[10px] text-on-surface">
+                                    +14
+                                </div>
+</div>
+</div>
+</div>
+<!-- Live Card 2 -->
+<div class="bg-surface-container-lowest rounded-xl p-md flex gap-md items-start soft-shadow border border-surface-variant group cursor-pointer transition-transform hover:-translate-y-1">
+<div class="w-24 h-36 shrink-0 rounded-lg overflow-hidden inner-stroke relative">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" data-alt="An abstract, minimalist movie poster featuring a blurred, motion-heavy shot of a city street at dawn. The colors are muted pastels, soft blues, and hazy whites. The typography is completely absent, letting the ethereal imagery speak for itself. High key lighting." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBNL_w2z1y5kfzcfJ4ZFnqd1L_u0usetUGjBl0vW9GWQeKUrx8LrffiENjkiTdYwSAZ89hPykLlmnRFintphKjZ0xiT72dWsP9ZexqEV1-fZRwX7JeZcgtr8hOaXKVKNbBJBJRHJdLLPdCGzKjN25JTLc5ksYa4qFO53y4LCb7KKkih9HDTIDKd-yPo9P-s_5aoQ0IQX77G8t_QUZOIBAuGp5WhYehtRgGCeXxdbDcM-exlhIuI"/>
+</div>
+<div class="flex flex-col gap-xs flex-grow">
+<div class="flex justify-between items-start">
+<h3 class="font-headline-md text-headline-md text-on-background line-clamp-2">Morning Haze</h3>
+<span class="bg-surface-container px-2 py-1 rounded font-label-sm text-label-sm text-on-surface-variant">1998</span>
+</div>
+<div class="flex items-center gap-xs text-tertiary">
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">star</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant mt-sm text-sm line-clamp-3">Live watch party starting in 10 minutes. Grab your coffee.</p>
+<div class="mt-auto pt-sm flex -space-x-2">
+<div class="w-6 h-6 rounded-full bg-surface-variant border-2 border-surface-container-lowest overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="A black and white studio portrait of a woman laughing, soft even lighting, highly professional, bright background." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAZtLayK1lLxKamgN10zf1xOG7wvplUCwc5ZN4FfDwlOQJ_XXEQenOQ-EakcjIX0QR2fGkzet9EHE7OqvbyFdvU4pm2Ayi1ZpWnARI7AgzOvFMvcmVlWmjk9h_lew-U6ZYalOWsfgBMe47lEYvkXvHdGrcW9JSV2z43x5MqWM1yvBK7o4-8p8ZUJYYq2Hzi0eyrFiL0NBPoGl294WQywPfOf9X2DujAGuabe-ZbyDkVKmtpIZcF"/>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Main Grid -->
+<div class="flex flex-col gap-lg">
+<div class="flex justify-between items-end border-b border-surface-variant pb-sm">
+<h2 class="font-headline-lg text-headline-lg text-on-background">Recent Entries</h2>
+<div class="flex gap-sm">
+<button class="p-xs text-on-surface-variant hover:text-primary transition-colors"><span class="material-symbols-outlined">grid_view</span></button>
+<button class="p-xs text-outline hover:text-primary transition-colors"><span class="material-symbols-outlined">view_list</span></button>
+</div>
+</div>
+<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-gutter gap-y-xl">
+<!-- Poster Item 1 -->
+<div class="flex flex-col gap-sm group cursor-pointer">
+<div class="aspect-[2/3] w-full rounded-lg overflow-hidden inner-stroke soft-shadow relative bg-surface-container-low">
+<img class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" data-alt="A vintage-inspired movie poster for a French New Wave film. The image features a stark black and white photograph of a woman smoking in a cafe, overlaid with bold, primary blue geometric shapes and minimalist typography. The aesthetic is chic, intellectual, and highly structured, emphasizing white space." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAM9YUZtQ57VGhZVy-lqcj3UyVBhTZ6r1psdwcZuI75kV00znnmBPGuJwEeAI978-rW9S5a2ixOJFc6gnzviaO59aeqg4PAj8rZ-VlY0VOSOU7UNE_TW9BWWSEqmueGozHehGvSPbUYWiK7vnhdNPwBYizjAjDad5p_7pRWeGnoY6AB0t__nAOdkPVtfuCjsurGXxL7yX_uVc0DbDciekvrCkbgu0sfgDlMwyZz2YI_5mdLTIUq"/>
+<!-- Overlay on hover -->
+<div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center backdrop-blur-sm">
+<button class="w-12 h-12 rounded-full bg-white/20 border border-white/50 flex items-center justify-center text-white hover:bg-white hover:text-black transition-colors">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">add</span>
+</button>
+</div>
+</div>
+<div class="flex flex-col">
+<div class="flex justify-between items-baseline gap-2">
+<h3 class="font-headline-md text-[16px] leading-tight text-on-background font-bold truncate">Le Souffle</h3>
+<span class="font-label-sm text-label-sm text-on-surface-variant shrink-0">1960</span>
+</div>
+<div class="flex items-center gap-xs text-primary mt-1">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+</div>
+</div>
+</div>
+<!-- Poster Item 2 -->
+<div class="flex flex-col gap-sm group cursor-pointer">
+<div class="aspect-[2/3] w-full rounded-lg overflow-hidden inner-stroke soft-shadow relative bg-surface-container-low">
+<img class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" data-alt="A hyper-minimalist poster for a modern thriller. The entire canvas is a slightly off-white cream color. In the exact center, a tiny, hyper-detailed photograph of a dropped set of keys casts a long, sharp black shadow. The title is written in tiny, tracked-out sans-serif font at the very bottom edge." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBxCQS6pa6nb0OWe_Y7qHrijQmkx4maenkN_asQJ4XERllb8vFFRQbGEV_MlKFZL9hH07jZ7xir-9PkCXuIH9g0ch8D3dLjVfG0PU3jS3wHP9vN-thN7G-lltsTOfuEhANdZuX0WjkUgNG1zbCeWnvptx1unprt9qjdmChbY4yohSnmaeBHwqWb73hlQHGvc423-XWKhfkiJPRA25evlMQjDOO_TCL8_8vh2l81ij_Bq6zssZ_M"/>
+<div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center backdrop-blur-sm">
+<button class="w-12 h-12 rounded-full bg-white/20 border border-white/50 flex items-center justify-center text-white hover:bg-white hover:text-black transition-colors">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">add</span>
+</button>
+</div>
+</div>
+<div class="flex flex-col">
+<div class="flex justify-between items-baseline gap-2">
+<h3 class="font-headline-md text-[16px] leading-tight text-on-background font-bold truncate">The Drop</h3>
+<span class="font-label-sm text-label-sm text-on-surface-variant shrink-0">2023</span>
+</div>
+<div class="flex items-center gap-xs text-primary mt-1">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]">star</span>
+<span class="material-symbols-outlined text-[14px]">star</span>
+</div>
+</div>
+</div>
+<!-- Poster Item 3 -->
+<div class="flex flex-col gap-sm group cursor-pointer">
+<div class="aspect-[2/3] w-full rounded-lg overflow-hidden inner-stroke soft-shadow relative bg-surface-container-low">
+<img class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" data-alt="An atmospheric, moody poster for a period drama. A soft-focus, painterly image of a grand estate shrouded in thick, pale morning fog. The color palette is restricted to soft greys, muted greens, and bright white fog. Typography is an elegant serif, centered and unobtrusive." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAsZI96q1nBcc_vUB8fDlqUMeQ2CeCKyWRjTzpjdUnJ8T_G90qxM40UwHOYiADMEGCuRUzrn_eWcwnqKjb5LYojGkbePkTvbYmoivLSXdPs5BHxg4Fo0zCg_JWffaAOenQWxLNoZ1x5X9Qp98txA5uALfHjHficm_hQ0wuhs07krT9ChKzM2_sGWBiVMVJFs-ElKmwmMCriIyFcNZ9ERdQ-A-TlQYND0tofY9tuQa7Z3DwtlXbw"/>
+<div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center backdrop-blur-sm">
+<button class="w-12 h-12 rounded-full bg-white/20 border border-white/50 flex items-center justify-center text-white hover:bg-white hover:text-black transition-colors">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">add</span>
+</button>
+</div>
+</div>
+<div class="flex flex-col">
+<div class="flex justify-between items-baseline gap-2">
+<h3 class="font-headline-md text-[16px] leading-tight text-on-background font-bold truncate">Estate of Mind</h3>
+<span class="font-label-sm text-label-sm text-on-surface-variant shrink-0">2019</span>
+</div>
+<div class="flex items-center gap-xs text-primary mt-1">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+</div>
+</div>
+</div>
+<!-- Poster Item 4 -->
+<div class="flex flex-col gap-sm group cursor-pointer">
+<div class="aspect-[2/3] w-full rounded-lg overflow-hidden inner-stroke soft-shadow relative bg-surface-container-low">
+<img class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" data-alt="A striking documentary poster. A high-contrast, black and white portrait of a jazz musician playing a saxophone, filling the entire frame. The typography is bold, brutalist, and bright red, creating a sharp disruption across the musician's face. High energy, stark lighting." src="https://lh3.googleusercontent.com/aida-public/AB6AXuC4jlZAM_mDj7skjviS6cCc_65_p3NapjPC1HQWhm1Kt8cEM-Hu5vsfCp_bJ1OMWRdPA-qafSnf7MLrrIXOoAfOjIYOaz7Ju8jKsbzZn6J_L31skSL-Ozd9FW2XXgKsGSM6-Vyps4BaKn07Y3xQRwKXRd7UXNmgiPlvjoeFUIQzhnhnHMdgIg28WvazikxPbg2waqeVKuSndKE5agkpEjW7hwEpvph4gkTStAlkqwMRajRBeEsb"/>
+<div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center backdrop-blur-sm">
+<button class="w-12 h-12 rounded-full bg-white/20 border border-white/50 flex items-center justify-center text-white hover:bg-white hover:text-black transition-colors">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">add</span>
+</button>
+</div>
+</div>
+<div class="flex flex-col">
+<div class="flex justify-between items-baseline gap-2">
+<h3 class="font-headline-md text-[16px] leading-tight text-on-background font-bold truncate">Blue Notes</h3>
+<span class="font-label-sm text-label-sm text-on-surface-variant shrink-0">2021</span>
+</div>
+<div class="flex items-center gap-xs text-primary mt-1">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[14px]">star</span>
+<span class="material-symbols-outlined text-[14px]">star</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Right Column: Friends Activity Sidebar -->
+<aside class="hidden md:flex md:col-span-4 lg:col-span-3 flex-col gap-xl">
+<div class="sticky top-32 flex flex-col gap-lg">
+<div class="flex items-center gap-sm border-b border-surface-variant pb-sm">
+<span class="material-symbols-outlined text-on-surface-variant">group</span>
+<h2 class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-widest">Friends Activity</h2>
+</div>
+<div class="flex flex-col gap-lg">
+<!-- Activity Item 1 -->
+<div class="flex gap-md group cursor-pointer">
+<div class="w-10 h-10 shrink-0 rounded-full bg-surface-variant overflow-hidden inner-stroke">
+<img class="w-full h-full object-cover grayscale transition-all duration-300 group-hover:grayscale-0" data-alt="A bright, airy profile photo of a young man smiling, outdoors in soft sunlight, minimalist aesthetic, very clean." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCnwbXKWnvyU2PCmG8kB_Z03Y-wFeRNbugHYJ7nHmL8e6-MXpNJRDXX5MWKuW129l44mqI-JF-UrBQbwsVrPOv0eKFtEJwLBUJOWtPX7DpNikuct68e_m34g_W4lU3VHAOG7u_6b8uc4mv6QGTvEkcMec5g5ks-9nef0jcP5dpPwLxngr01d_4mTbTbidGpaVgF5Y1-LKA9qx1FnxlsVbQ-poAXhjgtW46bPv1EtYusXdVqWbLH"/>
+</div>
+<div class="flex flex-col gap-xs w-full">
+<div class="flex items-baseline gap-2 justify-between">
+<span class="font-headline-md text-[14px] font-bold text-on-background">Alex M.</span>
+<span class="font-label-sm text-[10px] text-outline">2h ago</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-body-md text-sm text-on-surface-variant">watched</span>
+<span class="font-headline-md text-sm font-bold text-primary">The Silence of Space</span>
+</div>
+<div class="flex items-center gap-xs text-tertiary my-1">
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+</div>
+<p class="font-body-md text-sm text-on-surface-variant italic border-l-2 border-surface-variant pl-3 py-1">"A masterpiece of visual storytelling. The silence is deafening in the best way possible."</p>
+</div>
+</div>
+<!-- Activity Item 2 -->
+<div class="flex gap-md group cursor-pointer">
+<div class="w-10 h-10 shrink-0 rounded-full bg-surface-variant overflow-hidden inner-stroke">
+<img class="w-full h-full object-cover grayscale transition-all duration-300 group-hover:grayscale-0" data-alt="A bright, high-key studio portrait of a woman with short hair, neutral expression, crisp white background." src="https://lh3.googleusercontent.com/aida-public/AB6AXuANUkFst5IKGC5-TEOe5kGQxGOyPdrDSA1RfU9CM6DxGzpY08gHzsm3Et6naUQ8EqXaBRonPr1nzJHODVRXBlas5_z3QpHLIlUAzLA9PzO63EHp9c1Ab3tHWYOHfKzMBFxhwqYLm24X8s0tvZWBSo9TFlXBEYZSB3TC_sN-r_EZv-YnTJU1jauKFOP36da6KIPsDXp6v0BRdYTXvgBzxtaHZ54qxtDdHBRM4gapJvOTT2R_Ud2c"/>
+</div>
+<div class="flex flex-col gap-xs w-full">
+<div class="flex items-baseline gap-2 justify-between">
+<span class="font-headline-md text-[14px] font-bold text-on-background">Sarah K.</span>
+<span class="font-label-sm text-[10px] text-outline">5h ago</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-body-md text-sm text-on-surface-variant">added</span>
+<span class="font-headline-md text-sm font-bold text-primary">Morning Haze</span>
+<span class="font-body-md text-sm text-on-surface-variant">to Watchlist</span>
+</div>
+</div>
+</div>
+<!-- Activity Item 3 -->
+<div class="flex gap-md group cursor-pointer">
+<div class="w-10 h-10 shrink-0 rounded-full bg-surface-variant overflow-hidden inner-stroke">
+<img class="w-full h-full object-cover grayscale transition-all duration-300 group-hover:grayscale-0" data-alt="A black and white portrait photo of a man looking off to the side, cinematic lighting, deep shadows but clean background." src="https://lh3.googleusercontent.com/aida-public/AB6AXuC0oYLb3kvvfROZnGwq5F7g-ZV5u1C_P7AFWBiacm_4UOOfgt1vLjVj-QZ1exfOoF5hWOEmfYhPjFrPvRFfisjl_6p1uxafhx6iGqRDi6fPanlV_n3Yb1dzdkZF2UWtPf7o5KTu_OiPD5Pn5LXQaZXVrVBdnHgr3ctjOkfqErxFisgcdUWQXLVpF5F53VRBR6khafyDWT17E2_aX3gNfEvvQ7xY7vCpg0XWwUo1VPwyGJ25zoYP"/>
+</div>
+<div class="flex flex-col gap-xs w-full">
+<div class="flex items-baseline gap-2 justify-between">
+<span class="font-headline-md text-[14px] font-bold text-on-background">David P.</span>
+<span class="font-label-sm text-[10px] text-outline">Yesterday</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-body-md text-sm text-on-surface-variant">watched</span>
+<span class="font-headline-md text-sm font-bold text-primary">Le Souffle</span>
+</div>
+<div class="flex items-center gap-xs text-tertiary my-1">
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[12px]" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-[12px]">star</span>
+<span class="material-symbols-outlined text-[12px]">star</span>
+</div>
+<p class="font-body-md text-sm text-on-surface-variant italic border-l-2 border-surface-variant pl-3 py-1">"Style over substance, perhaps. But what style it is."</p>
+</div>
+</div>
+</div>
+</div>
+</aside>
+</main>
+<!-- BottomNavBar (Mobile) -->
+<nav class="fixed bottom-0 w-full z-50 bg-surface/90 backdrop-blur-md border-t border-surface-variant md:hidden">
+<div class="flex justify-around items-center px-4 pb-safe h-16 w-full">
+<button class="flex flex-col items-center justify-center text-primary font-bold bg-primary-container/10 rounded-xl px-4 py-1 active:scale-95 transition-transform duration-150">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">home</span>
+<span class="font-label-sm text-label-sm mt-1 text-[10px]">Feed</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-container-high px-4 py-1 rounded-xl active:scale-95 transition-transform duration-150">
+<span class="material-symbols-outlined">movie</span>
+<span class="font-label-sm text-label-sm mt-1 text-[10px]">Movies</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-container-high px-4 py-1 rounded-xl active:scale-95 transition-transform duration-150">
+<span class="material-symbols-outlined">group</span>
+<span class="font-label-sm text-label-sm mt-1 text-[10px]">Friends</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant hover:bg-surface-container-high px-4 py-1 rounded-xl active:scale-95 transition-transform duration-150">
+<span class="material-symbols-outlined">person</span>
+<span class="font-label-sm text-label-sm mt-1 text-[10px]">Profile</span>
+</button>
+</div>
+</nav>
+</body></html>

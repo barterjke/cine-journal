@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Friend's Review - CinéJournal</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-primary-container": "#e3e6ff",
+                        "error-container": "#ffdad6",
+                        "on-error-container": "#93000a",
+                        "background": "#fcf9f8",
+                        "outline": "#737688",
+                        "error": "#ba1a1a",
+                        "surface-container": "#f0eded",
+                        "surface-variant": "#e5e2e1",
+                        "secondary-container": "#e2241f",
+                        "surface-container-highest": "#e5e2e1",
+                        "on-surface-variant": "#434656",
+                        "surface-container-high": "#eae7e7",
+                        "tertiary-container": "#c13301",
+                        "surface-tint": "#004dea",
+                        "secondary-fixed": "#ffdad5",
+                        "inverse-primary": "#b6c4ff",
+                        "surface-dim": "#dcd9d9",
+                        "surface-bright": "#fcf9f8",
+                        "on-tertiary-fixed": "#3b0900",
+                        "on-secondary-fixed-variant": "#930005",
+                        "on-primary-fixed-variant": "#0039b3",
+                        "surface-container-lowest": "#ffffff",
+                        "tertiary": "#972500",
+                        "primary-fixed-dim": "#b6c4ff",
+                        "on-secondary-container": "#fffbff",
+                        "on-tertiary-container": "#ffe1d9",
+                        "on-background": "#1c1b1b",
+                        "secondary": "#bc000a",
+                        "on-primary": "#ffffff",
+                        "outline-variant": "#c3c5d9",
+                        "primary-fixed": "#dce1ff",
+                        "primary-container": "#0055ff",
+                        "tertiary-fixed": "#ffdbd1",
+                        "on-secondary": "#ffffff",
+                        "secondary-fixed-dim": "#ffb4aa",
+                        "on-tertiary": "#ffffff",
+                        "surface-container-low": "#f6f3f2",
+                        "on-secondary-fixed": "#410001",
+                        "surface": "#fcf9f8",
+                        "on-primary-fixed": "#001551",
+                        "inverse-surface": "#313030",
+                        "primary": "#0041c8",
+                        "on-error": "#ffffff",
+                        "inverse-on-surface": "#f3f0ef",
+                        "tertiary-fixed-dim": "#ffb5a0",
+                        "on-tertiary-fixed-variant": "#872100",
+                        "on-surface": "#1c1b1b"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "xxl": "80px",
+                        "xs": "4px",
+                        "margin-desktop": "64px",
+                        "lg": "24px",
+                        "margin-mobile": "16px",
+                        "unit": "4px",
+                        "xl": "48px",
+                        "gutter": "24px",
+                        "md": "16px",
+                        "sm": "8px"
+                    },
+                    "fontFamily": {
+                        "body-md": ["Hanken Grotesk"],
+                        "headline-md": ["Hanken Grotesk"],
+                        "label-sm": ["JetBrains Mono"],
+                        "display-lg": ["Hanken Grotesk"],
+                        "headline-lg-mobile": ["Hanken Grotesk"],
+                        "headline-lg": ["Hanken Grotesk"],
+                        "body-lg": ["Hanken Grotesk"]
+                    },
+                    "fontSize": {
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "label-sm": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "500" }],
+                        "display-lg": ["48px", { "lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "headline-lg-mobile": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "body-lg": ["18px", { "lineHeight": "28px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body {
+            background-color: #fcf9f8;
+            color: #1c1b1b;
+        }
+        .poster-shadow {
+            box-shadow: 0px 4px 20px rgba(0,0,0,0.04);
+        }
+        .inner-stroke {
+            box-shadow: inset 0 0 0 1px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface font-body-md min-h-screen flex flex-col pb-24 md:hidden"> <!-- Mobile only view as requested -->
+<!-- Top App Bar (Suppressed because it's a detail/transactional view, replacing with a simple back nav) -->
+<header class="sticky top-0 w-full bg-surface/90 backdrop-blur-md z-40 px-margin-mobile py-md flex items-center justify-between border-b border-surface-variant">
+<button class="flex items-center text-on-surface-variant hover:text-primary transition-colors cursor-pointer active:opacity-70">
+<span class="material-symbols-outlined mr-sm">arrow_back</span>
+<span class="font-label-sm text-label-sm">Back</span>
+</button>
+<span class="font-headline-md text-headline-md font-bold text-primary">CinéJournal</span>
+<div class="w-8"></div> <!-- Spacer for balance -->
+</header>
+<main class="flex-grow flex flex-col items-center pt-lg px-margin-mobile w-full max-w-md mx-auto">
+<!-- Friend Context -->
+<div class="flex items-center w-full mb-lg">
+<div class="w-12 h-12 rounded-full overflow-hidden bg-surface-variant mr-md border border-surface-variant">
+<img class="w-full h-full object-cover" data-alt="A portrait of a young person in a brightly lit, modern setting, wearing stylish minimalist clothing. The lighting is soft and flattering, creating a serene and sophisticated mood consistent with a high-end editorial journal aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuA-Nv78s1ih5YYSHwcaNTvnE-5jdugjF1E8g4udaPwcfi5bdpbsRBugZ5xsrLmeCKJseWs0sUc92-v_D0O8BxUL91NGbo59DOFoJ-AD2NnsEitzquUuSSZMge4oXy7s0vbB_yEQMazv6SmxIB4OiCntJEcR6RUu1akusdaEOVtiJtIEFe-MbhvOkc_0pY8uQ1yphPPnyyZQ5-4I4DYAV_tndmdvKeV5ajKW6PQEN406sLBtF5Yx"/>
+</div>
+<div>
+<h2 class="font-headline-md text-headline-md text-on-surface">Alex Mercer</h2>
+<p class="font-label-sm text-label-sm text-on-surface-variant">Reviewed yesterday</p>
+</div>
+</div>
+<!-- Movie Poster -->
+<div class="w-full aspect-[2/3] rounded-lg overflow-hidden poster-shadow inner-stroke mb-lg relative bg-surface-variant">
+<img class="w-full h-full object-cover absolute inset-0" data-alt="A striking, minimalist movie poster featuring abstract geometric shapes and a stark contrast between pure white and vibrant primary blue. The composition is expansive and airy, focusing on a single, compelling central figure lost in a vast, empty architectural space. The aesthetic is highly curated and editorial." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDxeoPA9kGfBd6Lry2zOrnMI75MUWu9HwRodvySDcrTbbv56j2q4ihzWEQ-fKNvz-ykSmJjtmhG-h0H_ROFpF5F-bIoKzQsRIYrT-tIk3eLgXu8Lx_VOQ7cBbro6_DfO3Ub1AUxIha7pIwPM8XkgJ-E68iQqC03_fiV35cP_gqQ_7KMXVEYojyy60NWdvFVOamEW182Wi9CF_H5vP_GdyXd2aJJrtYRgU_P1iA6qrhPJuZBRZug"/>
+</div>
+<!-- Movie Title & Rating -->
+<div class="w-full flex justify-between items-start mb-md">
+<div>
+<h1 class="font-headline-lg-mobile text-headline-lg-mobile text-on-surface mb-xs">The Architecture of Silence</h1>
+<div class="flex flex-wrap gap-sm">
+<span class="bg-surface-container-low text-on-surface font-label-sm text-label-sm px-2 py-1 rounded">Documentary</span>
+<span class="bg-surface-container-low text-on-surface font-label-sm text-label-sm px-2 py-1 rounded">2023</span>
+</div>
+</div>
+<div class="flex flex-col items-end">
+<div class="flex items-center text-tertiary">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">star_half</span>
+</div>
+<span class="font-label-sm text-label-sm text-on-surface-variant mt-xs">4.5 / 5</span>
+</div>
+</div>
+<hr class="w-full border-t border-surface-variant my-md"/>
+<!-- Review Text -->
+<article class="w-full font-body-lg text-body-lg text-on-surface mb-xl">
+<p class="mb-md">An absolute masterclass in visual storytelling. The director manages to convey profound isolation without uttering a single line of dialogue for the first forty minutes.</p>
+<p>I was particularly struck by the framing—every shot feels like it could be hung in a gallery. The use of negative space in the urban environments perfectly mirrors the protagonist's internal emptiness. It's not a fast-paced film, but if you let it wash over you, it's incredibly moving.</p>
+<p class="mt-md font-label-sm text-label-sm text-primary uppercase tracking-widest">#Cinematography #MustWatch</p>
+</article>
+</main>
+<!-- Prominent Comment Input (Sticky Bottom) -->
+<div class="fixed bottom-0 left-0 w-full bg-surface/90 backdrop-blur-md border-t border-surface-variant p-margin-mobile z-50">
+<form class="flex items-center gap-md max-w-md mx-auto w-full">
+<div class="flex-grow relative">
+<input class="w-full bg-surface-container-low border-none rounded-full py-3 px-4 font-body-md text-on-surface focus:ring-1 focus:ring-primary focus:outline-none placeholder-outline" placeholder="Add a comment..." type="text"/>
+</div>
+<button class="bg-primary text-on-primary rounded-full w-12 h-12 flex items-center justify-center hover:bg-primary-fixed-dim transition-colors flex-shrink-0" type="submit">
+<span class="material-symbols-outlined">send</span>
+</button>
+</form>
+</div>
+</body></html>

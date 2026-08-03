@@ -1,0 +1,9 @@
+# macOS
+.DS_Store
+
+# Local Claude Code tool permissions (machine-specific paths)
+.claude/
+
+# Build
+node_modules/
+deno.lock

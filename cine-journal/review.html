@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Friend's Review - CinéJournal</title>
+<!-- Google Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="css/app.css" rel="stylesheet"/>
+</head>
+<body class="bg-background text-on-background font-body-md min-h-screen relative overflow-x-hidden">
+<!-- TopAppBar -->
+<header class="bg-surface dark:bg-on-background w-full top-0 sticky z-40 border-b border-surface-variant dark:border-outline-variant hidden md:flex">
+<div class="flex justify-between items-center px-margin-mobile md:px-margin-desktop py-md w-full max-w-7xl mx-auto">
+<div class="font-headline-md text-headline-md font-bold text-primary dark:text-primary-fixed">
+                CinéJournal
+            </div>
+<nav class="flex space-x-8">
+<a class="text-on-surface-variant dark:text-outline font-headline-md text-headline-md hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" href="index.html">Feed</a>
+<a class="text-on-surface-variant dark:text-outline font-headline-md text-headline-md hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" href="#">Movies</a>
+<a class="text-primary dark:text-primary-fixed font-bold border-b-2 border-primary font-headline-md text-headline-md hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" href="#">Friends</a>
+<a class="text-on-surface-variant dark:text-outline font-headline-md text-headline-md hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" href="#">Profile</a>
+</nav>
+<div class="flex space-x-4">
+<span class="material-symbols-outlined text-primary dark:text-primary-fixed hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70">notifications</span>
+<span class="material-symbols-outlined text-primary dark:text-primary-fixed hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70">cast</span>
+</div>
+</div>
+</header>
+<!-- Faded Backdrop -->
+<div class="absolute inset-0 w-full h-[60vh] -z-10 bg-cover bg-center fade-backdrop pointer-events-none" style="background-image: url('img/backdrop-dune.jpg')">
+</div>
+<!-- Main Content -->
+<main class="max-w-7xl mx-auto px-margin-mobile md:px-margin-desktop pt-xl pb-xxl relative z-10">
+<!-- Back Navigation -->
+<a class="inline-flex items-center space-x-2 text-on-surface-variant hover:text-primary transition-colors mb-lg font-label-sm text-label-sm uppercase tracking-widest" href="index.html">
+<span class="material-symbols-outlined text-lg">arrow_back</span>
+<span>Back to Feed</span>
+</a>
+<div class="grid grid-cols-1 md:grid-cols-12 gap-gutter md:gap-margin-desktop">
+<!-- Left Column: Movie Context -->
+<div class="md:col-span-4 hidden md:block">
+<div class="sticky top-xxl">
+<div class="relative rounded-lg overflow-hidden shadow-[0px_4px_20px_rgba(0,0,0,0.04)] bg-white mb-lg">
+<div class="absolute inset-0 border border-black/10 rounded-lg pointer-events-none z-10"></div>
+<img class="w-full h-auto object-cover aspect-[2/3]" alt="A minimalist, high-end film poster for a science fiction epic featuring stark typography and a solitary figure against an expansive pale sky." src="img/poster-dune-part-two.jpg"/>
+</div>
+<h3 class="font-headline-md text-headline-md text-on-background mb-xs">Dune: Part Two</h3>
+<p class="font-body-md text-body-md text-on-surface-variant mb-md">Directed by Denis Villeneuve · 2024</p>
+<div class="flex flex-wrap gap-2">
+<span class="px-3 py-1 bg-[#F2F2F7] rounded-full font-label-sm text-label-sm text-on-surface-variant">Sci-Fi</span>
+<span class="px-3 py-1 bg-[#F2F2F7] rounded-full font-label-sm text-label-sm text-on-surface-variant">Adventure</span>
+</div>
+</div>
+</div>
+<!-- Right Column: Review & Comments -->
+<div class="md:col-span-8">
+<!-- Mobile Movie Context (Hidden on Desktop) -->
+<div class="md:hidden flex items-center space-x-4 mb-lg">
+<div class="w-16 h-24 rounded shadow-sm relative flex-shrink-0">
+<div class="absolute inset-0 border border-black/10 rounded pointer-events-none z-10"></div>
+<img class="w-full h-full object-cover rounded" alt="A minimalist, high-end film poster for a science fiction epic featuring stark typography and a solitary figure against an expansive pale sky." src="img/poster-dune-part-two-sm.jpg"/>
+</div>
+<div>
+<h3 class="font-headline-md text-headline-md text-on-background mb-xs">Dune: Part Two</h3>
+<p class="font-label-sm text-label-sm text-on-surface-variant">2024 · Sci-Fi</p>
+</div>
+</div>
+<!-- Reviewer Header -->
+<div class="flex items-center justify-between mb-xl border-b border-[#F2F2F7] pb-lg">
+<div class="flex items-center space-x-4">
+<img class="w-12 h-12 rounded-full object-cover shadow-sm border border-[#F2F2F7]" alt="A close-up portrait of a young woman with a sharp, modern haircut wearing minimalist geometric glasses against a pure white background." src="img/avatar-elena-rostova.jpg"/>
+<div>
+<h2 class="font-headline-md text-headline-md text-on-background">Elena Rostova</h2>
+<p class="font-label-sm text-label-sm text-on-surface-variant">Watched on March 15, 2024</p>
+</div>
+</div>
+<div class="flex text-primary">
+<span class="material-symbols-outlined" data-weight="fill">star</span>
+<span class="material-symbols-outlined" data-weight="fill">star</span>
+<span class="material-symbols-outlined" data-weight="fill">star</span>
+<span class="material-symbols-outlined" data-weight="fill">star</span>
+<span class="material-symbols-outlined">star_half</span>
+</div>
+</div>
+<!-- Review Content -->
+<article class="font-body-lg text-body-lg text-on-background space-y-6 mb-xl leading-relaxed">
+<p>Villeneuve has managed something nearly impossible here: he’s taken the dense, almost impenetrable lore of Herbert’s universe and rendered it not just coherent, but profoundly emotional. The sheer scale of Arrakis is felt in every frame, thanks to Fraser’s monolithic cinematography.</p>
+<p>What struck me most on this viewing was the sound design. It’s oppressive when it needs to be—the thumpers echoing through the floorboards of the theater—but incredibly delicate in moments of intimacy between Paul and Chani. The score doesn't just accompany the film; it acts as a geological force within it.</p>
+<p>While the pacing sags slightly in the second act during the sietch politics, the convergence of all these massive thematic plates in the finale is breathtaking. A true cinematic spectacle that demands to be seen on the largest screen possible.</p>
+</article>
+<!-- Actions -->
+<div class="flex items-center space-x-4 mb-xxl">
+<button class="flex items-center space-x-2 px-6 py-3 rounded bg-primary text-white font-label-sm text-label-sm hover:bg-primary/90 transition-colors">
+<span class="material-symbols-outlined text-lg">thumb_up</span>
+<span>LIKE REVIEW</span>
+</button>
+<button class="flex items-center space-x-2 px-6 py-3 rounded border border-outline-variant text-on-background font-label-sm text-label-sm hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined text-lg">chat_bubble</span>
+<span>REPLY</span>
+</button>
+<span class="ml-auto font-label-sm text-label-sm text-on-surface-variant">24 Likes</span>
+</div>
+<!-- Comments Section -->
+<section>
+<h3 class="font-headline-md text-headline-md mb-lg border-b border-[#F2F2F7] pb-sm">Conversation (3)</h3>
+<!-- Comment Input -->
+<div class="flex space-x-4 mb-xl">
+<div class="w-10 h-10 rounded-full bg-surface-container flex-shrink-0 flex items-center justify-center text-primary font-headline-md">
+                            ME
+                        </div>
+<div class="flex-grow">
+<textarea class="w-full bg-surface-container-low border-none rounded-lg p-4 font-body-md text-on-background focus:ring-1 focus:ring-primary placeholder:text-on-surface-variant resize-none" placeholder="Add your thoughts..." rows="3"></textarea>
+<div class="flex justify-end mt-2">
+<button class="px-4 py-2 rounded bg-primary text-white font-label-sm text-label-sm hover:bg-primary/90 transition-colors">POST</button>
+</div>
+</div>
+</div>
+<!-- Comment Thread -->
+<div class="space-y-lg">
+<!-- Comment 1 -->
+<div class="flex space-x-4">
+<img class="w-10 h-10 rounded-full object-cover shadow-sm border border-[#F2F2F7] flex-shrink-0" alt="A candid profile photo of a young man wearing a simple black t-shirt against a clean white background." src="img/avatar-marcus.jpg"/>
+<div class="flex-grow">
+<div class="flex items-baseline space-x-2 mb-1">
+<span class="font-label-sm text-label-sm font-bold text-on-background">Marcus</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">2 hours ago</span>
+</div>
+<p class="font-body-md text-body-md text-on-background mb-2">Completely agree about the sound design. The Harkonnen arena sequence shook my bones.</p>
+<button class="text-on-surface-variant font-label-sm text-label-sm hover:text-primary transition-colors flex items-center space-x-1">
+<span class="material-symbols-outlined text-sm">favorite</span>
+<span>2</span>
+</button>
+</div>
+</div>
+<hr class="border-[#F2F2F7]"/>
+<!-- Comment 2 -->
+<div class="flex space-x-4">
+<img class="w-10 h-10 rounded-full object-cover shadow-sm border border-[#F2F2F7] flex-shrink-0" alt="An artistic, high-key portrait of a person with silver-dyed hair wearing a pristine white mock-neck sweater." src="img/avatar-sarah-j.jpg"/>
+<div class="flex-grow">
+<div class="flex items-baseline space-x-2 mb-1">
+<span class="font-label-sm text-label-sm font-bold text-on-background">Sarah J.</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">5 hours ago</span>
+</div>
+<p class="font-body-md text-body-md text-on-background mb-2">I actually liked the sietch politics! Felt it gave necessary weight to Paul's integration. But yes, overall masterpiece.</p>
+<!-- Nested Reply -->
+<div class="mt-4 flex space-x-4">
+<img class="w-8 h-8 rounded-full object-cover shadow-sm border border-[#F2F2F7] flex-shrink-0" alt="A close-up portrait of a young woman with a sharp, modern haircut wearing minimalist geometric glasses against a pure white background." src="img/avatar-elena-rostova-sm.jpg"/>
+<div>
+<div class="flex items-baseline space-x-2 mb-1">
+<span class="font-label-sm text-label-sm font-bold text-on-background">Elena (Author)</span>
+</div>
+<p class="font-body-md text-body-md text-on-background">Fair point! I just felt the pacing dragged a tiny bit compared to the breathless first act.</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+</div>
+</div>
+</main>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="bg-surface/80 dark:bg-on-background/80 backdrop-blur-md border-t border-surface-variant dark:border-outline-variant fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 h-16 md:hidden">
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline px-4 py-1 hover:bg-surface-container-high dark:hover:bg-surface-variant/10 active:scale-95 transition-transform duration-150" href="index.html">
+<span class="material-symbols-outlined">home</span>
+<span class="font-label-sm text-label-sm mt-1">Feed</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline px-4 py-1 hover:bg-surface-container-high dark:hover:bg-surface-variant/10 active:scale-95 transition-transform duration-150" href="#">
+<span class="material-symbols-outlined">movie</span>
+<span class="font-label-sm text-label-sm mt-1">Movies</span>
+</a>
+<a class="flex flex-col items-center justify-center text-primary dark:text-primary-fixed font-bold bg-primary-container/10 rounded-xl px-4 py-1 hover:bg-surface-container-high dark:hover:bg-surface-variant/10 active:scale-95 transition-transform duration-150" href="#">
+<span class="material-symbols-outlined" data-weight="fill">group</span>
+<span class="font-label-sm text-label-sm mt-1">Friends</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline px-4 py-1 hover:bg-surface-container-high dark:hover:bg-surface-variant/10 active:scale-95 transition-transform duration-150" href="#">
+<span class="material-symbols-outlined">person</span>
+<span class="font-label-sm text-label-sm mt-1">Profile</span>
+</a>
+</nav>
+<!-- Mobile spacer for bottom nav -->
+<div class="h-16 md:hidden"></div>
+</body>
+</html>

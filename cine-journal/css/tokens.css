@@ -1,0 +1,129 @@
+/* ==========================================================================
+   CinéJournal — "Cinematic Minimalist" design tokens
+   Transcribed from stitch_lumi_cinema_social/cinematic_minimalist/DESIGN.md
+   ========================================================================== */
+
+:root {
+  /* --- Surfaces ------------------------------------------------------- */
+  --surface: #fcf9f8;
+  --surface-dim: #dcd9d9;
+  --surface-bright: #fcf9f8;
+  --surface-container-lowest: #ffffff;
+  --surface-container-low: #f6f3f2;
+  --surface-container: #f0eded;
+  --surface-container-high: #eae7e7;
+  --surface-container-highest: #e5e2e1;
+  --surface-variant: #e5e2e1;
+  --surface-tint: #004dea;
+  --background: #fcf9f8;
+
+  /* --- Content -------------------------------------------------------- */
+  --on-surface: #1c1b1b;
+  --on-surface-variant: #434656;
+  --on-background: #1c1b1b;
+  --inverse-surface: #313030;
+  --inverse-on-surface: #f3f0ef;
+  --outline: #737688;
+  --outline-variant: #c3c5d9;
+
+  /* --- Primary (Electric Blue) ---------------------------------------- */
+  --primary: #0041c8;
+  --on-primary: #ffffff;
+  --primary-container: #0055ff;
+  --on-primary-container: #e3e6ff;
+  --inverse-primary: #b6c4ff;
+  --primary-fixed: #dce1ff;
+  --primary-fixed-dim: #b6c4ff;
+  --on-primary-fixed: #001551;
+  --on-primary-fixed-variant: #0039b3;
+
+  /* --- Secondary (Alert Red) ------------------------------------------ */
+  --secondary: #bc000a;
+  --on-secondary: #ffffff;
+  --secondary-container: #e2241f;
+  --on-secondary-container: #fffbff;
+  --secondary-fixed: #ffdad5;
+  --secondary-fixed-dim: #ffb4aa;
+  --on-secondary-fixed: #410001;
+  --on-secondary-fixed-variant: #930005;
+
+  /* --- Tertiary (Burnt Orange) ---------------------------------------- */
+  --tertiary: #972500;
+  --on-tertiary: #ffffff;
+  --tertiary-container: #c13301;
+  --on-tertiary-container: #ffe1d9;
+  --tertiary-fixed: #ffdbd1;
+  --tertiary-fixed-dim: #ffb5a0;
+  --on-tertiary-fixed: #3b0900;
+  --on-tertiary-fixed-variant: #872100;
+
+  /* --- Error ---------------------------------------------------------- */
+  --error: #ba1a1a;
+  --on-error: #ffffff;
+  --error-container: #ffdad6;
+  --on-error-container: #93000a;
+
+  /* --- Neutrals from the written spec --------------------------------- */
+  --ink: #1a1a1a;         /* body text          */
+  --slate-white: #f2f2f7; /* hairlines & chips  */
+
+  /* --- Typography ----------------------------------------------------- */
+  --font-headline: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-label: "JetBrains Mono", ui-monospace, monospace;
+
+  --display-lg-size: 48px;
+  --display-lg-line: 56px;
+  --display-lg-weight: 700;
+  --display-lg-tracking: -0.02em;
+
+  --headline-lg-size: 32px;
+  --headline-lg-line: 40px;
+  --headline-lg-weight: 600;
+  --headline-lg-tracking: -0.01em;
+
+  --headline-lg-mobile-size: 24px;
+  --headline-lg-mobile-line: 32px;
+  --headline-lg-mobile-weight: 600;
+
+  --headline-md-size: 20px;
+  --headline-md-line: 28px;
+  --headline-md-weight: 600;
+
+  --body-lg-size: 18px;
+  --body-lg-line: 28px;
+  --body-lg-weight: 400;
+
+  --body-md-size: 16px;
+  --body-md-line: 24px;
+  --body-md-weight: 400;
+
+  --label-sm-size: 12px;
+  --label-sm-line: 16px;
+  --label-sm-weight: 500;
+  --label-sm-tracking: 0.05em;
+
+  /* --- Spacing (4px unit) --------------------------------------------- */
+  --unit: 4px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 48px;
+  --space-xxl: 80px;
+  --gutter: 24px;
+  --margin-mobile: 16px;
+  --margin-desktop: 64px;
+
+  /* --- Radius (roundedness: 2) --------------------------------------- */
+  --radius-sm: 0.25rem;
+  --radius: 0.25rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-full: 9999px;
+
+  /* --- Elevation ------------------------------------------------------ */
+  --shadow-poster: 0px 4px 20px rgba(0, 0, 0, 0.04);
+  --stroke-inner: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+  --hairline: 1px solid var(--slate-white);
+}

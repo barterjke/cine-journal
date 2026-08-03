@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   Custom utilities from the Stitch export's inline <style> blocks.
+   Collected from all four screens; names kept verbatim so the markup that
+   references them stays unchanged.
+   ========================================================================== */
+@layer utilities {
+  /* Level 1 elevation — lifts posters off the page (DESIGN.md §Elevation) */
+  .soft-shadow,
+  .poster-shadow {
+    box-shadow: 0px 4px 20px rgba(0, 0, 0, 0.04);
+  }
+
+  /* 1px 10%-black overlay so light posters don't vanish into the background */
+  .inner-stroke,
+  .poster-inner-stroke {
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+  }
+
+  .hairline-bottom {
+    border-bottom: 1px solid #f2f2f7;
+  }
+
+  .hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Washed-out hero backdrop on the desktop review screen */
+  .fade-backdrop {
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0.15) 0%,
+      rgba(0, 0, 0, 0) 60%
+    );
+    mask-image: linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0.15) 0%,
+      rgba(0, 0, 0, 0) 60%
+    );
+  }
+}
+
+/* --- Material Symbols axis defaults (from friend_review_desktop) --------- */
+.material-symbols-outlined {
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+}
+.material-symbols-outlined[data-weight="fill"] {
+  font-variation-settings: "FILL" 1, "wght" 400, "GRAD" 0, "opsz" 24;
+}
