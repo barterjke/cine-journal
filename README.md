@@ -1,4 +1,10 @@
 # CinéJournal
+[google stitch project](https://stitch.withgoogle.com/projects/8536155539744862)
+## Intended stack: 
+- rust for the backend
+- tmdb as open-source (non-commercial) API for movies
+- react for desktop
+- either PWA or native app for iPhone
 
 A 1:1 re-creation of a **Google Stitch** export — "Lumi Cinema Social", a film journal /
 social platform in an *Editorial Minimalism* style. Four screens, static HTML + compiled
