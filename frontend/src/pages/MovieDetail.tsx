@@ -8,9 +8,10 @@
  * every poster in the app clickable.
  *
  * Things worth knowing:
- *  - the export's app bar here had no nav links, only the trailing icons. It gets
- *    the shared nav anyway: a detail page is reached from every other screen, and
- *    without the links there is no way back out of it.
+ *  - the export's app bar here had no nav links and no search box, only the
+ *    trailing icons. It gets the same `TopAppBar` as every other screen: a detail
+ *    page is reached from all of them, and without the links there is no way back
+ *    out of it.
  *  - the Gallery heading says "12 Stills" while the grid holds 4. That mismatch
  *    is the export's; `still_count` is carried separately so it is preserved
  *    rather than silently corrected to the array length.
@@ -114,8 +115,8 @@ export function MovieDetail() {
   const yourRating = data?.your_rating_half_stars ?? 0
 
   return (
-    <div className="bg-background text-on-background antialiased min-h-screen">
-      <TopAppBar active="movies" showSearchIcon />
+    <div className="bg-background text-on-background font-body-md min-h-screen">
+      <TopAppBar active="movies" />
 
       {loading && <Loading />}
       {error && <ErrorNote error={error} />}

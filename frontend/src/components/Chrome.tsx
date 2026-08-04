@@ -27,6 +27,10 @@ const TABS: { id: Tab; label: string; icon: string; to: string | null }[] = [
 /**
  * The app bar's search box. Submitting hands the query to `/search`, which owns
  * its state in the URL — so this only has to navigate, never filter.
+ *
+ * Below `lg` there isn't room for it beside the four nav links, so the bar shows
+ * a search *icon* there instead. Both are always rendered and swap on the
+ * breakpoint — which one you get must not depend on the route.
  */
 function SearchBox() {
   const navigate = useNavigate()
@@ -59,22 +63,27 @@ function SearchBox() {
 }
 
 /**
- * The nav is shown on every screen, including the movie detail page — the
- * export's detail mock dropped the links and left only the trailing icons, which
- * stranded you there with no way back except the browser's own button.
+ * One bar for every desktop screen — no props beyond which tab is lit.
+ *
+ * It used to take `showSearch` / `showNav` / `showSearchIcon` so each page could
+ * reproduce its own export mock, and the result was four subtly different bars:
+ * the detail page had no nav links and no search box, and the two screens that
+ * omitted the box were 1px shorter than the two that had it, so the whole bar
+ * shifted as you navigated. Nothing here is conditional now, which is the only
+ * way that stays fixed.
+ *
+ * Two export behaviours are deliberately dropped: the detail mock's missing nav
+ * links (they stranded you on a page every other screen links into) and the
+ * inert wordmark, now the home button.
  */
-export function TopAppBar({
-  active,
-  showSearch = false,
-  showSearchIcon = false,
-}: {
-  active: Tab
-  showSearch?: boolean
-  showSearchIcon?: boolean
-}) {
+export function TopAppBar({ active }: { active: Tab }) {
   return (
     <header className="w-full top-0 sticky z-50 bg-surface dark:bg-on-background border-b border-surface-variant dark:border-outline-variant hidden md:flex">
-      <div className="flex justify-between items-center px-margin-mobile md:px-margin-desktop py-md w-full max-w-[1440px] mx-auto">
+      {/* `h-20` rather than `py-md`: the search input is a hair taller than the
+          icon buttons beside it, and it's hidden below `lg`, so a
+          content-derived height made the bar 79px on some routes and 80px on
+          others. Fixing the height decouples it from what's inside. */}
+      <div className="flex justify-between items-center h-20 px-margin-mobile md:px-margin-desktop w-full max-w-[1440px] mx-auto">
         <div className="flex items-center gap-xl">
           {/* The wordmark doubles as the home button, which is what a masthead
               is for — the export drew it as inert text. */}
@@ -85,17 +94,31 @@ export function TopAppBar({
           </Link>
           <nav className="flex items-center gap-lg">
             {TABS.map((tab) => {
-              const className =
-                tab.id === active
-                  ? 'text-primary dark:text-primary-fixed font-bold border-b-2 border-primary py-2 hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70'
-                  : 'text-on-surface-variant dark:text-outline py-2 hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70'
+              // `font-body-md` is explicit rather than inherited: the export's
+              // search screen spelled it out on each link, and the feed's relied
+              // on `<body>`. Inheriting meant the bar rendered in Hanken Grotesk
+              // on two routes and the Tailwind default sans on the other two,
+              // depending on whether that page's root div happened to set a font.
+              const base =
+                'font-body-md text-body-md py-2 hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70'
 
               return tab.to === null ? (
-                <span key={tab.id} className="text-outline dark:text-outline py-2 cursor-default">
+                <span
+                  key={tab.id}
+                  className="font-body-md text-body-md text-outline dark:text-outline py-2 cursor-default"
+                >
                   {tab.label}
                 </span>
               ) : (
-                <Link key={tab.id} to={tab.to} className={className}>
+                <Link
+                  key={tab.id}
+                  to={tab.to}
+                  className={
+                    tab.id === active
+                      ? `${base} text-primary dark:text-primary-fixed font-bold border-b-2 border-primary`
+                      : `${base} text-on-surface-variant dark:text-outline`
+                  }
+                >
                   {tab.label}
                 </Link>
               )
@@ -103,15 +126,16 @@ export function TopAppBar({
           </nav>
         </div>
         <div className="flex items-center gap-md">
-          {showSearchIcon && (
-            <Link
-              to="/search"
-              className="text-on-surface-variant hover:text-primary transition-colors p-sm cursor-pointer active:opacity-70"
-            >
-              <span className="material-symbols-outlined">search</span>
-            </Link>
-          )}
-          {showSearch && <SearchBox />}
+          {/* The box and the icon are the same control at two sizes — the box
+              from `lg` up, the icon below it, where the nav links leave no room. */}
+          <Link
+            to="/search"
+            aria-label="Search films"
+            className="lg:hidden text-on-surface-variant hover:text-primary transition-colors p-sm cursor-pointer active:opacity-70"
+          >
+            <span className="material-symbols-outlined">search</span>
+          </Link>
+          <SearchBox />
           <button className="text-on-surface-variant hover:text-primary transition-colors p-sm cursor-pointer active:opacity-70">
             <span className="material-symbols-outlined">notifications</span>
           </button>

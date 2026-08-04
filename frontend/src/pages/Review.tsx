@@ -235,7 +235,7 @@ export function Review() {
 
   return (
     <div className="bg-background text-on-background font-body-md min-h-screen relative overflow-x-hidden">
-      <TopAppBar active="friends" showSearch />
+      <TopAppBar active="friends" />
 
       {data?.backdrop && (
         <div

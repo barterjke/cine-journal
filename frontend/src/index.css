@@ -3,6 +3,23 @@
 @tailwind utilities;
 
 /* ==========================================================================
+   App-wide typography.
+
+   Only the second export's two screens put `antialiased` on <body>; the first
+   four didn't. Left per-screen, that made the shared app bar's text render
+   differently depending on the route — visible as the same font looking subtly
+   heavier on the feed than on the movie page. Font smoothing is a property of
+   the app, not of a screen, so it is set once here and the class is gone from
+   the page roots.
+   ========================================================================== */
+@layer base {
+  body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* ==========================================================================
    Custom utilities from the Stitch export's inline <style> blocks.
    Collected from all four screens; names kept verbatim so the markup that
    references them stays unchanged.

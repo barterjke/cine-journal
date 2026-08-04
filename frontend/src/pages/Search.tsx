@@ -187,7 +187,7 @@ export function Search() {
   const hasFilters = Boolean(q || genre || year || minRating)
 
   return (
-    <div className="bg-background text-on-background antialiased min-h-screen flex flex-col">
+    <div className="bg-background text-on-background font-body-md min-h-screen flex flex-col">
       <TopAppBar active="movies" />
 
       {error && <ErrorNote error={error} />}

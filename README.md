@@ -144,9 +144,17 @@ Three are deliberately *not* preserved, all for the same reason — in a static 
 end is a still image, but in an SPA it reads as a bug:
 
 - the mobile review's `md:hidden` on `<body>`, which made that screen render blank at ≥768px
-- the movie detail bar's missing nav links, which stranded you on a page every other screen
-  links into, with no way out but the browser's back button
+- the movie detail bar's missing nav links and search box, which stranded you on a page every
+  other screen links into, with no way out but the browser's back button
 - the inert `CinéJournal` wordmark, now the home button on all four bars
+
+`TopAppBar` takes no props but the active tab, and that is deliberate. It briefly took
+`showNav` / `showSearch` / `showSearchIcon` so each page could reproduce its own export mock,
+which produced four subtly different bars — the detail page lost its nav and search box, the
+two screens without the box were 1px shorter than the two with it (so the bar jumped as you
+navigated), and the nav text rendered in a different font on the two screens whose root div
+didn't set one. Font smoothing moved to `<body>` in `index.css` for the same reason. The bar
+is now byte-identical across all four routes, verified by cropping and hashing it.
 
 The `Profile` tab has no screen behind it and renders as dimmed text rather than a link. It
 was `<Link to="#">` until the detail page exposed the flaw: react-router resolves a bare `#`

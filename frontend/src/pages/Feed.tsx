@@ -211,7 +211,7 @@ export function Feed() {
 
   return (
     <div className="bg-background text-on-background min-h-screen font-body-md text-body-md overflow-x-hidden selection:bg-primary-container selection:text-on-primary-container">
-      <TopAppBar active="feed" showSearch />
+      <TopAppBar active="feed" />
 
       {loading && <Loading />}
       {error && <ErrorNote error={error} />}
