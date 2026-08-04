@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CinéJournal - Search Results</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:ital,wght@0,100..900;1,100..900&amp;family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "primary-fixed-dim": "#b6c4ff",
+                        "inverse-surface": "#313030",
+                        "surface-dim": "#dcd9d9",
+                        "secondary-fixed-dim": "#ffb4aa",
+                        "on-tertiary-container": "#ffe1d9",
+                        "on-surface-variant": "#434656",
+                        "surface-container": "#f0eded",
+                        "surface-container-lowest": "#ffffff",
+                        "on-secondary-fixed-variant": "#930005",
+                        "on-error-container": "#93000a",
+                        "on-tertiary": "#ffffff",
+                        "on-error": "#ffffff",
+                        "tertiary-fixed": "#ffdbd1",
+                        "on-secondary-container": "#fffbff",
+                        "outline-variant": "#c3c5d9",
+                        "primary": "#0041c8",
+                        "on-primary-fixed": "#001551",
+                        "tertiary": "#972500",
+                        "tertiary-container": "#c13301",
+                        "on-tertiary-fixed": "#3b0900",
+                        "on-secondary": "#ffffff",
+                        "inverse-primary": "#b6c4ff",
+                        "secondary-fixed": "#ffdad5",
+                        "surface-tint": "#004dea",
+                        "on-background": "#1c1b1b",
+                        "on-primary-container": "#e3e6ff",
+                        "background": "#fcf9f8",
+                        "on-primary-fixed-variant": "#0039b3",
+                        "tertiary-fixed-dim": "#ffb5a0",
+                        "inverse-on-surface": "#f3f0ef",
+                        "outline": "#737688",
+                        "on-secondary-fixed": "#410001",
+                        "error": "#ba1a1a",
+                        "surface-bright": "#fcf9f8",
+                        "surface-container-high": "#eae7e7",
+                        "primary-container": "#0055ff",
+                        "surface-container-low": "#f6f3f2",
+                        "surface-variant": "#e5e2e1",
+                        "error-container": "#ffdad6",
+                        "on-primary": "#ffffff",
+                        "on-surface": "#1c1b1b",
+                        "on-tertiary-fixed-variant": "#872100",
+                        "surface": "#fcf9f8",
+                        "primary-fixed": "#dce1ff",
+                        "surface-container-highest": "#e5e2e1",
+                        "secondary-container": "#e2241f",
+                        "secondary": "#bc000a"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "xxl": "80px",
+                        "margin-mobile": "16px",
+                        "sm": "8px",
+                        "xs": "4px",
+                        "gutter": "24px",
+                        "lg": "24px",
+                        "margin-desktop": "64px",
+                        "unit": "4px",
+                        "md": "16px",
+                        "xl": "48px"
+                    },
+                    "fontFamily": {
+                        "headline-lg-mobile": ["Hanken Grotesk"],
+                        "body-lg": ["Hanken Grotesk"],
+                        "headline-lg": ["Hanken Grotesk"],
+                        "headline-md": ["Hanken Grotesk"],
+                        "label-sm": ["JetBrains Mono"],
+                        "display-lg": ["Hanken Grotesk"],
+                        "body-md": ["Hanken Grotesk"]
+                    },
+                    "fontSize": {
+                        "headline-lg-mobile": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "body-lg": ["18px", { "lineHeight": "28px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "headline-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "label-sm": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "500" }],
+                        "display-lg": ["48px", { "lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body {
+            background-color: theme('colors.background');
+            color: theme('colors.on-background');
+        }
+        /* Custom poster inset shadow */
+        .poster-inset {
+            box-shadow: inset 0 0 0 1px rgba(0,0,0,0.1);
+        }
+        /* Soft, diffused shadow for cards */
+        .poster-shadow {
+            box-shadow: 0px 4px 20px rgba(0,0,0,0.04);
+        }
+    </style>
+</head>
+<body class="antialiased min-h-screen flex flex-col">
+<!-- TopAppBar from JSON -->
+<header class="bg-surface dark:bg-on-background w-full top-0 sticky z-40 border-b border-surface-variant dark:border-outline-variant flat no shadows">
+<div class="flex justify-between items-center px-margin-mobile md:px-margin-desktop py-md w-full max-w-7xl mx-auto">
+<!-- Brand -->
+<div class="font-headline-md text-headline-md font-bold text-primary dark:text-primary-fixed">
+                CinéJournal
+            </div>
+<!-- Desktop Navigation (Hidden on mobile) -->
+<nav class="hidden md:flex gap-lg">
+<a class="text-on-surface-variant dark:text-outline font-body-md text-body-md hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" href="#">Feed</a>
+<a class="text-primary dark:text-primary-fixed font-bold border-b-2 border-primary font-body-md text-body-md hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70 pb-xs" href="#">Movies</a>
+<a class="text-on-surface-variant dark:text-outline font-body-md text-body-md hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" href="#">Friends</a>
+<a class="text-on-surface-variant dark:text-outline font-body-md text-body-md hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" href="#">Profile</a>
+</nav>
+<!-- Trailing Actions & Search -->
+<div class="flex items-center gap-md text-primary dark:text-primary-fixed">
+<!-- Search Bar Placeholder for Right side -->
+<div class="relative hidden sm:block">
+<span class="material-symbols-outlined absolute left-sm top-1/2 -translate-y-1/2 text-outline" style="font-variation-settings: 'FILL' 0;">search</span>
+<input class="bg-surface-container-lowest border-outline-variant rounded-full py-xs pl-8 pr-md text-body-md font-body-md focus:border-primary focus:ring-1 focus:ring-primary w-48 transition-all" placeholder="Search..." type="text"/>
+</div>
+<span class="material-symbols-outlined cursor-pointer active:opacity-70 hover:text-primary dark:hover:text-primary-fixed transition-colors" data-icon="notifications" style="font-variation-settings: 'FILL' 0;">notifications</span>
+<span class="material-symbols-outlined cursor-pointer active:opacity-70 hover:text-primary dark:hover:text-primary-fixed transition-colors" data-icon="cast" style="font-variation-settings: 'FILL' 0;">cast</span>
+</div>
+</div>
+</header>
+<!-- Main Content Layout -->
+<main class="flex-grow w-full max-w-7xl mx-auto px-margin-mobile md:px-margin-desktop py-xl flex flex-col md:flex-row gap-margin-desktop">
+<!-- Sidebar Filters -->
+<aside class="w-full md:w-64 flex-shrink-0 mb-xl md:mb-0">
+<div class="sticky top-xxl space-y-lg">
+<h2 class="font-headline-md text-headline-md text-on-surface mb-md">Filters</h2>
+<!-- Filter Section: Genre -->
+<div class="border-b border-surface-variant pb-md">
+<h3 class="font-label-sm text-label-sm text-outline mb-sm uppercase tracking-wider">Genre</h3>
+<div class="flex flex-wrap gap-xs">
+<span class="bg-surface-container-high text-on-surface font-label-sm text-label-sm px-2 py-1 rounded hover:bg-primary-container/20 cursor-pointer transition-colors">Drama</span>
+<span class="bg-primary text-on-primary font-label-sm text-label-sm px-2 py-1 rounded shadow-sm cursor-pointer">Sci-Fi</span>
+<span class="bg-surface-container-high text-on-surface font-label-sm text-label-sm px-2 py-1 rounded hover:bg-primary-container/20 cursor-pointer transition-colors">Thriller</span>
+<span class="bg-surface-container-high text-on-surface font-label-sm text-label-sm px-2 py-1 rounded hover:bg-primary-container/20 cursor-pointer transition-colors">Romance</span>
+<span class="bg-surface-container-high text-on-surface font-label-sm text-label-sm px-2 py-1 rounded hover:bg-primary-container/20 cursor-pointer transition-colors">Documentary</span>
+</div>
+</div>
+<!-- Filter Section: Year -->
+<div class="border-b border-surface-variant pb-md">
+<h3 class="font-label-sm text-label-sm text-outline mb-sm uppercase tracking-wider">Release Year</h3>
+<div class="space-y-2">
+<label class="flex items-center gap-2 cursor-pointer group">
+<input class="text-primary border-outline-variant focus:ring-primary h-4 w-4" name="year" type="radio"/>
+<span class="font-body-md text-body-md text-on-surface-variant group-hover:text-primary transition-colors">2020s</span>
+</label>
+<label class="flex items-center gap-2 cursor-pointer group">
+<input checked="" class="text-primary border-outline-variant focus:ring-primary h-4 w-4" name="year" type="radio"/>
+<span class="font-body-md text-body-md text-on-surface-variant group-hover:text-primary transition-colors">2010s</span>
+</label>
+<label class="flex items-center gap-2 cursor-pointer group">
+<input class="text-primary border-outline-variant focus:ring-primary h-4 w-4" name="year" type="radio"/>
+<span class="font-body-md text-body-md text-on-surface-variant group-hover:text-primary transition-colors">2000s</span>
+</label>
+</div>
+</div>
+<!-- Filter Section: Rating -->
+<div class="pb-md">
+<h3 class="font-label-sm text-label-sm text-outline mb-sm uppercase tracking-wider">Minimum Rating</h3>
+<div class="flex items-center gap-1">
+<span class="material-symbols-outlined text-primary text-xl" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-primary text-xl" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-primary text-xl" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-surface-variant text-xl" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-surface-variant text-xl" style="font-variation-settings: 'FILL' 1;">star</span>
+</div>
+</div>
+</div>
+</aside>
+<!-- Search Results Grid -->
+<section class="flex-grow">
+<div class="mb-lg flex justify-between items-end border-b border-surface-variant pb-xs">
+<div>
+<h1 class="font-headline-lg text-headline-lg-mobile md:text-headline-lg text-on-background">Search Results</h1>
+<p class="font-body-md text-body-md text-on-surface-variant mt-1">Showing 12 results for "Space Exploration"</p>
+</div>
+<div class="hidden sm:flex gap-sm">
+<span class="material-symbols-outlined text-primary cursor-pointer" style="font-variation-settings: 'FILL' 1;">grid_view</span>
+<span class="material-symbols-outlined text-outline cursor-pointer" style="font-variation-settings: 'FILL' 0;">view_list</span>
+</div>
+</div>
+<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-gutter">
+<!-- Movie Card 1 -->
+<article class="flex flex-col group cursor-pointer">
+<div class="relative w-full aspect-[2/3] rounded bg-surface-container mb-sm overflow-hidden poster-shadow poster-inset">
+<img alt="Movie Poster" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" data-alt="A striking minimalist movie poster for a sci-fi film. The image shows a solitary figure standing on a barren, bright white alien landscape, looking up at a massive, glowing blue monolithic structure. The lighting is high-key, creating a sterile yet beautiful light-mode aesthetic. A sophisticated color palette of pristine whites, deep blacks, and sharp accents of primary blue dominates. The mood is awe-inspiring and slightly melancholic, reflecting high-end editorial gallery photography." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDdBgu101irZigdFe8EBdHMJ_QaQZLBfAMUsPasNwrrTcwkGLJZ_c6fvdn9cphkZjpxUrcjEJy_HTwB_kwE_SItNfgnmMnlXhEXCHBYZG0UfAAyBK1iwvTszOljStyttv9E8hhybG9jqIc-2xKHOaUrDynoXjUImo2JG5WiLuSYCzK4rgNzRwS0g3RmnL3RB9BCXit5zV_HonONeSi-7lmfqkyK7S7CUx5fwHf1NZSkJcCtArSC"/>
+<!-- Glassmorphism overlay on hover -->
+<div class="absolute inset-0 bg-background/40 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
+<span class="bg-primary text-on-primary font-label-sm text-label-sm px-3 py-2 rounded-full flex items-center gap-1">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">add</span> Log
+                            </span>
+</div>
+</div>
+<div class="flex-grow">
+<h3 class="font-headline-md text-body-lg md:text-headline-md text-on-background leading-tight mb-xs group-hover:text-primary transition-colors">Event Horizon Echoes</h3>
+<div class="flex items-center gap-2 font-label-sm text-label-sm text-outline">
+<span>2018</span>
+<span class="w-1 h-1 rounded-full bg-outline-variant"></span>
+<span class="flex items-center gap-0.5 text-on-surface-variant"><span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span> 4.2</span>
+</div>
+</div>
+</article>
+<!-- Movie Card 2 -->
+<article class="flex flex-col group cursor-pointer mt-md md:mt-0"> <!-- Asymmetric nudge -->
+<div class="relative w-full aspect-[2/3] rounded bg-surface-container mb-sm overflow-hidden poster-shadow poster-inset">
+<img alt="Movie Poster" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" data-alt="A minimalist, editorial-style movie poster for an indie science fiction drama. The visual features a close-up profile of a woman looking through an intricately frosted glass window. The lighting is soft and diffused, creating a serene light-mode aesthetic. The color palette relies heavily on slate whites, soft greys, and a singular, vibrant streak of primary blue light cutting across her face. The mood is contemplative and quiet." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBWJbras1QptdM4d8Rf1C6GOz95agGhtL5yqbexfakhYZ4owGgi8jZrLzxSQaU_E_Uo_tt3vIUEtikpA1ZiPemky4w3MEGa1rjmuls5ZEBosoJaZ9WFA-rc9VvtPCrxD4RBWrWF5A02eDdcFhrIkjXYn6jVz6E8WUnkCfQCShRBPPVX56W5up-AZ3IlGFeeqAO2HzMKwPS1D9VNpxdnbwF4Qlgmq_TxAFND5pjtJE0rUNhreytS"/>
+<div class="absolute inset-0 bg-background/40 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
+<span class="bg-primary text-on-primary font-label-sm text-label-sm px-3 py-2 rounded-full flex items-center gap-1">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">add</span> Log
+                            </span>
+</div>
+</div>
+<div class="flex-grow">
+<h3 class="font-headline-md text-body-lg md:text-headline-md text-on-background leading-tight mb-xs group-hover:text-primary transition-colors">The Solitude of Orbits</h3>
+<div class="flex items-center gap-2 font-label-sm text-label-sm text-outline">
+<span>2021</span>
+<span class="w-1 h-1 rounded-full bg-outline-variant"></span>
+<span class="flex items-center gap-0.5 text-on-surface-variant"><span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span> 3.9</span>
+</div>
+</div>
+</article>
+<!-- Movie Card 3 -->
+<article class="flex flex-col group cursor-pointer">
+<div class="relative w-full aspect-[2/3] rounded bg-surface-container mb-sm overflow-hidden poster-shadow poster-inset">
+<img alt="Movie Poster" class="w-full h-full object-cover grayscale transition-transform duration-500 group-hover:scale-105" data-alt="A high-contrast minimalist poster design for a space thriller. The composition showcases a vast, empty white room with a single, perfectly spherical black object hovering in the center. The room is brightly lit with harsh, directional light, typical of a bright light-mode gallery aesthetic. The palette is stark black and white, accented by a tiny, sharp red detail on the sphere. The overall tone is tense and analytical." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBR-SggCdMagnJyN_U6dYElZf67Qe2NjtqW1Z7QXxFKPepbttCPHEG05615LFBoersgizUqjBMKBpv5IeIw2o__F6B6RmzA5-dOCrwPGv6LRzy_xklkHBAjjOnRl477d-Rx-aze_uVAgqpL92ByGw-ELxV_wp-YTGIRSYipe5zvtq0bqSoA0RU98rckOuRrKzA8uon1Q360LjJmGrjD5Bc-T-biyAnQp7D6RsxyFQ_qr8PsMPUu"/>
+<div class="absolute inset-0 bg-background/40 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
+<span class="bg-primary text-on-primary font-label-sm text-label-sm px-3 py-2 rounded-full flex items-center gap-1">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">add</span> Log
+                            </span>
+</div>
+</div>
+<div class="flex-grow">
+<h3 class="font-headline-md text-body-lg md:text-headline-md text-on-background leading-tight mb-xs group-hover:text-primary transition-colors">Void Geometry</h3>
+<div class="flex items-center gap-2 font-label-sm text-label-sm text-outline">
+<span>2015</span>
+<span class="w-1 h-1 rounded-full bg-outline-variant"></span>
+<span class="flex items-center gap-0.5 text-on-surface-variant"><span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span> 4.5</span>
+</div>
+</div>
+</article>
+<!-- Movie Card 4 -->
+<article class="flex flex-col group cursor-pointer mt-md md:mt-0">
+<div class="relative w-full aspect-[2/3] rounded bg-surface-container mb-sm overflow-hidden poster-shadow poster-inset">
+<div class="absolute inset-0 bg-surface-container-high flex flex-col items-center justify-center text-outline text-center p-sm">
+<span class="material-symbols-outlined text-4xl mb-2 opacity-50" style="font-variation-settings: 'FILL' 0;">movie</span>
+<span class="font-label-sm text-label-sm uppercase">Poster Missing</span>
+</div>
+<div class="absolute inset-0 bg-background/40 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
+<span class="bg-primary text-on-primary font-label-sm text-label-sm px-3 py-2 rounded-full flex items-center gap-1">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">add</span> Log
+                            </span>
+</div>
+</div>
+<div class="flex-grow">
+<h3 class="font-headline-md text-body-lg md:text-headline-md text-on-background leading-tight mb-xs group-hover:text-primary transition-colors">Project: Kepler</h3>
+<div class="flex items-center gap-2 font-label-sm text-label-sm text-outline">
+<span>2024</span>
+<span class="w-1 h-1 rounded-full bg-outline-variant"></span>
+<span class="flex items-center gap-0.5 text-on-surface-variant"><span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">star</span> 0.0</span>
+</div>
+</div>
+</article>
+<!-- Empty states / pagination could go here in a real app, keeping it visually airy -->
+</div>
+<!-- Minimalist Pagination -->
+<div class="mt-xl flex justify-center items-center gap-md border-t border-surface-variant pt-lg">
+<button class="w-10 h-10 rounded-full border border-surface-variant flex items-center justify-center text-outline hover:bg-surface-container-high hover:text-primary transition-colors cursor-pointer" disabled="">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">chevron_left</span>
+</button>
+<span class="font-label-sm text-label-sm text-primary font-bold">1</span>
+<span class="font-label-sm text-label-sm text-outline hover:text-on-surface cursor-pointer">2</span>
+<span class="font-label-sm text-label-sm text-outline hover:text-on-surface cursor-pointer">3</span>
+<button class="w-10 h-10 rounded-full border border-surface-variant flex items-center justify-center text-outline hover:bg-surface-container-high hover:text-primary transition-colors cursor-pointer">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">chevron_right</span>
+</button>
+</div>
+</section>
+</main>
+<!-- BottomNavBar from JSON (Visible only on Mobile md:hidden) -->
+<nav class="md:hidden bg-surface/80 dark:bg-on-background/80 backdrop-blur-md fixed bottom-0 w-full z-50 border-t border-surface-variant dark:border-outline-variant flat no shadows fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-safe h-16 pb-4">
+<div class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline px-4 py-1 hover:bg-surface-container-high dark:hover:bg-surface-variant/10 active:scale-95 transition-transform duration-150 cursor-pointer">
+<span class="material-symbols-outlined" data-icon="home" style="font-variation-settings: 'FILL' 0;">home</span>
+<span class="font-label-sm text-[10px] mt-1">Feed</span>
+</div>
+<div class="flex flex-col items-center justify-center text-primary dark:text-primary-fixed font-bold bg-primary-container/10 rounded-xl px-4 py-1 hover:bg-surface-container-high dark:hover:bg-surface-variant/10 active:scale-95 transition-transform duration-150 cursor-pointer">
+<span class="material-symbols-outlined" data-icon="movie" style="font-variation-settings: 'FILL' 1;">movie</span>
+<span class="font-label-sm text-[10px] mt-1">Movies</span>
+</div>
+<div class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline px-4 py-1 hover:bg-surface-container-high dark:hover:bg-surface-variant/10 active:scale-95 transition-transform duration-150 cursor-pointer">
+<span class="material-symbols-outlined" data-icon="group" style="font-variation-settings: 'FILL' 0;">group</span>
+<span class="font-label-sm text-[10px] mt-1">Friends</span>
+</div>
+<div class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline px-4 py-1 hover:bg-surface-container-high dark:hover:bg-surface-variant/10 active:scale-95 transition-transform duration-150 cursor-pointer">
+<span class="material-symbols-outlined" data-icon="person" style="font-variation-settings: 'FILL' 0;">person</span>
+<span class="font-label-sm text-[10px] mt-1">Profile</span>
+</div>
+</nav>
+</body></html>

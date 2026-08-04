@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Movie Details - CinéJournal</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "primary-fixed-dim": "#b6c4ff",
+                        "inverse-surface": "#313030",
+                        "surface-dim": "#dcd9d9",
+                        "secondary-fixed-dim": "#ffb4aa",
+                        "on-tertiary-container": "#ffe1d9",
+                        "on-surface-variant": "#434656",
+                        "surface-container": "#f0eded",
+                        "surface-container-lowest": "#ffffff",
+                        "on-secondary-fixed-variant": "#930005",
+                        "on-error-container": "#93000a",
+                        "on-tertiary": "#ffffff",
+                        "on-error": "#ffffff",
+                        "tertiary-fixed": "#ffdbd1",
+                        "on-secondary-container": "#fffbff",
+                        "outline-variant": "#c3c5d9",
+                        "primary": "#0041c8",
+                        "on-primary-fixed": "#001551",
+                        "tertiary": "#972500",
+                        "tertiary-container": "#c13301",
+                        "on-tertiary-fixed": "#3b0900",
+                        "on-secondary": "#ffffff",
+                        "inverse-primary": "#b6c4ff",
+                        "secondary-fixed": "#ffdad5",
+                        "surface-tint": "#004dea",
+                        "on-background": "#1c1b1b",
+                        "on-primary-container": "#e3e6ff",
+                        "background": "#fcf9f8",
+                        "on-primary-fixed-variant": "#0039b3",
+                        "tertiary-fixed-dim": "#ffb5a0",
+                        "inverse-on-surface": "#f3f0ef",
+                        "outline": "#737688",
+                        "on-secondary-fixed": "#410001",
+                        "error": "#ba1a1a",
+                        "surface-bright": "#fcf9f8",
+                        "surface-container-high": "#eae7e7",
+                        "primary-container": "#0055ff",
+                        "surface-container-low": "#f6f3f2",
+                        "surface-variant": "#e5e2e1",
+                        "error-container": "#ffdad6",
+                        "on-primary": "#ffffff",
+                        "on-surface": "#1c1b1b",
+                        "on-tertiary-fixed-variant": "#872100",
+                        "surface": "#fcf9f8",
+                        "primary-fixed": "#dce1ff",
+                        "surface-container-highest": "#e5e2e1",
+                        "secondary-container": "#e2241f",
+                        "secondary": "#bc000a"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "xxl": "80px",
+                        "margin-mobile": "16px",
+                        "sm": "8px",
+                        "xs": "4px",
+                        "gutter": "24px",
+                        "lg": "24px",
+                        "margin-desktop": "64px",
+                        "unit": "4px",
+                        "md": "16px",
+                        "xl": "48px"
+                    },
+                    "fontFamily": {
+                        "headline-lg-mobile": ["Hanken Grotesk"],
+                        "body-lg": ["Hanken Grotesk"],
+                        "headline-lg": ["Hanken Grotesk"],
+                        "headline-md": ["Hanken Grotesk"],
+                        "label-sm": ["JetBrains Mono"],
+                        "display-lg": ["Hanken Grotesk"],
+                        "body-md": ["Hanken Grotesk"]
+                    },
+                    "fontSize": {
+                        "headline-lg-mobile": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "body-lg": ["18px", { "lineHeight": "28px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "headline-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "label-sm": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "500" }],
+                        "display-lg": ["48px", { "lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined[data-weight="fill"] {
+            font-variation-settings: 'FILL' 1;
+        }
+        
+        .poster-shadow {
+            box-shadow: 0px 4px 20px rgba(0, 0, 0, 0.04);
+        }
+        .poster-border {
+            box-shadow: inset 0 0 0 1px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background antialiased min-h-screen">
+<!-- TopAppBar -->
+<header class="w-full top-0 sticky bg-surface dark:bg-on-background border-b border-surface-variant dark:border-outline-variant z-40 transition-colors hidden md:flex">
+<div class="flex justify-between items-center px-margin-mobile md:px-margin-desktop py-md w-full max-w-7xl mx-auto">
+<div class="font-headline-md text-headline-md font-bold text-primary dark:text-primary-fixed">
+                CinéJournal
+            </div>
+<div class="flex items-center gap-md">
+<span class="material-symbols-outlined text-on-surface-variant dark:text-outline hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" data-icon="search">search</span>
+<span class="material-symbols-outlined text-on-surface-variant dark:text-outline hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" data-icon="notifications">notifications</span>
+<span class="material-symbols-outlined text-on-surface-variant dark:text-outline hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70" data-icon="cast">cast</span>
+</div>
+</div>
+</header>
+<!-- Main Content -->
+<main class="w-full max-w-7xl mx-auto pb-xxl md:pb-xxl">
+<!-- Hero Section -->
+<section class="relative w-full h-[50vh] md:h-[60vh] lg:h-[70vh] bg-surface-container-high overflow-hidden">
+<div class="absolute inset-0 bg-cover bg-center w-full h-full" data-alt="A sweeping, cinematic still frame from a high-end neo-noir film. A lone figure stands in a rain-slicked city street at night, illuminated by the soft, diffused glow of distant neon signs. The composition is expansive and minimalist, dominated by deep, inky blacks and cool blues, with a single striking red accent in the neon light. The overall mood is moody, atmospheric, and highly stylized, fitting a premium editorial film journal aesthetic." style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuDSAm1BqnTEzBqOwjt1ALja7ijYorG5ZTSeqCWfLIEuMbE6CAKKOyL_5IeSaHHuaPWmq4F4uSVuOHlSMdR8-oXeVnEAOYQU0ThEhojfUsG_h4gOZMhnlRN8uLDhn_VHofxv8PWMXqe9tj97qGz2gG0R1DMBt7XRmloQWOyoX-0q-Pfc0ZIcDBELWnAYkm3lZlp8Ulz6hL7h6fWlCVT1R24zrl7AIqJXFFKe6Itc_9zmZsfgqqNy')"></div>
+<!-- Gradient Overlay -->
+<div class="absolute inset-0 bg-gradient-to-t from-background via-background/40 to-transparent"></div>
+<div class="absolute bottom-0 left-0 w-full px-margin-mobile md:px-margin-desktop pb-xl md:pb-xxl z-10">
+<div class="flex flex-col md:flex-row items-end gap-gutter md:gap-xl">
+<!-- Main Poster -->
+<div class="relative w-32 md:w-48 lg:w-64 aspect-[2/3] rounded-lg overflow-hidden poster-shadow poster-border bg-surface-variant flex-shrink-0 -mb-8 md:-mb-16 z-20 hidden md:block">
+<img class="w-full h-full object-cover" data-alt="A minimalist, high-contrast poster design for a neo-noir film. The poster features strong vertical lines and a stark, two-tone color palette of deep blue and crisp white. A solitary silhouette is placed asymmetrically in the lower third, surrounded by vast, empty space. The typography, if imagined, is clean and sans-serif. The style is modern, editorial, and sophisticated, avoiding any cluttered blockbuster tropes." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCul18Wv56KKCdGHBe1o9ghsTaEBku0DEjUFegXofBMpcsk9vs7a_Pzjb8PEbS5mNkXNhIAPNTZy_G7PV_2NQauBaAdhbvAI1bP1NJKp9KhbXHilnqW6nyG96ixUAMzPwx4gATTehJXNNtihzFARY4cz6xjXGXkbbPkZir_bQI-a4IWa7Q3ZNExftZl57aIx5r7_6hqIeHWqTJkD-5YPyMG4cGTSadFLN4XfdZgwfwZFkBjMgC9"/>
+</div>
+<!-- Title & Meta -->
+<div class="flex-1 pb-4">
+<h1 class="font-display-lg text-display-lg text-on-background mb-sm">Neon Reverie</h1>
+<div class="flex flex-wrap items-center gap-md font-label-sm text-label-sm text-outline mb-lg">
+<span>2024</span>
+<span class="w-1 h-1 rounded-full bg-outline"></span>
+<span>Directed by <span class="text-on-background">Elara Vance</span></span>
+<span class="w-1 h-1 rounded-full bg-outline"></span>
+<span>1h 58m</span>
+</div>
+<!-- Genres / Tags -->
+<div class="flex flex-wrap gap-xs mb-lg">
+<span class="px-3 py-1 bg-surface-container-lowest border border-outline-variant text-on-surface-variant font-label-sm text-label-sm rounded-full">Sci-Fi</span>
+<span class="px-3 py-1 bg-surface-container-lowest border border-outline-variant text-on-surface-variant font-label-sm text-label-sm rounded-full">Noir</span>
+<span class="px-3 py-1 bg-surface-container-lowest border border-outline-variant text-on-surface-variant font-label-sm text-label-sm rounded-full">Thriller</span>
+</div>
+<!-- Actions -->
+<div class="flex items-center gap-md">
+<button class="bg-primary text-on-primary px-6 py-3 rounded-DEFAULT font-label-sm text-label-sm uppercase tracking-wider hover:bg-primary/90 transition-colors flex items-center gap-sm">
+<span class="material-symbols-outlined" data-icon="play_arrow">play_arrow</span>
+                                Trailer
+                            </button>
+<button class="bg-transparent border border-outline text-on-background px-6 py-3 rounded-DEFAULT font-label-sm text-label-sm uppercase tracking-wider hover:bg-surface-variant transition-colors flex items-center gap-sm">
+<span class="material-symbols-outlined" data-icon="add">add</span>
+                                Watchlist
+                            </button>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Main Content Area -->
+<div class="px-margin-mobile md:px-margin-desktop mt-xl md:mt-xxl grid grid-cols-1 lg:grid-cols-12 gap-gutter md:gap-xl">
+<!-- Left Column (Synopsis & Details) -->
+<div class="lg:col-span-8">
+<section class="mb-xxl">
+<h2 class="font-headline-lg text-headline-lg md:hidden mb-md">Synopsis</h2>
+<p class="font-body-lg text-body-lg text-on-surface-variant leading-relaxed max-w-3xl">
+                        In a sprawling, rain-drenched metropolis where memories can be synthesized and sold, a disgraced detective is hired to locate a missing archivalist. His investigation leads him into the labyrinthine underground of memory-smugglers, forcing him to confront the fabricated reality of his own past. "Neon Reverie" is a slow-burn exploration of identity, truth, and the cost of forgetting, presented with breathtaking visual restraint.
+                    </p>
+</section>
+<hr class="border-t border-surface-variant mb-xxl"/>
+<!-- Cast Bento Grid -->
+<section class="mb-xxl">
+<div class="flex items-baseline justify-between mb-lg">
+<h2 class="font-headline-md text-headline-md text-on-background">Cast</h2>
+<span class="font-label-sm text-label-sm text-primary uppercase cursor-pointer hover:underline">View All</span>
+</div>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-md">
+<!-- Cast Member 1 -->
+<div class="flex flex-col items-center group">
+<div class="w-full aspect-square rounded-full overflow-hidden bg-surface-variant mb-sm poster-shadow poster-border group-hover:scale-105 transition-transform duration-300">
+<img class="w-full h-full object-cover grayscale hover:grayscale-0 transition-all duration-300" data-alt="A stark, high-contrast black and white studio portrait of a male actor in his late 40s. The lighting is dramatic, highlighting the texture of his skin and the intensity in his eyes. The background is pure white, adhering to the minimalist editorial aesthetic. The composition is focused and intimate, reminiscent of a high-end magazine photoshoot." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBIcthCrpuzGrELJHuCN_O0ZwEA0C88SfPJfEZSoQxDjbz4zsgP8ClCeFbbZ0lxbJJ6zv08kgIn4ynd5baZvp3muGr-wt9j0mUwEdHJUtUZQkHA24EveR6IvaQUhH5lKc1JeiJHlnPJRrP_IAHkS0Nmae8pYohrjubgdRIE7yVaOpaLRK66fyrSjLcGJqf88FJ2tFB4CX0tAEsnRsv5TnClwbG_aZPmel-cs2FL9P9sKXMuM_-T"/>
+</div>
+<span class="font-body-md text-body-md font-medium text-center">Julian Black</span>
+<span class="font-label-sm text-label-sm text-outline text-center mt-xs">Det. Corvis</span>
+</div>
+<!-- Cast Member 2 -->
+<div class="flex flex-col items-center group">
+<div class="w-full aspect-square rounded-full overflow-hidden bg-surface-variant mb-sm poster-shadow poster-border group-hover:scale-105 transition-transform duration-300">
+<img class="w-full h-full object-cover grayscale hover:grayscale-0 transition-all duration-300" data-alt="A clean, minimalist studio portrait of a female actress in her 30s. Soft, diffused lighting creates a gentle, almost ethereal mood against a pristine white background. Her expression is enigmatic. The image is rendered in black and white, maintaining the sophisticated, gallery-like visual style of the platform. The focus is entirely on her face." src="https://lh3.googleusercontent.com/aida-public/AB6AXuChpOWPlKPSyuNbCzgFv9yZsvSKOvGjVENfk9ROVGwww-4_zVYFqL2w0-rQUww8YJryBYur6-npXGtX2Rae_TReXL47K4DT5XMUS1TUhtX__QaEFYQUI2aU_T-FAcGB3WiCo56ElyGOSC6RUOlZKWGfd6Kyzkg0kCeU0KKcW2uPudu0GNlOxUp9rmYy71SXZcdSRfneWG8aD_df2-WGqcz4xpHIZX_ChEBA1G6zTANVS8FqBUOX"/>
+</div>
+<span class="font-body-md text-body-md font-medium text-center">Maya Lin</span>
+<span class="font-label-sm text-label-sm text-outline text-center mt-xs">The Archivalist</span>
+</div>
+<!-- Cast Member 3 -->
+<div class="flex flex-col items-center group">
+<div class="w-full aspect-square rounded-full overflow-hidden bg-surface-variant mb-sm poster-shadow poster-border group-hover:scale-105 transition-transform duration-300">
+<img class="w-full h-full object-cover grayscale hover:grayscale-0 transition-all duration-300" data-alt="A high-contrast, editorial-style headshot of a mature male actor with a weathered face. Shot against a bright white backdrop, the black and white image emphasizes the lines and character of his features. The lighting is direct but controlled, fitting a premium, minimalist design system. He looks slightly off-camera." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCsGkzN1cmJJGEac_A7bl9nxfOu-TaJZjxdl5p714AHbycLyn5fCT1vpm3qSXdAlHsPJV4onSfBesGZMqdkYGdDgxXFg8iZ3zqL1xTdUOCq54vCm9udwC6Xq7DL42kIYOloKVctaA3KAfyrXtFh8vW7ITiK_7meBThws1mCpI6BwQgV0yg1LhRq7eAwVB8x-xAz5-sJ88ACgoZFdUGDIiyTJK1l5vuhVBXawClGtqMbgDG9Nt_e"/>
+</div>
+<span class="font-body-md text-body-md font-medium text-center">Arthur Vance</span>
+<span class="font-label-sm text-label-sm text-outline text-center mt-xs">Synthesizer</span>
+</div>
+<!-- Cast Member 4 -->
+<div class="flex flex-col items-center group">
+<div class="w-full aspect-square rounded-full overflow-hidden bg-surface-variant mb-sm poster-shadow poster-border group-hover:scale-105 transition-transform duration-300">
+<img class="w-full h-full object-cover grayscale hover:grayscale-0 transition-all duration-300" data-alt="A minimalist, bright studio portrait of a young male actor. The aesthetic is clean and modern, utilizing a pure white background and soft, even lighting. The black and white treatment gives it a timeless, sophisticated editorial feel. His expression is serious and intense." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAYHLrGRo9QSmsQL7JTY3tMehahee3JeXjKMYaCBVk3ONPhlKALdo3RJRoFj5clkNr_xRoocn-L8OMP4dszWE1KEm5Q1YHZ8Ri-IiZ5-XReCXLRXEdNgS18EBAXpc1XHfw4C0mq8yZWoNwkHFplATiiG-4XtEGUFh3YSEEkLkIE_kKjx0mXqPDKUnRwEpAiLEPK3nm-nZ0_c_8xV85EmHJE5R2xPEsX5USrcEXWIhS3Zg5pgHLd"/>
+</div>
+<span class="font-body-md text-body-md font-medium text-center">Leo Thorne</span>
+<span class="font-label-sm text-label-sm text-outline text-center mt-xs">Runner</span>
+</div>
+</div>
+</section>
+<hr class="border-t border-surface-variant mb-xxl"/>
+<!-- Gallery Section (Asymmetric) -->
+<section class="mb-xxl">
+<div class="flex items-baseline justify-between mb-lg">
+<h2 class="font-headline-md text-headline-md text-on-background">Gallery</h2>
+<span class="font-label-sm text-label-sm text-primary uppercase cursor-pointer hover:underline">12 Stills</span>
+</div>
+<div class="grid grid-cols-2 md:grid-cols-3 gap-md">
+<div class="col-span-2 md:col-span-2 aspect-video bg-surface-variant rounded-lg overflow-hidden poster-border">
+<img class="w-full h-full object-cover hover:scale-105 transition-transform duration-500" data-alt="A wide, cinematic still showing a futuristic cityscape viewed through a rain-streaked window. The dominant colors are deep slate grays and muted blues, with solitary pinpricks of warm yellow light from distant skyscrapers. The composition is stark and architectural, emphasizing negative space and a lonely, contemplative mood." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAYAboaqJyLtG7mn2AATf1V8leM992Ll59VPDG6U4BlkE54BfGzNL0Efdg1RtdsXW37s_4ZxsLqFUbZ5f59vl29awXXE_fjdOF9s0yBc4wCN_L1TAZkcBgnSBO7qwDyl5KN62fMMjYY6u7NYla12c4PQm3suwVb2k5WszNiceAYZ-AjsnubQQY0Jz0RgAuI8Nli3w4X4bPORcewdyiyYYVNt_qpMbxW8n6qGW2T3dqWi5oykhS_"/>
+</div>
+<div class="col-span-2 md:col-span-1 aspect-video md:aspect-auto bg-surface-variant rounded-lg overflow-hidden poster-border">
+<img class="w-full h-full object-cover hover:scale-105 transition-transform duration-500" data-alt="A close-up cinematic still of a glowing, intricate technological device—perhaps a memory synthesizer—resting on a dark, reflective surface. The lighting is surgical and cold, casting sharp shadows. The visual aesthetic is highly detailed yet minimalist, focusing entirely on the object against a dark void." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCgBAi6tOhGZuaNPkoEg273LsZrc6F8khSGtlo9dR5Kn7SQO2QUhcVaraFET22AhMf-U9Yy22FqiJ7gtHg0IUxceBzrv7TDQwrDqIIFFwxa3WrOxrxwUF1Be8Px7N5I6Hd_vvoSPiiAj80BxK2cC88cZ0Ne4Xs1bWJcLdq_bufjEYO8In3n1Ualkpt-hi9v-JjR0XfeRUkfo_iK-mhqp5Cva_llVqDAuHNMSGRVsD25i2ov_Ldk"/>
+</div>
+<div class="col-span-1 aspect-square md:aspect-video bg-surface-variant rounded-lg overflow-hidden poster-border">
+<img class="w-full h-full object-cover hover:scale-105 transition-transform duration-500" data-alt="A cinematic still of a dimly lit, minimalist interior space. A single chair sits in the center of the room, illuminated by a harsh, singular spotlight from above. The surrounding walls are smooth concrete, creating a sense of isolation and tension. The color palette is almost monochromatic, relying on stark contrasts between light and shadow." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAY0mdYgqzzmeVM9hErUhM5INwytUJnODm-QqvGQonNzsmGs5fgDhqwa-AASslyK1lSp1eP-mK7uoQtTo7IendBJHOGk6PC9AJCXKP69ArtqSRBd9uZzoG8c8ZfUZnKX9EfWFyTn3mSi-TNIOUrEoDllQOkOZf5oXC-MUZLsHzcpd9B-ngbMv4PQB4_WjpVgkOdCTghNNjAGUgi2bldpAhb6Jbcxx9dswatvkZ5YsVTzvREfDUu"/>
+</div>
+<div class="col-span-1 md:col-span-2 aspect-square md:aspect-video bg-surface-variant rounded-lg overflow-hidden poster-border">
+<img class="w-full h-full object-cover hover:scale-105 transition-transform duration-500" data-alt="A wide cinematic shot of two figures silhouetted against a massive, glowing digital billboard in a sprawling, empty plaza. The scale of the environment dwarfs the characters, emphasizing themes of alienation. The billboard emits a cool, blue light that washes over the brutalist architecture. The scene is quiet, still, and visually arresting." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDgx7HhySM1LPIOi_ac3SuyMd3J_54FmmIGRcmTkT67Pvqk_cbZC6zD8jD4RovQc11rJGQSn4Ne3VkZZ9dTh0adG-FQkC4j2zlhZ_r3PlVXG0dtqA3R7Te9FNkoGCExgwDGLDnMi83YL1KBOGPg-3xbp9jqRkvP-o6EaBL4x_9DkOg7sG2zHfCi-ADKdx3VKNsrD2M40Dx1aejLDrXFFNiHehkLdkBZonj9-v9R_tReL96eM43l"/>
+</div>
+</div>
+</section>
+</div>
+<!-- Right Column (Sidebar Meta) -->
+<div class="lg:col-span-4">
+<div class="sticky top-[100px] bg-surface-container-low p-lg rounded-xl poster-shadow border border-surface-variant">
+<h3 class="font-headline-sm text-headline-md font-semibold mb-lg">Details</h3>
+<div class="space-y-md">
+<div>
+<span class="font-label-sm text-label-sm text-outline block mb-xs">Studio</span>
+<span class="font-body-md text-body-md">Aether Films</span>
+</div>
+<hr class="border-t border-surface-variant"/>
+<div>
+<span class="font-label-sm text-label-sm text-outline block mb-xs">Cinematography</span>
+<span class="font-body-md text-body-md">Sarah Chen</span>
+</div>
+<hr class="border-t border-surface-variant"/>
+<div>
+<span class="font-label-sm text-label-sm text-outline block mb-xs">Original Score</span>
+<span class="font-body-md text-body-md">Trent Reznor</span>
+</div>
+<hr class="border-t border-surface-variant"/>
+<div>
+<span class="font-label-sm text-label-sm text-outline block mb-xs">Release Date</span>
+<span class="font-body-md text-body-md">October 12, 2024</span>
+</div>
+</div>
+<div class="mt-xl">
+<span class="font-label-sm text-label-sm text-outline block mb-md">Watch Progress</span>
+<div class="w-full h-1 bg-surface-variant rounded-full overflow-hidden">
+<!-- Technical discreet progress line -->
+<div class="h-full bg-primary w-0" style="width: 0%"></div>
+</div>
+<div class="flex justify-between items-center mt-xs font-label-sm text-label-sm text-outline">
+<span>Not Started</span>
+<span class="material-symbols-outlined text-sm cursor-pointer hover:text-primary transition-colors" data-icon="edit">edit</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="fixed bottom-0 w-full z-50 bg-surface/80 dark:bg-on-background/80 backdrop-blur-md border-t border-surface-variant dark:border-outline-variant md:hidden">
+<div class="flex justify-around items-center px-4 pb-safe h-16">
+<div class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline px-4 py-1 hover:bg-surface-container-high dark:hover:bg-surface-variant/10 active:scale-95 transition-transform duration-150 cursor-pointer">
+<span class="material-symbols-outlined" data-icon="home">home</span>
+<span class="font-label-sm text-[10px] mt-1">Feed</span>
+</div>
+<div class="flex flex-col items-center justify-center text-primary dark:text-primary-fixed font-bold bg-primary-container/10 rounded-xl px-4 py-1 hover:bg-surface-container-high dark:hover:bg-surface-variant/10 active:scale-95 transition-transform duration-150 cursor-pointer">
+<span class="material-symbols-outlined" data-icon="movie" data-weight="fill">movie</span>
+<span class="font-label-sm text-[10px] mt-1">Movies</span>
+</div>
+<div class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline px-4 py-1 hover:bg-surface-container-high dark:hover:bg-surface-variant/10 active:scale-95 transition-transform duration-150 cursor-pointer">
+<span class="material-symbols-outlined" data-icon="group">group</span>
+<span class="font-label-sm text-[10px] mt-1">Friends</span>
+</div>
+<div class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline px-4 py-1 hover:bg-surface-container-high dark:hover:bg-surface-variant/10 active:scale-95 transition-transform duration-150 cursor-pointer">
+<span class="material-symbols-outlined" data-icon="person">person</span>
+<span class="font-label-sm text-[10px] mt-1">Profile</span>
+</div>
+</div>
+</nav>
+</body></html>

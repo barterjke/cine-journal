@@ -7,3 +7,6 @@
 # Build
 node_modules/
 deno.lock
+target/
+dist/
+*.tsbuildinfo

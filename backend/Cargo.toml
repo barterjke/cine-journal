@@ -1,0 +1,13 @@
+[package]
+name = "cine-journal-api"
+version = "0.1.0"
+edition = "2021"
+description = "Read-only JSON API serving the CinéJournal demo data"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde = { version = "1", features = ["derive"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
