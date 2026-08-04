@@ -7,21 +7,44 @@
 use crate::models::*;
 use crate::state::Store;
 
-/// The avatar the composer uses for the visitor's own posts. The export drew a
-/// plain "ME" monogram rather than a photo, so there is no image to reuse — this
-/// stands in for one on the posted comment rows.
-const VISITOR_NAME: &str = "You";
-const VISITOR_AVATAR_ALT: &str = "The signed-in visitor's placeholder avatar.";
+/// What a comment row calls the visitor. Their own posts are labelled by relation
+/// rather than by name, as the export drew them — the name belongs on the profile,
+/// which is where `VISITOR_NAME` goes.
+const BYLINE: &str = "You";
+
+/// The one visitor, transcribed from the export rather than stored.
+///
+/// There is still no per-user identity here (see `state`): every client is this
+/// person. A `people` row for them would imply an account system that doesn't
+/// exist, so these live in code beside the byline they belong with.
+///
+/// The name and the avatar are the export's own — `review-mobile.html` drew Alex
+/// Mercer with this photo, and `data::architecture_review` still credits them —
+/// which is why the profile header has a real face behind it rather than a
+/// placeholder. The handle, the joined line and the bio are `reference/profile/`'s
+/// copy, verbatim.
+pub const VISITOR_NAME: &str = "Alex Mercer";
+pub const VISITOR_HANDLE: &str = "@alexm_cinema";
+pub const VISITOR_SINCE: &str = "Cinephile since 2018";
+pub const VISITOR_BIO: &str =
+    "Amateur critic, full-time dreamer. Obsessed with French New Wave and neon-lit neo-noirs.";
+
+const VISITOR_AVATAR_ALT: &str =
+    "A portrait of a young person in a brightly lit, modern setting wearing stylish minimalist clothing.";
 
 /// Posted content has no real timestamp — the export's are pre-formatted strings
 /// like "2 hours ago", and inventing a clock-based one would drift out of that
 /// vocabulary the moment a minute passed.
 const JUST_NOW: &str = "Just now";
 
-fn visitor_avatar() -> Image {
-    // Elena's small avatar doubles as the visitor's; the export shipped no
-    // dedicated one, and every other image here is a real file on disk.
-    Image::new("img/avatar-elena-rostova-sm.jpg", VISITOR_AVATAR_ALT)
+/// One face for the visitor everywhere.
+///
+/// This was Elena's small avatar until the profile screen existed, which made the
+/// mismatch load-bearing: Elena is a *friend* on the stories rail, so the visitor
+/// wearing her photo on their own comments and their own name on their profile
+/// read as two different people.
+pub fn visitor_avatar() -> Image {
+    Image::new("img/avatar-alex-mercer.jpg", VISITOR_AVATAR_ALT)
 }
 
 /// The like count to show beside a button, given the transcribed count and
@@ -81,7 +104,7 @@ pub fn review(mut review: Review, store: &Store) -> Review {
     if let Some(posted) = store.posted_comments.get(&review.id) {
         review.comments.extend(posted.iter().map(|comment| Comment {
             id: comment.id.clone(),
-            author_name: VISITOR_NAME.into(),
+            author_name: BYLINE.into(),
             author_avatar: visitor_avatar(),
             timestamp: JUST_NOW.into(),
             body: comment.body.clone(),
@@ -101,7 +124,7 @@ pub fn review(mut review: Review, store: &Store) -> Review {
         if let Some(replies) = store.posted_replies.get(&key) {
             comment.replies.extend(replies.iter().map(|posted| Reply {
                 id: posted.id.clone(),
-                author_name: VISITOR_NAME.into(),
+                author_name: BYLINE.into(),
                 author_avatar: visitor_avatar(),
                 body: posted.body.clone(),
             }));
@@ -195,7 +218,7 @@ mod tests {
         assert_eq!(hydrated.comments.len(), 3);
         let last = hydrated.comments.last().unwrap();
         assert_eq!(last.body, "Mine");
-        assert_eq!(last.author_name, VISITOR_NAME);
+        assert_eq!(last.author_name, BYLINE);
         assert_eq!(last.timestamp, JUST_NOW);
     }
 

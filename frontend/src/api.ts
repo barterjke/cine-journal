@@ -230,6 +230,34 @@ export interface MobileFeed {
   items: MobileFeedItem[]
 }
 
+export interface FollowedPerson {
+  id: string
+  name: string
+  avatar: Image
+  /** A pre-formatted line, e.g. "Watched Interstellar • 2h ago". */
+  subtitle: string
+}
+
+export interface RatedFilm {
+  id: string
+  title: string
+  rating_half_stars: number
+  blurb: string | null
+}
+
+export interface Profile {
+  name: string
+  handle: string
+  avatar: Image
+  member_since: string
+  bio: string
+  favorites: Movie[]
+  watchlist: Movie[]
+  recent_reviews: RatedFilm[]
+  following: FollowedPerson[]
+  following_count: number
+}
+
 export interface WatchlistState {
   movie_id: string
   on_watchlist: boolean
@@ -309,6 +337,7 @@ export const api = {
   search: (params: SearchParams = {}) =>
     get<SearchResponse>(`/api/search${searchQuery(params)}`),
   watchlist: () => get<string[]>('/api/watchlist'),
+  profile: () => get<Profile>('/api/profile'),
 
   /** Omit `onWatchlist` to toggle; pass it to make the call idempotent. */
   setWatchlist: (id: string, onWatchlist?: boolean) =>

@@ -15,7 +15,7 @@ that stands in when TMDB isn't configured.
 
 ```
 backend/     Rust + Axum API. Films from TMDB, social layer in SQLite, plus the images.
-frontend/    React + Vite + TypeScript. Renders the six screens from the API.
+frontend/    React + Vite + TypeScript. Renders the seven screens from the API.
 reference/   The original static HTML re-creation and the Stitch exports it came from.
 ```
 
@@ -24,9 +24,9 @@ reference/   The original static HTML re-creation and the Stitch exports it came
 Three layers that never mix:
 
 - **Films** — [TMDB](https://www.themoviedb.org/), live, via `tmdb/` and the `content.rs`
-  seam. Titles, posters, backdrops, runtimes, cast, galleries, crowd ratings and the
-  long-form reviews are all real. With no token configured, `data.rs` stands in — see
-  *Demo mode* below.
+  seam. Titles, posters, backdrops, runtimes, cast, credits, trailers, age ratings,
+  streaming availability, crowd ratings and the long-form reviews are all real. With no
+  token configured, `data.rs` stands in — see *Demo mode* below.
 - **The social layer + the visitor's own actions** — SQLite (`db.rs`). Friends, the stories
   rail, live-discussion rooms and comment threads have no upstream equivalent (TMDB's
   `/reviews` is flat prose with no replies), so they're seeded there; the visitor's
@@ -37,6 +37,11 @@ Three layers that never mix:
 
 Rows in the social layer carry no film ids: at request time template *i* is paired with
 trending film *i*, so the rail can't go stale and the DB holds no ids that could rot.
+
+That pairing has exactly one implementation, and every screen that needs it asks the feed
+rather than re-deriving it. The profile's "Following" subtitles briefly did their own version
+and drifted immediately — the rule differs by mode (demo ships a fixed pairing; TMDB offsets
+row *i* past the live rooms), so the two screens credited the same friend with different films.
 
 ### Demo mode
 
@@ -87,6 +92,7 @@ than as TMDB's `?api_key=` query parameter, which the request-tracing layer woul
 | Friend Review — Mobile | `/review-mobile` | `reference/cine-journal/review-mobile.html` |
 | Movie Detail | `/movie/:id` | `reference/movie page/` |
 | Search & Filter | `/search` | `reference/stitch_lumi_cinema_social 2/movie_search_desktop/` |
+| Profile | `/profile` | `reference/profile/` |
 
 The two `*-mobile` routes are the export's separate mobile-only designs, kept as distinct
 screens rather than merged into the responsive desktop ones. View them narrow, or with
@@ -119,6 +125,10 @@ friends-activity rail.
   selection but respects the query and the other filters, so a chip never reads "4" and
   then yields nothing when you click it.
 - **Likes, comments, replies** on the review screens.
+- **Profile** — `/profile` is where the watchlist and the ratings become visible: favourites
+  are the highest-rated films, Recent Reviews the newest-rated, and the Watchlist grid is the
+  list itself. So it starts out empty and fills in as you use the app; each tile says what to
+  do rather than showing borrowed posters.
 
 Mutations are optimistic — the button flips first, then reconciles with what the server
 stored, and rolls back with an inline error if the request failed.
@@ -160,13 +170,14 @@ subsequent read, including after a restart.
 | `GET /api/movies/{id}` | One detail page; `404` if unknown (see below) |
 | `GET /api/search?q=&genre=&year=&min_rating=&page=` | Results, facet counts, page count |
 | `GET /api/watchlist` | The visitor's watchlist as movie ids |
+| `GET /api/profile` | The whole profile screen: identity, favourites, watchlist, ratings, following |
 | `POST /api/movies/{id}/watchlist` | `{on_watchlist}` — body `{"on_watchlist":bool}`, or omit it to toggle |
 | `PUT /api/movies/{id}/rating` | `{your_rating_half_stars}` — body `{"rating_half_stars":0..=10}`, `0` clears |
 | `POST /api/reviews/{id}/like` | `{liked, like_count}` — toggles |
 | `POST /api/reviews/{id}/comments` | The whole review, with the comment appended |
 | `POST /api/reviews/{id}/comments/{cid}/like` | `{liked, like_count}` — toggles |
 | `POST /api/reviews/{id}/comments/{cid}/replies` | The whole review, with the reply attached |
-| `/img/*` | The export's avatars and the demo dataset's posters and stills |
+| `/img/*` | The export's avatars and the demo dataset's posters and backdrops |
 
 The two comment endpoints return the whole review rather than just the new row, so the
 thread, the "Conversation (n)" heading, and the row itself all update from one response.
@@ -180,13 +191,49 @@ slug can never collide with one: those never start with a digit.
 `GET /api/movies/{id}` returns a real `404` for an id TMDB doesn't know. In demo mode it
 still resolves any id — the catalogue has details for only a handful of films, only one of
 which (Neon Reverie) was actually designed, so every film borrows its synopsis, cast and
-gallery, and an unknown slug gets a title guessed from it (`/movie/some-quiet-film` →
+credits, and an unknown slug gets a title guessed from it (`/movie/some-quiet-film` →
 "Some Quiet Film"). That's scaffolding for a dataset with nothing behind it, and it goes
 away as soon as there is.
 
 Review ids are `<tmdb_movie_id>-<tmdb_review_id>`. Which reviews exist depends on what's
 trending, so the two review screens fetch `GET /api/reviews` and take the first and second
 entry rather than naming an id.
+
+### The detail payload
+
+`GET /api/movies/{id}` is one upstream round trip:
+`/movie/{id}?append_to_response=credits,images,videos,release_dates,watch/providers`.
+Appending is free — the response is one document — where five calls would multiply the page's
+latency for the same bytes. The path doubles as the cache key, so it has to stay byte-stable.
+
+Four fields are optional in a way the screen has to handle, because upstream really is
+missing them, not as a placeholder for work not done:
+
+- **`certification`** (`"PG-13"`) — TMDB publishes no global age rating, only per-country
+  `release_dates`, so this is the US entry. Blank strings are pervasive there: 47 of
+  Interstellar's 92 countries are entirely empty, and France's list reads
+  `['', '', 'TP', …]`, so the mapper takes the first *non-empty* one. `null` omits the
+  segment from the metadata line rather than printing an empty bullet.
+- **`trailer`** — ranked official → `Trailer` > `Teaser` > other → newest, and non-YouTube
+  videos are dropped. Recency alone picks wrong: Interstellar's two most recent videos are
+  *Clips* from 2026. `null` hides the Media block entirely; the demo dataset sets it `null`
+  on purpose, since a play button that plays nothing is exactly the dead end an SPA can't
+  afford.
+- **`watch_options`** — read in visitor-priority order (stream, free, ad-supported, rent,
+  buy), sorted by TMDB's `display_priority`, deduped by name and capped at four. The dedupe
+  is load-bearing: Amazon Video appears under both `rent` and `buy`. There is no per-row URL
+  because TMDB's attribution terms permit linking only their own watch page — hence the
+  single `watch_link`, dropped along with the rows when there are none.
+- **`score` / `vote_count`** — `score` stays a raw 0–10 float, unlike every other rating here,
+  because half-stars would round 7.8 to 8.0 and the design prints the decimal. `vote_count: 0`
+  hides the whole block: an average over no votes is not a 0.0.
+
+Everything else the mock shows is derived rather than fetched separately. The credits grid's
+"Writers" row walks a priority chain (`Writer` → `Screenplay` → `Story` → `Novel` → …) and
+takes only the first title anyone holds — three modern films expose only `Writer`, while
+*Absolute Power* credits `Screenplay` + `Novel`; appending the novelist would credit them for
+the screenplay. "Friends' Activity" has no upstream equivalent at all: it's the seeded SQLite
+rows filtered to this film, so the card appears only when a friend really touched it.
 
 Ratings travel as `rating_half_stars` — an integer 0–10 rather than a float. The screens
 draw discrete full/half/empty star glyphs, and integers keep that exact with no rounding
@@ -212,6 +259,19 @@ Tests run offline: `tmdb/map.rs` deserializes recorded responses from
 checks the transcribed genre table against TMDB's real list by id, so a renamed genre
 upstream fails a test rather than a request.
 
+### Schema changes
+
+The schema is applied with `CREATE TABLE IF NOT EXISTS`, which is a no-op on a table that
+already exists — so a column added after the fact needs its own `ALTER TABLE`, in `migrate`,
+guarded by a `PRAGMA table_info` check. `ratings.rated_at` is the first of those (it orders the
+profile's Recent Reviews). It's nullable rather than `NOT NULL DEFAULT CURRENT_TIMESTAMP`
+because SQLite's `ADD COLUMN` only accepts a *constant* default; rows written before it existed
+sort last, and a test builds a pre-migration table to prove they still load.
+
+Timestamps have one-second resolution, so every ordering query adds `movie_id` as a
+deterministic tiebreak — otherwise three films rated in the same second come back in
+whatever order SQLite feels like.
+
 ### No authentication
 
 There is one visitor, shared by everyone who can reach the port, and the mutation endpoints
@@ -219,6 +279,13 @@ take no credentials. That is fine for a local demo and is why the backend binds
 `127.0.0.1`. **Do not expose it publicly** without putting real auth in front of the writes
 — see the note at the top of `backend/src/main.rs`. This matters more now than it did when
 the visitor state was in memory: writes land in a real file on disk, and nothing prunes it.
+
+The visitor's identity — Alex Mercer, `@alexm_cinema`, and their avatar — is transcribed in
+`hydrate.rs` rather than stored, since there is nothing to sign in to. Their comment byline
+stays "You" (a relation, as the export drew it); the *name* only appears on the profile. The
+avatar had been Elena's small portrait, which was invisible until the profile existed and then
+became load-bearing: Elena is a friend on the stories rail, so the visitor wore her photo on
+their own comments and their own name on their profile, reading as two different people.
 
 ## Frontend notes
 
@@ -232,39 +299,51 @@ Two export quirks are preserved on purpose and documented in the files that keep
 mobile feed's square poster corners (the markup used `rounded-DEFAULT`, which emits no CSS)
 and its 20px titles.
 
-Two are per-poster art direction with no upstream equivalent, so they only appear in demo
-mode: the third search card's desaturated poster (`grayscale`) and the Gallery heading's
-"12 Stills" over a 4-tile grid. `still_count` is still carried separately from
-`gallery.length` — in TMDB mode it's the film's real backdrop count, which also exceeds the
-four tiles shown, so the field means the same thing in both modes.
+One is per-poster art direction with no upstream equivalent, so it only appears in demo mode:
+the third search card's desaturated poster (`grayscale`).
 
-Three are deliberately *not* preserved, all for the same reason — in a static mock a dead
+Several are deliberately *not* preserved, all for the same reason — in a static mock a dead
 end is a still image, but in an SPA it reads as a bug:
 
 - the mobile review's `md:hidden` on `<body>`, which made that screen render blank at ≥768px
 - the movie detail bar's missing nav links and search box, which stranded you on a page every
   other screen links into, with no way out but the browser's back button
-- the inert `CinéJournal` wordmark, now the home button on all four bars
+- the inert `CinéJournal` wordmark, now the home button on every bar
+- the detail page's `more_horiz` overflow button and its "Full Cast & Crew" link, both of
+  which opened nothing, and its static "In Theaters" row, now real streaming availability
+- the profile's "Edit" and `share` buttons (nothing to edit, nothing to share to) and its four
+  `chevron_right` links; the two with a real destination — Watchlist and Following — are
+  headings further down the same page, so those two scroll to them instead
+- the profile's `Following (124)` beside a list of three. The count is the length of the list,
+  since a count the list contradicts is the kind of decoration an SPA can't afford
+
+Two of the detail screen's departures are responsive rather than editorial, since its mock is
+desktop-only: the poster is capped at 240px below `md` (uncapped, a 2:3 poster is 585px tall
+on a 390px screen and pushes the title off the fold), and the credits grid's label column is
+`auto` below `sm` (the fixed 100px track clips "Cinematography", which measures 118px).
 
 `TopAppBar` takes no props but the active tab, and that is deliberate. It briefly took
 `showNav` / `showSearch` / `showSearchIcon` so each page could reproduce its own export mock,
 which produced four subtly different bars — the detail page lost its nav and search box, the
 two screens without the box were 1px shorter than the two with it (so the bar jumped as you
 navigated), and the nav text rendered in a different font on the two screens whose root div
-didn't set one. Font smoothing moved to `<body>` in `index.css` for the same reason. The bar
-is now byte-identical across all four routes, verified by cropping and hashing it.
+didn't set one. Font smoothing moved to `<body>` in `index.css` for the same reason. Across all
+five desktop routes the bar is now identical but for which tab is lit — same 81px height, same
+link positions, same search-box rect — verified by cropping and measuring it on each.
 
-The `Profile` tab has no screen behind it and renders as dimmed text rather than a link. It
-was `<Link to="#">` until the detail page exposed the flaw: react-router resolves a bare `#`
-against the current path, so on `/movie/red-shift` its href became `/movie/red-shift`.
+All four tabs now have a screen behind them, so all four are real links. `Profile` was the
+exception until `/profile` existed, and it rendered as dimmed text rather than as
+`<Link to="#">` — because react-router resolves a bare `#` against the *current* path, so on
+`/movie/red-shift` its href became `/movie/red-shift`: a link that looks live and goes
+somewhere wrong. Worth remembering before adding a fifth tab ahead of its screen.
 
 Two things the wire format deliberately does *not* carry: Tailwind class strings, and
 absolute-vs-relative image paths.
 
 Tailwind's JIT only emits CSS for classes it finds literally in the source it scans, so a
-class name arriving over the wire generates nothing. The gallery's asymmetric bento grid
-therefore sends a semantic `shape` (`hero` / `companion` / `compact` / `panorama`) and the
-frontend owns the class vocabulary — see `SHAPE_CLASSES` in `MovieDetail.tsx`.
+class name arriving over the wire generates nothing. Where a payload needs to influence
+layout it sends a semantic value and the frontend owns the class vocabulary — the trailer's
+`site` ("YouTube") picks the embed, `WatchOption.kind` picks the row's trailing label.
 
 Image `src`es are normalized to root-relative in `Image::new`. The export was a flat
 directory, so `img/poster.jpg` resolved from every page; in an SPA it doesn't — on

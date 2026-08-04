@@ -430,6 +430,64 @@ pub struct MobileFeed {
     pub items: Vec<MobileFeedItem>,
 }
 
+/// One person the visitor follows, as the profile's list draws them.
+///
+/// `subtitle` is a pre-formatted line ("Watched Interstellar • 2h ago"), not
+/// structured data: the mock prints one truncated sentence per row, and the three
+/// verbs it can be built from already live in the activity rail.
+#[derive(Debug, Clone, Serialize)]
+pub struct FollowedPerson {
+    pub id: String,
+    pub name: String,
+    pub avatar: Image,
+    pub subtitle: String,
+}
+
+/// One line in the profile's "Recent Reviews" tile.
+///
+/// Not a `Review`: these are the visitor's *own* rated films, and the blurb is
+/// the film's synopsis rather than prose they wrote — the app has no place to
+/// write a review yet, only to rate one.
+#[derive(Debug, Clone, Serialize)]
+pub struct RatedFilm {
+    pub id: String,
+    pub title: String,
+    pub rating_half_stars: u8,
+    /// One sentence of the synopsis, or `None` when the source has none.
+    pub blurb: Option<String>,
+}
+
+/// `GET /api/profile` — the whole profile screen in one request.
+///
+/// The identity fields are transcribed from the Stitch export, not invented here
+/// and not stored: there is still exactly one visitor and no notion of signing in
+/// (see `state`), so a `people` row for them would encode an account system that
+/// doesn't exist. What *is* real is everything below the header — the watchlist,
+/// the ratings and the seeded friends all come from SQLite.
+#[derive(Debug, Clone, Serialize)]
+pub struct Profile {
+    pub name: String,
+    /// "@alexm_cinema", with the sigil, since it's never used as a lookup key.
+    pub handle: String,
+    pub avatar: Image,
+    /// "Cinephile since 2018" — the export's phrasing, kept whole.
+    pub member_since: String,
+    pub bio: String,
+    /// The visitor's highest-rated films, best first. The mock's "Favorite Films"
+    /// strip: empty until they rate something, which is honest rather than a row
+    /// of borrowed posters.
+    pub favorites: Vec<Movie>,
+    /// Their watchlist, most recently added first.
+    pub watchlist: Vec<Movie>,
+    /// Their most recent ratings, newest first.
+    pub recent_reviews: Vec<RatedFilm>,
+    pub following: Vec<FollowedPerson>,
+    /// How many people they follow. Equals `following.len()` today — the mock
+    /// showed 124 beside a list of 3, and a count the list contradicts is the kind
+    /// of decoration an SPA can't afford.
+    pub following_count: u32,
+}
+
 /// Where the films in every other response came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

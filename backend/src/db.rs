@@ -102,9 +102,15 @@ pub fn prepare(conn: &Connection) -> Result<()> {
              added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
          );
 
+         -- `rated_at` orders the profile's Recent Reviews tile. Nullable rather
+         -- than NOT NULL DEFAULT CURRENT_TIMESTAMP, because SQLite ADD COLUMN only
+         -- accepts a constant default — and this column arrived after the table
+         -- did, so `migrate` has to add it to databases already on disk. Rows
+         -- written before it exist sort last; `set_rating` stamps every new one.
          CREATE TABLE IF NOT EXISTS ratings (
              movie_id   TEXT PRIMARY KEY,
-             half_stars INTEGER NOT NULL
+             half_stars INTEGER NOT NULL,
+             rated_at   TEXT
          );
 
          CREATE TABLE IF NOT EXISTS liked_reviews (
@@ -138,7 +144,31 @@ pub fn prepare(conn: &Connection) -> Result<()> {
          CREATE INDEX IF NOT EXISTS replies_by_comment ON replies(review_id, comment_id);",
     )?;
 
+    migrate(conn)?;
     seed(conn)
+}
+
+/// Bring a database created by an earlier version up to the current schema.
+///
+/// `CREATE TABLE IF NOT EXISTS` is a no-op on a table that already exists, so a
+/// column added to one of the definitions above never reaches a file already on
+/// disk. There is no migration framework here on purpose — one visitor, one file,
+/// and deleting it is a documented way to start over — but silently serving a
+/// profile that can't read its own ratings is worse than four lines of this.
+fn migrate(conn: &Connection) -> Result<()> {
+    if !has_column(conn, "ratings", "rated_at")? {
+        conn.execute_batch("ALTER TABLE ratings ADD COLUMN rated_at TEXT")?;
+    }
+    Ok(())
+}
+
+/// Whether a table already has a column. The table name is interpolated because
+/// PRAGMA takes no bind parameters; both call sites pass a literal.
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let names: Vec<String> =
+        stmt.query_map([], |row| row.get::<_, String>(1))?.collect::<Result<_>>()?;
+    Ok(names.iter().any(|name| name == column))
 }
 
 // --- Seeding ------------------------------------------------------------------
@@ -506,6 +536,71 @@ pub fn discussions(conn: &Connection) -> Result<Vec<DiscussionRow>> {
     Ok(out)
 }
 
+/// One row of the profile's "Following" list, still missing its subtitle.
+///
+/// `activity` is the id of this person's activity-rail row, when they have one.
+/// That row is what the subtitle is built from — and, like every other rail here,
+/// which film it is about is decided at request time. See the module comment.
+#[derive(Debug, Clone)]
+pub struct FollowRow {
+    pub person: PersonRow,
+    pub activity: Option<String>,
+}
+
+/// Everyone the visitor follows: the stories rail plus the friends-activity rail.
+///
+/// Those two rails *are* the app's notion of a friend — there is no follow table,
+/// because there is no second account to follow (see `state`). The live-room
+/// regulars are excluded: the export never names them, only stacks their avatars,
+/// so listing them by name would put invented copy on screen.
+pub fn following(conn: &Connection) -> Result<Vec<FollowRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT p.id AS id, p.name AS name, p.avatar_src AS avatar_src,
+                p.avatar_alt AS avatar_alt, p.unseen AS unseen,
+                a.id AS activity_id
+         FROM people p LEFT JOIN activity a ON a.person_id = p.id
+         WHERE p.in_stories = 1 OR a.id IS NOT NULL
+         ORDER BY p.position",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(FollowRow { person: person_from_row(row)?, activity: row.get("activity_id")? })
+    })?;
+    rows.collect()
+}
+
+/// The visitor's watchlist, **most recently added first** — the order the profile
+/// grid wants, and the reverse of `load_store`'s.
+///
+/// `movie_id` breaks the tie because `added_at` has one-second resolution, so two
+/// films logged in the same second would otherwise come back in an arbitrary
+/// order that flips between requests.
+pub fn watchlist_recent_first(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt =
+        conn.prepare("SELECT movie_id FROM watchlist ORDER BY added_at DESC, movie_id DESC")?;
+    let ids = stmt.query_map([], |row| row.get(0))?.collect();
+    ids
+}
+
+/// Every film the visitor rated, newest first. `rated_at` is NULL for rows
+/// written before that column existed, and NULLs sort last under DESC.
+pub fn ratings_recent_first(conn: &Connection) -> Result<Vec<(String, u8)>> {
+    let mut stmt = conn.prepare(
+        "SELECT movie_id, half_stars FROM ratings ORDER BY rated_at DESC, movie_id DESC",
+    )?;
+    let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect();
+    rows
+}
+
+/// The visitor's highest-rated films, best first, most recent of equals first.
+pub fn ratings_best_first(conn: &Connection) -> Result<Vec<(String, u8)>> {
+    let mut stmt = conn.prepare(
+        "SELECT movie_id, half_stars FROM ratings
+         ORDER BY half_stars DESC, rated_at DESC, movie_id DESC",
+    )?;
+    let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect();
+    rows
+}
+
 /// One mobile-feed card's caption, still missing its film.
 #[derive(Debug, Clone)]
 pub struct CaptionRow {
@@ -623,9 +718,13 @@ pub fn set_rating(conn: &Connection, movie_id: &str, half_stars: u8) -> Result<O
         conn.execute("DELETE FROM ratings WHERE movie_id = ?1", [movie_id])?;
         return Ok(None);
     }
+    // Re-rating a film moves it to the top of the profile's "Recent Reviews",
+    // which is what "recent" has to mean — the *rating* is the event, not the row.
     conn.execute(
-        "INSERT INTO ratings (movie_id, half_stars) VALUES (?1, ?2)
-         ON CONFLICT(movie_id) DO UPDATE SET half_stars = excluded.half_stars",
+        "INSERT INTO ratings (movie_id, half_stars, rated_at)
+         VALUES (?1, ?2, CURRENT_TIMESTAMP)
+         ON CONFLICT(movie_id) DO UPDATE
+             SET half_stars = excluded.half_stars, rated_at = excluded.rated_at",
         params![movie_id, half_stars],
     )?;
     Ok(Some(half_stars))
@@ -859,5 +958,97 @@ mod tests {
         assert!(store.liked_comments.is_empty());
         assert!(store.posted_comments.is_empty());
         assert!(store.posted_replies.is_empty());
+    }
+
+    /// The profile grid shows the newest first, which is the reverse of what
+    /// `load_store` hands `hydrate`.
+    #[test]
+    fn the_watchlist_reads_back_newest_first() {
+        let conn = db();
+        // `added_at` has one-second resolution, so three films logged in the same
+        // second tie — and the id breaks the tie deterministically rather than
+        // letting the order flip between requests.
+        for id in ["a-film", "b-film", "c-film"] {
+            set_watchlist(&conn, id, Some(true)).unwrap();
+        }
+        assert_eq!(watchlist_recent_first(&conn).unwrap(), ["c-film", "b-film", "a-film"]);
+        // `load_store`'s order is unchanged, which is what keeps `hydrate` honest.
+        let store: Vec<String> = load_store(&conn).unwrap().watchlist.into_iter().collect();
+        assert_eq!(store, ["a-film", "b-film", "c-film"]);
+    }
+
+    #[test]
+    fn ratings_sort_by_score_and_by_recency() {
+        let conn = db();
+        set_rating(&conn, "middling", 6).unwrap();
+        set_rating(&conn, "great", 10).unwrap();
+        set_rating(&conn, "good", 8).unwrap();
+
+        let best: Vec<String> =
+            ratings_best_first(&conn).unwrap().into_iter().map(|(id, _)| id).collect();
+        assert_eq!(best, ["great", "good", "middling"]);
+
+        // Same second for all three, so the id tiebreak decides — what matters is
+        // that re-rating moves a film to the front, since the rating is the event.
+        set_rating(&conn, "middling", 7).unwrap();
+        let recent = ratings_recent_first(&conn).unwrap();
+        assert_eq!(recent[0], ("middling".to_string(), 7));
+    }
+
+    /// A rating written before `rated_at` existed must still come back — it sorts
+    /// last rather than disappearing from the profile.
+    #[test]
+    fn ratings_predating_the_timestamp_column_still_load() {
+        let conn = db();
+        conn.execute("INSERT INTO ratings (movie_id, half_stars) VALUES ('legacy', 9)", [])
+            .unwrap();
+        set_rating(&conn, "current", 4).unwrap();
+
+        let recent: Vec<String> =
+            ratings_recent_first(&conn).unwrap().into_iter().map(|(id, _)| id).collect();
+        assert_eq!(recent, ["current", "legacy"], "NULL rated_at sorts last, not out");
+        assert_eq!(load_store(&conn).unwrap().ratings.get("legacy"), Some(&9));
+    }
+
+    /// `migrate` has to add the column to a file created without it, since
+    /// `CREATE TABLE IF NOT EXISTS` won't.
+    #[test]
+    fn the_ratings_timestamp_is_added_to_an_older_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE ratings (movie_id TEXT PRIMARY KEY, half_stars INTEGER NOT NULL)",
+        )
+        .unwrap();
+        assert!(!has_column(&conn, "ratings", "rated_at").unwrap());
+
+        prepare(&conn).unwrap();
+        assert!(has_column(&conn, "ratings", "rated_at").unwrap());
+        // And twice is still fine.
+        prepare(&conn).unwrap();
+        assert_eq!(set_rating(&conn, "m", 8).unwrap(), Some(8));
+    }
+
+    /// The follow list is the two rails, and deliberately not the unnamed
+    /// live-room regulars.
+    #[test]
+    fn following_covers_both_rails_but_not_the_live_rooms() {
+        let conn = db();
+        let ids: Vec<String> =
+            following(&conn).unwrap().into_iter().map(|row| row.person.id).collect();
+
+        assert!(ids.contains(&"elena".to_string()), "the stories rail is followed");
+        assert!(ids.contains(&"alex-m".to_string()), "so is the activity rail");
+        for unnamed in ["live-a", "live-b", "live-c"] {
+            assert!(!ids.contains(&unnamed.to_string()), "{unnamed} is never named on screen");
+        }
+
+        // Only the activity-rail people carry a row to build a subtitle from.
+        let with_activity: Vec<String> = following(&conn)
+            .unwrap()
+            .into_iter()
+            .filter(|row| row.activity.is_some())
+            .map(|row| row.person.id)
+            .collect();
+        assert_eq!(with_activity, ["alex-m", "sarah-k", "david-p"]);
     }
 }

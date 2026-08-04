@@ -3,7 +3,6 @@
  *
  * The export shipped these markup blocks four times with small divergences; the
  * shape kept here is the desktop feed's, parameterized by which tab is active.
- * Links marked `#` were inert in the export and stay inert.
  */
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
@@ -14,17 +13,19 @@ import { api } from '../api'
 export type Tab = 'feed' | 'movies' | 'friends' | 'profile'
 
 /**
- * `to: null` marks a tab that was inert in the export and still has no screen
- * behind it. It renders as text rather than as a `<Link to="#">`: react-router
- * resolves a bare `#` against the *current* path, so on `/movie/red-shift` the
- * Profile tab's href became `/movie/red-shift` — a link that looks live and goes
- * nowhere useful.
+ * Every tab now has a screen behind it, so every one is a real `<Link>`.
+ *
+ * Profile was the exception until `/profile` existed, and it rendered as dimmed
+ * text rather than as `<Link to="#">` — because react-router resolves a bare `#`
+ * against the *current* path, so on `/movie/red-shift` its href became
+ * `/movie/red-shift`: a link that looks live and goes somewhere wrong. Worth
+ * remembering before adding a fifth tab ahead of its screen.
  */
-const TABS: { id: Tab; label: string; icon: string; to: string | null }[] = [
+const TABS: { id: Tab; label: string; icon: string; to: string }[] = [
   { id: 'feed', label: 'Feed', icon: 'home', to: '/' },
   { id: 'movies', label: 'Movies', icon: 'movie', to: '/search' },
   { id: 'friends', label: 'Friends', icon: 'group', to: '/review' },
-  { id: 'profile', label: 'Profile', icon: 'person', to: null },
+  { id: 'profile', label: 'Profile', icon: 'person', to: '/profile' },
 ]
 
 /**
@@ -105,14 +106,7 @@ export function TopAppBar({ active }: { active: Tab }) {
               const base =
                 'font-body-md text-body-md py-2 hover:text-primary dark:hover:text-primary-fixed transition-colors cursor-pointer active:opacity-70'
 
-              return tab.to === null ? (
-                <span
-                  key={tab.id}
-                  className="font-body-md text-body-md text-outline dark:text-outline py-2 cursor-default"
-                >
-                  {tab.label}
-                </span>
-              ) : (
+              return (
                 <Link
                   key={tab.id}
                   to={tab.to}
@@ -169,14 +163,7 @@ export function BottomNavBar({ active }: { active: Tab }) {
             </>
           )
 
-          return tab.to === null ? (
-            <span
-              key={tab.id}
-              className="flex flex-col items-center justify-center text-outline px-4 py-1"
-            >
-              {body}
-            </span>
-          ) : (
+          return (
             <Link
               key={tab.id}
               to={tab.to}

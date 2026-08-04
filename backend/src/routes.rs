@@ -47,6 +47,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/movies/{id}/watchlist", post(watchlist))
         .route("/api/movies/{id}/rating", put(rate))
         .route("/api/watchlist", get(watchlist_ids))
+        .route("/api/profile", get(profile))
         .route("/api/search", get(search))
         .with_state(state)
 }
@@ -140,6 +141,12 @@ async fn search(
 /// The visitor's watchlist, most recently added last.
 async fn watchlist_ids(State(state): State<AppState>) -> Json<Vec<String>> {
     Json(state.store().watchlist.into_iter().collect())
+}
+
+/// The profile screen. No `hydrate` pass: the visitor's own rows are what this
+/// payload *is*, rather than a delta folded over borrowed content.
+async fn profile(State(state): State<AppState>) -> Json<Profile> {
+    Json(content::profile(&state.source, &state.db).await)
 }
 
 // --- Writes -------------------------------------------------------------------

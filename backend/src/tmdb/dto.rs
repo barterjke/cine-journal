@@ -219,8 +219,8 @@ pub struct ReleaseDate {
 
 /// The appended `watch/providers` block, keyed by country code.
 ///
-/// `serde_json::Map` rather than a struct: the keys are the ~130 country codes
-/// TMDB has data for, and only the one we ask about is read.
+/// A map rather than a struct with a field per country: the keys are the ~130
+/// country codes TMDB has data for, and only the one we ask about is read.
 #[derive(Debug, Default, Deserialize)]
 pub struct WatchProviders {
     #[serde(default)]

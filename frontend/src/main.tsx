@@ -6,6 +6,7 @@ import './index.css'
 import { Feed } from './pages/Feed'
 import { FeedMobile } from './pages/FeedMobile'
 import { MovieDetail } from './pages/MovieDetail'
+import { Profile } from './pages/Profile'
 import { Review } from './pages/Review'
 import { ReviewMobile } from './pages/ReviewMobile'
 import { Search } from './pages/Search'
@@ -22,6 +23,7 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/" element={<Feed />} />
         <Route path="/review" element={<Review />} />
         <Route path="/search" element={<Search />} />
+        <Route path="/profile" element={<Profile />} />
         <Route path="/movie" element={<MovieDetail />} />
         <Route path="/movie/:id" element={<MovieDetail />} />
         <Route path="/feed-mobile" element={<FeedMobile />} />

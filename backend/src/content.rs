@@ -15,6 +15,9 @@
 use std::sync::{Arc, Mutex};
 
 use crate::db;
+use crate::hydrate::{
+    visitor_avatar, VISITOR_BIO, VISITOR_HANDLE, VISITOR_NAME, VISITOR_SINCE,
+};
 use crate::models::*;
 use crate::tmdb::{self, map, DiscoverFilters, Tmdb};
 use crate::{data, hydrate};
@@ -36,6 +39,13 @@ const PAGE_SIZE: usize = 8;
 /// How many trending films the curated rails draw from. Four live cards, four
 /// recent entries, three activity rows and four mobile cards, all disjoint.
 const TRENDING_NEEDED: usize = 8;
+
+/// How many films each profile strip resolves. The mock drew four favourites, three
+/// watchlist thumbnails and one review; the watchlist *grid* below shows more, and
+/// six fills its two rows of three at every breakpoint the design has.
+const FAVORITES_SHOWN: usize = 4;
+const WATCHLIST_SHOWN: usize = 6;
+const REVIEWS_SHOWN: usize = 3;
 
 /// Where the films come from.
 ///
@@ -243,6 +253,143 @@ pub async fn mobile_feed(source: &Source, db: &Db) -> MobileFeed {
         .collect();
 
     MobileFeed { stories, items }
+}
+
+/// The profile screen.
+///
+/// Unlike every other function here there is no `data::` counterpart to fall back
+/// to, and that is the point: the whole screen below the header is the visitor's
+/// own rows out of SQLite, which exist in both modes. Only the film *titles and
+/// posters* behind their stored ids need a source, and each is resolved
+/// independently — a film TMDB has forgotten drops out of the grid rather than
+/// blanking it.
+pub async fn profile(source: &Source, db: &Db) -> Profile {
+    // One lock, one scope, no `.await` inside it.
+    let (follows, watchlist_ids, best, recent) = {
+        let conn = lock(db);
+        (
+            db::following(&conn).unwrap_or_default(),
+            db::watchlist_recent_first(&conn).unwrap_or_default(),
+            db::ratings_best_first(&conn).unwrap_or_default(),
+            db::ratings_recent_first(&conn).unwrap_or_default(),
+        )
+    };
+
+    // A friend's subtitle names whichever film the *feed* credited them with, by
+    // asking the feed rather than re-deriving the pairing: it differs by mode (the
+    // demo dataset ships its own fixed pairing, TMDB mode pairs row *i* with
+    // trending film *i* offset past the live rooms), and two copies of that rule
+    // would drift — they already did, crediting one friend with the wrong film.
+    let activity = feed(source, db).await.friend_activity;
+
+    let following: Vec<FollowedPerson> = follows
+        .iter()
+        .map(|row| FollowedPerson {
+            id: row.person.id.clone(),
+            name: row.person.name.clone(),
+            avatar: row.person.avatar.clone(),
+            subtitle: follow_subtitle(row, &activity),
+        })
+        .collect();
+
+    Profile {
+        name: VISITOR_NAME.into(),
+        handle: VISITOR_HANDLE.into(),
+        avatar: visitor_avatar(),
+        member_since: VISITOR_SINCE.into(),
+        bio: VISITOR_BIO.into(),
+        favorites: movies_for(source, best.iter().map(|(id, _)| id.as_str()), FAVORITES_SHOWN).await,
+        watchlist: movies_for(source, watchlist_ids.iter().map(String::as_str), WATCHLIST_SHOWN)
+            .await,
+        recent_reviews: rated_films(source, &recent).await,
+        following_count: following.len() as u32,
+        following,
+    }
+}
+
+/// "Watched Interstellar • 2h ago" for a friend on the activity rail, or a plain
+/// note for the stories-rail ones, who have no activity row to describe.
+///
+/// Built here rather than stored: the film it names is whatever the rail paired
+/// them with *this request*, so a stored sentence would go stale the moment the
+/// trending list moved.
+fn follow_subtitle(row: &db::FollowRow, activity: &[FriendActivity]) -> String {
+    const STORIES: &str = "On your stories rail";
+
+    let Some(id) = row.activity.as_deref() else {
+        return STORIES.into();
+    };
+    let Some(entry) = activity.iter().find(|a| a.id == id) else {
+        return STORIES.into();
+    };
+
+    let verb = match entry.kind {
+        ActivityKind::Watched => "Watched",
+        ActivityKind::AddedToWatchlist => "Added",
+    };
+    format!("{verb} {} • {}", entry.movie_title, entry.timestamp)
+}
+
+/// Resolve stored film ids to titles and posters, dropping the ones that no longer
+/// resolve and stopping once `wanted` have been found.
+///
+/// Sequential rather than concurrent: `wanted` is single digits, every detail call
+/// is cached for 24h, and the ids arrive in an order the screen renders in.
+async fn movies_for<'a>(
+    source: &Source,
+    ids: impl Iterator<Item = &'a str>,
+    wanted: usize,
+) -> Vec<Movie> {
+    let mut out = Vec::new();
+    for id in ids {
+        if out.len() == wanted {
+            break;
+        }
+        if let Some(detail) = movie_detail_by_id(source, id).await {
+            out.push(Movie {
+                id: detail.id,
+                title: detail.title,
+                year: Some(detail.year),
+                poster: detail.poster,
+            });
+        }
+    }
+    out
+}
+
+/// The visitor's most recent ratings, as the "Recent Reviews" tile draws them.
+async fn rated_films(source: &Source, ratings: &[(String, u8)]) -> Vec<RatedFilm> {
+    let mut out = Vec::new();
+    for (id, half_stars) in ratings {
+        if out.len() == REVIEWS_SHOWN {
+            break;
+        }
+        if let Some(detail) = movie_detail_by_id(source, id).await {
+            out.push(RatedFilm {
+                id: detail.id,
+                title: detail.title,
+                rating_half_stars: *half_stars,
+                blurb: first_sentence(&detail.synopsis),
+            });
+        }
+    }
+    out
+}
+
+/// The synopsis' opening sentence, for the one-line blurb under a rated film.
+///
+/// Truncating mid-word and appending an ellipsis is what the mock printed ("A
+/// mesmerizing descent into paranoia..."), but a real synopsis has a sentence
+/// break to cut at, and cutting there reads as prose rather than as clipped text.
+fn first_sentence(synopsis: &str) -> Option<String> {
+    let trimmed = synopsis.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    match trimmed.find(". ") {
+        Some(end) => Some(trimmed[..=end].trim_end().to_string()),
+        None => Some(trimmed.to_string()),
+    }
 }
 
 /// The reviews both review screens read, newest film first.
@@ -713,6 +860,60 @@ mod tests {
         // The demo's "every id resolves" behaviour, which TMDB mode replaces with
         // a real 404.
         assert!(movie_detail_by_id(&source, "anything-at-all").await.is_some());
+    }
+
+    /// The profile has no `data::` fallback because it needs none — every strip
+    /// below the header is the visitor's own rows, which exist in both modes.
+    #[tokio::test]
+    async fn the_profile_reflects_the_visitors_own_rows() {
+        let source = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+
+        // An untouched visitor: a header, friends, and three empty strips. Empty
+        // rather than borrowed posters — see `Profile::favorites`.
+        let empty = profile(&source, &db).await;
+        assert_eq!(empty.name, "Alex Mercer");
+        assert_eq!(empty.handle, "@alexm_cinema");
+        assert!(empty.favorites.is_empty());
+        assert!(empty.watchlist.is_empty());
+        assert!(empty.recent_reviews.is_empty());
+
+        // The count and the list can't disagree, whatever the mock drew.
+        assert_eq!(empty.following_count as usize, empty.following.len());
+        assert!(!empty.following.is_empty());
+        assert!(empty.following.iter().all(|f| !f.subtitle.is_empty()));
+
+        {
+            let conn = lock(&db);
+            db::set_watchlist(&conn, "le-souffle", Some(true)).unwrap();
+            db::set_watchlist(&conn, "red-shift", Some(true)).unwrap();
+            db::set_rating(&conn, "neon-reverie", 9).unwrap();
+            db::set_rating(&conn, "the-drop", 5).unwrap();
+        }
+
+        let filled = profile(&source, &db).await;
+        // Newest first, and both resolved to a real title and poster.
+        assert_eq!(
+            filled.watchlist.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["red-shift", "le-souffle"]
+        );
+        assert_eq!(filled.watchlist[0].title, "Red Shift");
+
+        // Favourites are the best-rated, not the most recent.
+        assert_eq!(filled.favorites[0].id, "neon-reverie");
+        assert_eq!(filled.recent_reviews.len(), 2);
+        assert!(filled.recent_reviews.iter().any(|r| r.rating_half_stars == 9));
+        assert!(filled.recent_reviews[0].blurb.is_some());
+    }
+
+    #[test]
+    fn a_blurb_stops_at_the_first_sentence() {
+        assert_eq!(first_sentence("One thing. Then another."), Some("One thing.".into()));
+        // No sentence break to cut at: the whole line, rather than a truncation.
+        assert_eq!(first_sentence("A single clause"), Some("A single clause".into()));
+        assert_eq!(first_sentence("   "), None);
+        // A decimal or an initial isn't a sentence end — `". "` needs the space.
+        assert_eq!(first_sentence("Rated 7.8 by critics"), Some("Rated 7.8 by critics".into()));
     }
 
     #[test]
