@@ -29,14 +29,32 @@ impl Image {
     /// dev server answers with `index.html` and the tile renders as broken alt
     /// text. Normalizing here keeps the fix in one place instead of in ~60 call
     /// sites — and keeps them verbatim transcriptions.
+    ///
+    /// Anything already absolute is passed through untouched: a TMDB CDN URL, and
+    /// the `data:` URI behind `tmdb::map::initials_avatar` — which has no `//`, so
+    /// the test for one is a scheme rather than an authority.
     pub fn new(src: &str, alt: &str) -> Self {
-        let src = if src.starts_with('/') || src.contains("://") {
+        let src = if src.starts_with('/') || has_scheme(src) {
             src.to_string()
         } else {
             format!("/{src}")
         };
         Self { src, alt: alt.to_string() }
     }
+}
+
+/// Whether `src` starts with a URI scheme (`https:`, `data:`) rather than a path.
+///
+/// A bare `img/poster.jpg` has no colon; a Windows-style path can't reach here. The
+/// scheme grammar is `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`, so a leading
+/// digit or a colon in a filename doesn't qualify.
+fn has_scheme(src: &str) -> bool {
+    let Some((scheme, _)) = src.split_once(':') else {
+        return false;
+    };
+    let mut chars = scheme.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
 }
 
 /// A film. `year` is optional only because the mobile feed omits it.
@@ -76,7 +94,7 @@ pub struct FeedEntry {
 /// Serializes to a bare string ("watched" / "added_to_watchlist") — these are
 /// unit variants, so no `tag`/`content` attributes: those would nest the value
 /// in an object and the frontend compares against a plain string.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityKind {
     /// "watched <movie>"
@@ -182,71 +200,89 @@ pub struct CastMember {
     pub portrait: Image,
 }
 
-/// Where a still sits in the export's asymmetric bento grid.
-///
-/// Deliberately semantic rather than a Tailwind class string: Tailwind's JIT only
-/// emits CSS for classes it finds literally in the source it scans, so class
-/// names arriving over the wire generate nothing and every tile collapses to the
-/// default 1×1. The frontend owns the class vocabulary and maps these variants
-/// onto it.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StillShape {
-    /// Full-bleed 16:9 across two columns at every breakpoint.
-    Hero,
-    /// Sits beside the hero: full width on mobile, one column and free height on
-    /// desktop.
-    Companion,
-    /// One column; square on mobile, 16:9 on desktop.
-    Compact,
-    /// One column on mobile, widening to two on desktop.
-    Panorama,
-}
-
-/// A gallery still. The export's grid is deliberately asymmetric, so each still
-/// carries its own shape rather than the grid deriving one by index.
-#[derive(Debug, Clone, Serialize)]
-pub struct GalleryStill {
-    pub id: String,
-    pub image: Image,
-    pub shape: StillShape,
-}
-
-/// One label/value row in the detail screen's Details sidebar.
+/// One label/value row in the detail screen's credits grid.
 #[derive(Debug, Clone, Serialize)]
 pub struct DetailFact {
     pub label: String,
     pub value: String,
 }
 
+/// A trailer or clip, as the detail screen's Media block plays it.
+///
+/// Carries the video's `key` and `site` rather than a finished embed URL: the
+/// frontend builds both the thumbnail and the `<iframe>` src from them, and which
+/// of those it needs is a rendering decision. `site` is checked there too, since
+/// only YouTube is embeddable.
+#[derive(Debug, Clone, Serialize)]
+pub struct Trailer {
+    /// The video's own title ("Official Trailer", "Trailer 4").
+    pub name: String,
+    /// Site-scoped id — on YouTube, what follows `watch?v=`.
+    pub key: String,
+    /// "YouTube" or "Vimeo".
+    pub site: String,
+    /// The still the play button sits over. TMDB serves no per-video thumbnail,
+    /// so this is the film's own backdrop.
+    pub thumbnail: Image,
+}
+
+/// One row in "Where to Watch".
+///
+/// A provider, not a link: TMDB's attribution terms allow linking only to their
+/// own watch page, and they publish no per-provider deep link. `MovieDetail`
+/// carries that one URL for all of these.
+#[derive(Debug, Clone, Serialize)]
+pub struct WatchOption {
+    pub provider: String,
+    /// How the film is available: "Stream", "Rent", "Buy", "Free".
+    pub kind: String,
+    /// The service's logo. `None` for a provider TMDB has no artwork for, which
+    /// the frontend draws as a generic glyph.
+    pub logo: Option<Image>,
+}
+
 /// The movie detail screen. Distinct from `Review` — this is the film's own
-/// page (hero, synopsis, cast, gallery) rather than someone's write-up of it.
+/// page (poster, credits, score, media, cast) rather than someone's write-up.
 #[derive(Debug, Clone, Serialize)]
 pub struct MovieDetail {
     pub id: String,
     pub title: String,
     pub year: u16,
-    pub director: String,
+    /// Age rating for one country ("PG-13", "R"). `None` where TMDB has none, and
+    /// the metadata line then omits the segment rather than printing "NR".
+    pub certification: Option<String>,
     /// Verbatim runtime string ("1h 58m") — never parsed, only displayed.
     pub runtime: String,
     pub genres: Vec<String>,
     pub poster: Image,
+    /// A still from the film. Not a hero image any more — it backs the Media
+    /// block's play tile, since TMDB serves no per-video thumbnail.
     pub backdrop: Image,
     pub synopsis: String,
-    pub cast: Vec<CastMember>,
-    /// Rendered as "12 Stills" beside the Gallery heading; may exceed
-    /// `gallery.len()`, as it does in the export (12 claimed, 4 shown).
-    pub still_count: u32,
-    pub gallery: Vec<GalleryStill>,
+    /// The crowd average on a 0–10 scale, shown as the big number. Deliberately
+    /// *not* half-stars: the design prints "7.8 / 10", and rounding it to the
+    /// nearest half-star first would make it read 8.0.
+    pub score: f32,
+    /// How many votes that average is over. 0 hides the line — "based on 0
+    /// ratings" beside a score is worse than no attribution at all.
+    pub vote_count: u32,
+    /// The credits grid: Director, Writers, Cinematography, Music, Production.
+    /// A fact the source doesn't have is omitted, so the grid draws fewer rows
+    /// rather than "Unknown".
     pub details: Vec<DetailFact>,
-    /// 0..=100. The export shows 0% / "Not Started".
-    pub watch_progress_percent: u8,
-    /// Verbatim progress label ("Not Started").
-    pub watch_progress_label: String,
+    /// The trailer the Media block plays, if there is one.
+    pub trailer: Option<Trailer>,
+    /// "Where to Watch" rows. Empty is normal — most films aren't streaming
+    /// anywhere in a given country, and the section hides itself.
+    pub watch_options: Vec<WatchOption>,
+    /// Where the "Where to Watch" rows link. One URL for all of them; see
+    /// `WatchOption`.
+    pub watch_link: Option<String>,
+    pub cast: Vec<CastMember>,
     /// Whether this film is on the visitor's watchlist. From `state`.
     pub on_watchlist: bool,
     /// The visitor's own rating in half-stars, or `None` if they haven't rated
-    /// it. Distinct from any crowd average. From `state`.
+    /// it. Distinct from `score`, which is the crowd's. From `state`.
     pub your_rating_half_stars: Option<u8>,
 }
 
@@ -394,6 +430,33 @@ pub struct MobileFeed {
     pub items: Vec<MobileFeedItem>,
 }
 
+/// Where the films in every other response came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DataSource {
+    /// Live from TMDB.
+    Tmdb,
+    /// The invented dataset transcribed from the Stitch export — no token, or
+    /// TMDB is unreachable. The frontend renders a banner saying so.
+    Demo,
+}
+
+/// `GET /api/status`. What the frontend needs to decide whether to warn the user
+/// that the films on screen are made up.
+///
+/// A separate endpoint rather than a field on all six payload types: it's one
+/// fact about the server, not about a screen, and the banner is rendered once by
+/// shared chrome. One extra request per page load, cheap and cacheable.
+#[derive(Debug, Clone, Serialize)]
+pub struct Status {
+    pub data_source: DataSource,
+    /// Why the data is fake, and what to do about it. `None` in TMDB mode, which
+    /// is what tells the frontend to render nothing.
+    pub message: Option<String>,
+    /// Where to get a token. Always sent, so the copy lives in one place.
+    pub docs_url: &'static str,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,5 +467,25 @@ mod tests {
         assert_eq!(Image::new("img/poster-red-shift.jpg", "").src, "/img/poster-red-shift.jpg");
         assert_eq!(Image::new("/img/already-absolute.jpg", "").src, "/img/already-absolute.jpg");
         assert_eq!(Image::new("https://cdn/x.jpg", "").src, "https://cdn/x.jpg");
+        // TMDB's real CDN form, which must survive untouched.
+        assert_eq!(
+            Image::new("https://image.tmdb.org/t/p/w500/abc.jpg", "").src,
+            "https://image.tmdb.org/t/p/w500/abc.jpg"
+        );
+    }
+
+    /// A `data:` URI has a scheme but no `//`, so the passthrough test can't look
+    /// for an authority — see `has_scheme`.
+    #[test]
+    fn data_uris_are_not_treated_as_paths() {
+        let svg = "data:image/svg+xml;charset=utf-8,<svg/>";
+        assert_eq!(Image::new(svg, "").src, svg);
+
+        assert!(has_scheme("https://cdn/x.jpg"));
+        assert!(has_scheme("data:image/png;base64,AAAA"));
+        assert!(!has_scheme("img/poster.jpg"));
+        // A colon in a filename is not a scheme.
+        assert!(!has_scheme("img/2001: a space odyssey.jpg"));
+        assert!(!has_scheme(":leading-colon"));
     }
 }

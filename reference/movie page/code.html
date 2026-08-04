@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+
+<html class="scroll-smooth" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>The Life of Chuck (2024) - CinéJournal</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:ital,wght@0,100..900;1,100..900&amp;family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-tertiary-container": "#ffe1d9",
+                        "inverse-on-surface": "#f3f0ef",
+                        "on-secondary": "#ffffff",
+                        "on-surface": "#1c1b1b",
+                        "tertiary-container": "#c13301",
+                        "primary": "#0041c8",
+                        "surface-container": "#f0eded",
+                        "surface-bright": "#fcf9f8",
+                        "secondary-fixed": "#ffdad5",
+                        "surface-container-highest": "#e5e2e1",
+                        "inverse-primary": "#b6c4ff",
+                        "on-primary-fixed": "#001551",
+                        "error": "#ba1a1a",
+                        "on-secondary-fixed": "#410001",
+                        "outline": "#737688",
+                        "tertiary-fixed": "#ffdbd1",
+                        "secondary-fixed-dim": "#ffb4aa",
+                        "on-tertiary": "#ffffff",
+                        "inverse-surface": "#313030",
+                        "background": "#fcf9f8",
+                        "secondary": "#bc000a",
+                        "outline-variant": "#c3c5d9",
+                        "tertiary-fixed-dim": "#ffb5a0",
+                        "on-error": "#ffffff",
+                        "on-tertiary-fixed-variant": "#872100",
+                        "primary-container": "#0055ff",
+                        "primary-fixed": "#dce1ff",
+                        "on-error-container": "#93000a",
+                        "secondary-container": "#e2241f",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-tint": "#004dea",
+                        "on-primary-fixed-variant": "#0039b3",
+                        "on-primary": "#ffffff",
+                        "on-tertiary-fixed": "#3b0900",
+                        "on-surface-variant": "#434656",
+                        "surface-container-low": "#f6f3f2",
+                        "on-secondary-fixed-variant": "#930005",
+                        "on-background": "#1c1b1b",
+                        "surface": "#fcf9f8",
+                        "surface-variant": "#e5e2e1",
+                        "on-primary-container": "#e3e6ff",
+                        "error-container": "#ffdad6",
+                        "primary-fixed-dim": "#b6c4ff",
+                        "surface-dim": "#dcd9d9",
+                        "surface-container-high": "#eae7e7",
+                        "tertiary": "#972500",
+                        "on-secondary-container": "#fffbff"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "md": "16px",
+                        "margin-mobile": "16px",
+                        "margin-desktop": "64px",
+                        "xxl": "80px",
+                        "sm": "8px",
+                        "gutter": "24px",
+                        "xl": "48px",
+                        "xs": "4px",
+                        "unit": "4px",
+                        "lg": "24px"
+                    },
+                    "fontFamily": {
+                        "label-sm": ["JetBrains Mono"],
+                        "display-lg": ["Hanken Grotesk"],
+                        "headline-md": ["Hanken Grotesk"],
+                        "body-lg": ["Hanken Grotesk"],
+                        "body-md": ["Hanken Grotesk"],
+                        "headline-lg": ["Hanken Grotesk"],
+                        "headline-lg-mobile": ["Hanken Grotesk"]
+                    },
+                    "fontSize": {
+                        "label-sm": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "500" }],
+                        "display-lg": ["48px", { "lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "headline-md": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "body-lg": ["18px", { "lineHeight": "28px", "fontWeight": "400" }],
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "headline-lg-mobile": ["24px", { "lineHeight": "32px", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .poster-shadow {
+            box-shadow: 0px 4px 20px rgba(0, 0, 0, 0.04);
+        }
+        .inner-stroke {
+            box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface font-body-md antialiased min-h-screen pb-xxl">
+<!-- TopAppBar Navigation -->
+<header class="w-full top-0 sticky z-50 bg-surface border-b border-surface-variant flex justify-between items-center px-margin-mobile md:px-margin-desktop py-md w-full max-w-7xl mx-auto">
+<div class="flex items-center gap-lg">
+<span class="font-headline-md text-headline-md font-bold text-primary">CinéJournal</span>
+<!-- Desktop Nav Links -->
+<nav class="hidden md:flex gap-md ml-xl">
+<a class="text-on-surface-variant hover:text-primary transition-colors cursor-pointer active:opacity-70 font-body-md text-body-md py-sm" href="#">Feed</a>
+<a class="text-primary font-bold border-b-2 border-primary hover:text-primary transition-colors cursor-pointer active:opacity-70 font-body-md text-body-md py-sm" href="#">Movies</a>
+<a class="text-on-surface-variant hover:text-primary transition-colors cursor-pointer active:opacity-70 font-body-md text-body-md py-sm" href="#">Friends</a>
+<a class="text-on-surface-variant hover:text-primary transition-colors cursor-pointer active:opacity-70 font-body-md text-body-md py-sm" href="#">Profile</a>
+</nav>
+</div>
+<div class="flex items-center gap-md">
+<button class="text-on-surface-variant hover:text-primary transition-colors cursor-pointer active:opacity-70 p-sm rounded-full hover:bg-surface-container-highest">
+<span class="material-symbols-outlined">search</span>
+</button>
+<button class="text-on-surface-variant hover:text-primary transition-colors cursor-pointer active:opacity-70 p-sm rounded-full hover:bg-surface-container-highest">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="text-on-surface-variant hover:text-primary transition-colors cursor-pointer active:opacity-70 p-sm rounded-full hover:bg-surface-container-highest">
+<span class="material-symbols-outlined">cast</span>
+</button>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="max-w-7xl mx-auto px-margin-mobile md:px-margin-desktop pt-xl">
+<!-- Hero Section: Poster & Key Details -->
+<div class="grid grid-cols-1 md:grid-cols-[1fr_2fr] lg:grid-cols-[300px_1fr_250px] gap-gutter md:gap-xl items-start">
+<!-- Left Column: Poster -->
+<div class="flex flex-col gap-md">
+<img alt="Movie Poster placeholder" class="w-full h-auto rounded-lg poster-shadow inner-stroke object-cover aspect-[2/3]" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCXDM0eNexRiGY9tlFxJ1OLfJtttdq0vjrhyM1DO82sN2H5A4ZCCjxZ_fz66d5nRF37R87kdkRnYiWqvrU99NHLznajKZhFyXs-Iujbb-AYIs8JnHPIYg2dVSvtJOyuMgFsVH8WfkfqTbWkVVXz6E2n6g9UEDXwxWVRtQd9RYDU8sbQ4hK9K7wPq7QsVkt4th_KXwve9WWj77edTfV6xZ3X7ZMwp__z1X2QFxfb6DWSPdjyWAkli5cbKOpYCz3kZA"/>
+<!-- Trailer Snippet (Mobile/Tablet visible, Desktop moved below) -->
+<div class="lg:hidden flex flex-col gap-sm">
+<div class="bg-cover bg-center w-full aspect-video rounded-lg inner-stroke relative group cursor-pointer overflow-hidden" data-alt="A stylized, cinematic still from a dramatic scene featuring a man with glasses looking intently, lit by warm neon light against a dark background, in the style of high-end editorial film photography, highly detailed, soft focus background, vivid colors." style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuBnhnXVgR2faqAqBYk-A2z77aMUta5UhacNf6qxHReHtjREzAoCybxEP19TNgvF1IqcRDi89IUx0dh3L6Aq3Bo6dlIfw5Stp37rS9DmaLt3g7feCMzgug43ebzzYu8lChA7ngvOO3-u33m5P-GFG10Ore0PW7oBW2c9WVLx8kgn74MStB1SNG4QR6C0jQfXGEqIEOz14UY7G4U0mYvIs3cDLh1UelicX-WMEoxY3eMsf24Alhlj')">
+<div class="absolute inset-0 bg-black/20 group-hover:bg-black/10 transition-colors flex items-center justify-center">
+<span class="material-symbols-outlined text-white text-[48px]" style="font-variation-settings: 'FILL' 1;">play_circle</span>
+</div>
+<span class="absolute bottom-xs right-xs bg-black/70 text-white font-label-sm text-label-sm px-2 py-1 rounded">2 min</span>
+</div>
+<span class="font-headline-md text-headline-md text-sm font-semibold">Official Trailer</span>
+</div>
+</div>
+<!-- Middle Column: Main Details -->
+<div class="flex flex-col gap-lg">
+<div>
+<h1 class="font-display-lg text-display-lg md:text-headline-lg-mobile lg:text-display-lg text-on-surface mb-xs">The Life of Chuck <span class="text-on-surface-variant font-normal">(2024)</span></h1>
+<p class="font-body-lg text-body-lg text-on-surface-variant">R • Drama, Sci-Fi • 1h 50m</p>
+</div>
+<div class="text-body-md font-body-md text-on-surface max-w-3xl leading-relaxed">
+                    Based on the novella by Stephen King, three distinct stories tell the life of Charles Krantz in reverse, beginning with his death from a brain tumor at 39 and ending with his childhood in a supposedly haunted house.
+                </div>
+<!-- Actions -->
+<div class="flex flex-wrap gap-md items-center pt-sm pb-md border-b border-surface-variant">
+<button class="bg-primary text-on-primary font-label-sm text-label-sm px-6 py-3 rounded-full flex items-center gap-xs hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">add</span>
+                        Watchlist
+                    </button>
+<button class="bg-surface border border-outline-variant text-on-surface font-label-sm text-label-sm px-6 py-3 rounded-full flex items-center gap-xs hover:bg-surface-container-low transition-colors">
+<span class="material-symbols-outlined">star</span>
+                        Rate
+                    </button>
+<button class="bg-surface-container-low text-on-surface p-3 rounded-full hover:bg-surface-container-high transition-colors">
+<span class="material-symbols-outlined">more_horiz</span>
+</button>
+</div>
+<!-- Technical Details Grid -->
+<div class="grid grid-cols-[100px_1fr] sm:grid-cols-[120px_1fr] gap-y-sm gap-x-md text-body-md font-body-md">
+<span class="text-on-surface-variant">Director</span>
+<span class="font-medium">Mike Flanagan</span>
+<span class="text-on-surface-variant">Writers</span>
+<span class="font-medium">Mike Flanagan, Stephen King (Novella)</span>
+<span class="text-on-surface-variant">Cinematography</span>
+<span class="font-medium">Eben Bolter</span>
+<span class="text-on-surface-variant">Music</span>
+<span class="font-medium">The Newton Brothers</span>
+<span class="text-on-surface-variant">Production</span>
+<span class="font-medium">Intrepid Pictures, QWGmire</span>
+</div>
+<!-- Trailer Snippet (Desktop) -->
+<div class="hidden lg:flex flex-col gap-sm mt-md w-2/3">
+<h3 class="font-headline-md text-headline-md text-base mb-xs">Media</h3>
+<div class="bg-cover bg-center w-full aspect-video rounded-lg inner-stroke relative group cursor-pointer overflow-hidden" data-alt="A cinematic still showing a man with glasses in a warmly lit, slightly abstract setting, rich deep reds and oranges in the background, contrasting with cool shadows, editorial film style photography, high resolution." style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuDSM3KyUC1AoQJPwcuH1EeI1zrjm6GcG9Lfnvl72B8ywT5kVhZCZs95FtvDQXnW3FWXxwzCHJc8u0ZwtD3iJXiQLekP80PwNgE6CE_zFhWe2d15KmcQT7SANJxls_BTrEzqERuaTWLTouWI-RqQfprcUOS18XoG7QE5I6o-JSCyDFjbOvIE094vUIKmV-zQmIHnJHdYCwZ7L9-ILaA_BmW5CfVj3l2ftm6ogpAUPZToxGwHuBFd')">
+<div class="absolute inset-0 bg-black/20 group-hover:bg-black/10 transition-colors flex items-center justify-center">
+<span class="material-symbols-outlined text-white text-[48px]" style="font-variation-settings: 'FILL' 1;">play_circle</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Right Column: Ratings & Social -->
+<div class="flex flex-col gap-xl">
+<!-- Aggregate Rating -->
+<div class="flex flex-col gap-xs">
+<div class="flex items-end gap-sm">
+<span class="font-display-lg text-display-lg text-[#2E7D32]">7.8</span>
+<span class="text-body-md font-body-md text-on-surface-variant pb-2">/ 10</span>
+</div>
+<p class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">CinéJournal Score</p>
+<p class="text-body-md font-body-md text-on-surface-variant mt-xs">Based on 12,450 reviews</p>
+</div>
+<!-- Where to Watch -->
+<div class="flex flex-col gap-sm">
+<h3 class="font-headline-md text-headline-md text-base border-b border-surface-variant pb-xs mb-xs">Where to Watch</h3>
+<a class="flex items-center justify-between p-sm hover:bg-surface-container-low rounded-lg transition-colors group" href="#">
+<div class="flex items-center gap-sm">
+<div class="w-8 h-8 bg-surface-container-highest rounded flex items-center justify-center">
+<span class="material-symbols-outlined text-on-surface-variant text-sm">theaters</span>
+</div>
+<span class="font-body-md text-body-md text-on-surface group-hover:text-primary transition-colors">In Theaters</span>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant text-sm">arrow_forward</span>
+</a>
+</div>
+<!-- Friend Reviews Snippet -->
+<div class="flex flex-col gap-sm bg-surface-container-lowest p-md rounded-xl inner-stroke">
+<h3 class="font-headline-md text-headline-md text-base flex justify-between items-center">
+                        Friends' Activity
+                        <span class="material-symbols-outlined text-on-surface-variant text-sm">arrow_forward</span>
+</h3>
+<div class="flex flex-col gap-md mt-sm">
+<div class="flex gap-sm items-start">
+<img class="w-8 h-8 rounded-full object-cover" data-alt="A small, circular avatar portrait of a young woman with curly hair, smiling subtly, warm natural lighting, minimalist background." src="https://lh3.googleusercontent.com/aida-public/AB6AXuC0uSlExA6JD2Nprkf0YIQ_13weN65rWqfNrrdI0SWvwlorSUrNYsY0hvJucBVvw9kI6WD25fmfaqyIbCNIeOKkT3oSai56Ew79P8WJiHWjbm5ClNWgSuw7JA1maOnxR4TKvRBfsYOayJaf_8kivMaq6zybLSc6Iwv3aylULRm7uqodA1nsU36cQrbWtRvXvOQCn6TVnFutPmhLpHvttG5zqnqqivrmrdeug0Yh1-K0YDHQpm5z"/>
+<div class="flex flex-col">
+<div class="flex items-center gap-xs">
+<span class="font-label-sm text-label-sm font-bold">Sarah J.</span>
+<span class="text-outline text-xs">watched</span>
+</div>
+<div class="flex text-primary mt-1">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">star</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Spacer -->
+<div class="h-xl"></div>
+<hr class="border-t border-surface-variant max-w-7xl mx-auto"/>
+<div class="h-xl"></div>
+<!-- Top Cast Section -->
+<section class="max-w-7xl mx-auto">
+<div class="flex justify-between items-end mb-lg px-xs">
+<h2 class="font-headline-lg text-headline-lg text-on-surface">Top Cast</h2>
+<a class="font-label-sm text-label-sm text-primary uppercase tracking-wider hover:underline" href="#">Full Cast &amp; Crew</a>
+</div>
+<div class="flex overflow-x-auto gap-md pb-md snap-x hide-scrollbar px-xs">
+<!-- Cast 1 -->
+<div class="flex flex-col items-center gap-sm min-w-[100px] snap-start">
+<img class="w-20 h-20 rounded-full object-cover inner-stroke" data-alt="A professional headshot portrait of actor Tom Hiddleston, neutral expression, subtle studio lighting, soft gray background, high quality photography." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCdBN0y8c_uL91lTvbGE9jpNsCMctDz9Txj219QoYtn7UJkyVz6kRar5_j5wfa-LOccY8hNiOUW-OENHKXN9xpx6efy5Ng4gDhjqezDRHfP2grpVyyqvxLCoH-Bz5M8mqKlJzkO07CUMl9829NVGZY4YnIdMPobLSavYlGPsOWCc3DjZF4M656iKJjXMx3MOHzZToQAkT2sgzXYkZxpDrDEttdq7zglCkfu54BATx-O3Uiw4XSj"/>
+<div class="text-center">
+<p class="font-body-md text-body-md font-medium text-on-surface leading-tight">Tom Hiddleston</p>
+<p class="font-label-sm text-label-sm text-on-surface-variant mt-1">Charles Krantz</p>
+</div>
+</div>
+<!-- Cast 2 -->
+<div class="flex flex-col items-center gap-sm min-w-[100px] snap-start">
+<img class="w-20 h-20 rounded-full object-cover inner-stroke" data-alt="A professional headshot portrait of actor Mark Hamill, gentle smile, warm studio lighting, minimalist light background, high quality photography." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDTtHhc2hCc-pcUNWjXZyYOeM7ibV0jdf5bV9VcvB2OvKscya6mmLsMk_ZRcZ0NisUwd3O7I30nZGGuJYmR7Vqxa-6cPiWFtAET9JcF_CotCKSim82_AybO9ga7GF2QTWdUmy1l_LK_YlDQXBTPN14laGdYsSiIevRAUDunkRF9C0hgUrxjwl4ei3yqxzd3H2pD-GGGGX5w3y_5JzMVbEov_S80PZ7GYLjHqoVGSJnrz1mV_AU4"/>
+<div class="text-center">
+<p class="font-body-md text-body-md font-medium text-on-surface leading-tight">Mark Hamill</p>
+<p class="font-label-sm text-label-sm text-on-surface-variant mt-1">Albie</p>
+</div>
+</div>
+<!-- Cast 3 -->
+<div class="flex flex-col items-center gap-sm min-w-[100px] snap-start">
+<img class="w-20 h-20 rounded-full object-cover inner-stroke" data-alt="A professional headshot portrait of actor Karen Gillan, thoughtful expression, cinematic lighting, soft background, high quality editorial photography." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBazFlOXq375xMPZVSibF9P-BDyFSoQnpjvci6PRciV7oPKASUU7uyqksedPMhbsoP1FlE4cRO9aWQzJW1DCkAFQzKrMHwHz7wVVRaosQ2u7uixCb-5caKwYTkEN2NHgKroTp1GBeE-LM7xbbRiRAxrIJP4e_VDdAI5zI7yaLU-x_ijmjFt_KmwV03Tqjvdt2p0KQgWm_cov3XzaIr8aG7fwZLC8wAx1gLPgDnmkA6yL80dtA2P"/>
+<div class="text-center">
+<p class="font-body-md text-body-md font-medium text-on-surface leading-tight">Karen Gillan</p>
+<p class="font-label-sm text-label-sm text-on-surface-variant mt-1">Joanne Krantz</p>
+</div>
+</div>
+<!-- Cast 4 -->
+<div class="flex flex-col items-center gap-sm min-w-[100px] snap-start">
+<img class="w-20 h-20 rounded-full object-cover inner-stroke" data-alt="A professional headshot portrait of young actor Jacob Tremblay, neutral expression, bright studio lighting, light background, high quality photography." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAOJ0h-ZhDa4lPgqokyPmwAjSfjyeJp-e3CxJu9Y_q5RVXmZf57KmS6Hs4kfMAHWwfLjkw27G4dpz5p9KcTEuoCw7z8uGeqsUcwDdHmejwySIjRiT9_TBpJOPKKDRsXPwNA-VzUqXeyxqwrOSlW7VXr8C4U6c9gXfTt3gwUveXF7YYF4lV72Gayp2RjLswFWlRb8UWRZfsHfSAIB4n0GJURlqQiKAKRu-ipqblF0Gtq3IS8R3C3"/>
+<div class="text-center">
+<p class="font-body-md text-body-md font-medium text-on-surface leading-tight">Jacob Tremblay</p>
+</div>
+</div>
+<!-- Cast 5 -->
+<div class="flex flex-col items-center gap-sm min-w-[100px] snap-start">
+<img class="w-20 h-20 rounded-full object-cover inner-stroke" data-alt="A professional headshot portrait of actor Chiwetel Ejiofor, serious expression, dramatic studio lighting, dark background, high quality photography." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDst4Ir2DvDEu6nn4nh5SnfMNroQejwZZMM0GkuxhwXBX4i4j09Nh_ykk66r5RVkCmifCc1E6H-DxT_R8HQZ_tZUYGIDJpJPt7Qbp3zqt6hpUrC52C2FK5x27xYnbygtCT-FkCe9v2J84uNj9g6L2Ntjh00Fz8vV4RJEG4blcR7kReTzhuzjARERjCCDH4B22eqFN2GLF235pkqiLjim3Kki08ciiCe2_htwIPSriJ7mPmfd5Sl"/>
+<div class="text-center">
+<p class="font-body-md text-body-md font-medium text-on-surface leading-tight">Chiwetel Ejiofor</p>
+</div>
+</div>
+</div>
+</section>
+</main>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="md:hidden fixed bottom-0 w-full z-50 bg-surface/80 backdrop-blur-md border-t border-surface-variant flex justify-around items-center px-4 pb-safe h-16">
+<a class="flex flex-col items-center justify-center text-on-surface-variant px-4 py-1 hover:bg-surface-container-high transition-transform duration-150 active:scale-95" href="#">
+<span class="material-symbols-outlined mb-1">home</span>
+<span class="font-label-sm text-label-sm">Feed</span>
+</a>
+<a class="flex flex-col items-center justify-center text-primary font-bold bg-primary-container/10 rounded-xl px-4 py-1 hover:bg-surface-container-high transition-transform duration-150 active:scale-95" href="#">
+<span class="material-symbols-outlined mb-1" style="font-variation-settings: 'FILL' 1;">movie</span>
+<span class="font-label-sm text-label-sm">Movies</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant px-4 py-1 hover:bg-surface-container-high transition-transform duration-150 active:scale-95" href="#">
+<span class="material-symbols-outlined mb-1">group</span>
+<span class="font-label-sm text-label-sm">Friends</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant px-4 py-1 hover:bg-surface-container-high transition-transform duration-150 active:scale-95" href="#">
+<span class="material-symbols-outlined mb-1">person</span>
+<span class="font-label-sm text-label-sm">Profile</span>
+</a>
+</nav>
+<style>
+        /* Utility for hiding scrollbar but keeping functionality in horizontal lists */
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        
+        /* Safe area padding for mobile bottom nav */
+        @supports (padding-bottom: env(safe-area-inset-bottom)) {
+            .pb-safe {
+                padding-bottom: calc(env(safe-area-inset-bottom) + 0.5rem);
+            }
+        }
+    </style>
+</body></html>

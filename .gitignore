@@ -4,6 +4,17 @@
 # Local Claude Code tool permissions (machine-specific paths)
 .claude/
 
+# Secrets — the TMDB read access token lives here
+.env
+.env.*
+!.env.example
+
+# The visitor's own likes, ratings, watchlist and comments, plus the seeded
+# social layer. Local state, not source — recreated on first run.
+*.db
+*.db-wal
+*.db-shm
+
 # Build
 node_modules/
 deno.lock

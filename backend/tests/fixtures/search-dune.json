@@ -1,0 +1,401 @@
+{
+  "page": 1,
+  "results": [
+    {
+      "adult": false,
+      "backdrop_path": "/qVgZu5BTx6pu4owCvVOm4zjTfOi.jpg",
+      "genre_ids": [
+        878,
+        12
+      ],
+      "id": 438631,
+      "title": "Dune",
+      "original_language": "en",
+      "original_title": "Dune",
+      "overview": "Paul Atreides, a brilliant and gifted young man born into a great destiny beyond his understanding, must travel to the most dangerous planet in the universe to ensure the future of his family and his people. As malevolent forces explode into conflict over the planet's exclusive supply of the most precious resource in existence - a commodity capable of unlocking humanity's greatest potential - only those who can conquer their fear will survive.",
+      "popularity": 36.0058,
+      "poster_path": "/gDzOcq0pfeCeqMBwKIJlSmQpjkZ.jpg",
+      "release_date": "2021-09-15",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.784,
+      "vote_count": 15226
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/eZ239CUp1d6OryZEBPnO2n87gMG.jpg",
+      "genre_ids": [
+        878,
+        12
+      ],
+      "id": 693134,
+      "title": "Dune: Part Two",
+      "original_language": "en",
+      "original_title": "Dune: Part Two",
+      "overview": "Follow the mythic journey of Paul Atreides as he unites with Chani and the Fremen while on a path of revenge against the conspirators who destroyed his family. Facing a choice between the love of his life and the fate of the known universe, Paul endeavors to prevent a terrible future only he can foresee.",
+      "popularity": 37.6051,
+      "poster_path": "/6izwz7rsy95ARzTR3poZ8H6c5pp.jpg",
+      "release_date": "2024-02-27",
+      "softcore": false,
+      "video": false,
+      "vote_average": 8.13,
+      "vote_count": 8286
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/5wJ2tckpvwcxGCAgZiccodwEJpf.jpg",
+      "genre_ids": [
+        28,
+        878,
+        12
+      ],
+      "id": 841,
+      "title": "Dune",
+      "original_language": "en",
+      "original_title": "Dune",
+      "overview": "In the year 10,191, the most precious substance in the universe is the spice Melange. The spice extends life. The spice expands consciousness. The spice is vital to space travel.  The spice exists on only one planet in the entire universe, the vast desert planet Arrakis, also known as Dune.  Its native inhabitants, the Fremen, have long held a prophecy that a man would come, a messiah who would lead them to true freedom.",
+      "popularity": 13.7372,
+      "poster_path": "/4kJmUCE7mkVJjXa7A0g2rY4IGTm.jpg",
+      "release_date": "1984-12-14",
+      "softcore": false,
+      "video": false,
+      "vote_average": 6.188,
+      "vote_count": 3474
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/i5E9H7Ik0u61ylDDTbmUpTL3Yw.jpg",
+      "genre_ids": [
+        878,
+        12
+      ],
+      "id": 1170608,
+      "title": "Dune: Part Three",
+      "original_language": "en",
+      "original_title": "Dune: Part Three",
+      "overview": "Emperor Paul Atreides faces the fallout from his ascent to power as political plots and a galaxy-wide holy war endanger the future only he can see.",
+      "popularity": 15.192,
+      "poster_path": "/d43fvHQsIMa4kpyhKXw0haEJIvI.jpg",
+      "release_date": "2026-12-16",
+      "softcore": false,
+      "video": false,
+      "vote_average": 0.0,
+      "vote_count": 0
+    },
+    {
+      "adult": false,
+      "backdrop_path": null,
+      "genre_ids": [
+        16,
+        9648,
+        53
+      ],
+      "id": 697620,
+      "title": "Dune",
+      "original_language": "hu",
+      "original_title": "Dűne",
+      "overview": "Sounds as witnesses. They blurr into memories, half-dreams, it is undecided if they are real or not. A fluctuation between imagination and reality.",
+      "popularity": 2.4139,
+      "poster_path": "/CecUPdnnP22wV1NoRFQaG231zj.jpg",
+      "release_date": "2020-06-15",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.4,
+      "vote_count": 37
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/3HpMbtAvtxn2CWlKHWi5lM8jVGC.jpg",
+      "genre_ids": [
+        18
+      ],
+      "id": 271683,
+      "title": "The Dune",
+      "original_language": "fr",
+      "original_title": "La dune",
+      "overview": "Through the course of several accidents and chance encounters, Hanoch and Ruben will meet and each of them will have to face a page of his personal history, a page that they both need to turn for good.",
+      "popularity": 0.887,
+      "poster_path": "/qNnFzvRyXk0FkHOGuxS4jWqj1vO.jpg",
+      "release_date": "2014-08-13",
+      "softcore": false,
+      "video": false,
+      "vote_average": 5.5,
+      "vote_count": 21
+    },
+    {
+      "adult": false,
+      "backdrop_path": null,
+      "genre_ids": [
+        18,
+        80
+      ],
+      "id": 627150,
+      "title": "Dune",
+      "original_language": "ru",
+      "original_title": "Бархан",
+      "overview": "A completely prosperous couple on their own brand new Volga got lost in the desert. And when they joyfully rushed towards the truck, counting on help, it turned out that there were two recidivists in the cab who had just escaped from the colony ...",
+      "popularity": 0.5884,
+      "poster_path": "/f1G59dEnJ6NNE0kibsKJcJBMeta.jpg",
+      "release_date": "1989-04-19",
+      "softcore": false,
+      "video": false,
+      "vote_average": 6.667,
+      "vote_count": 3
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/lDVl2jf6VB8ODl1olZ6FLvOV1gX.jpg",
+      "genre_ids": [
+        53,
+        9648,
+        80
+      ],
+      "id": 915935,
+      "title": "Anatomy of a Fall",
+      "original_language": "fr",
+      "original_title": "Anatomie d'une chute",
+      "overview": "A woman is suspected of her husband's murder, and their blind son faces a moral dilemma as the sole witness.",
+      "popularity": 16.1359,
+      "poster_path": "/1ho0d4LNZw3Y0voeKmSvPSgJOJ2.jpg",
+      "release_date": "2023-08-23",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.515,
+      "vote_count": 3387
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/3BBwgGaZmM8KqEdCqovoTwLQHBY.jpg",
+      "genre_ids": [
+        878,
+        27,
+        12
+      ],
+      "id": 881460,
+      "title": "Planet Dune",
+      "original_language": "en",
+      "original_title": "Planet Dune",
+      "overview": "A crew on a mission to rescue a marooned base on a desert planet turns deadly when the crew finds themselves hunted and attacked by the planet’s apex predators: giant sand worms.",
+      "popularity": 2.4411,
+      "poster_path": "/cPSPghn6tr6fGY6hTi78SrxBcqY.jpg",
+      "release_date": "2021-10-29",
+      "softcore": false,
+      "video": false,
+      "vote_average": 5.063,
+      "vote_count": 71
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/pyw45YPB9Mk01zQiAnvfIdUFYQo.jpg",
+      "genre_ids": [
+        878,
+        28,
+        27
+      ],
+      "id": 911972,
+      "title": "Devil In Dune",
+      "original_language": "zh",
+      "original_title": "沙丘虫暴",
+      "overview": "The film tells the story of a near future in which the earth is irreversibly sandy, as human emissions and rubbish exceed its carrying capacity. As plants and animals mutate to create the Earth's new masters, the \"sand worms\", which are slaughtering the planet and driving humans to the brink of extinction, the survivors are left to their own devices to find the only remaining refuge in the deep desert, the \"Oasis\". An exiled team of wealthy businessmen, scientists, security chiefs, mechanic families and gangsters set out on an adventure to find the Oasis in a special armoured vehicle, but the bloodthirsty insects are hot on their heels.",
+      "popularity": 0.8608,
+      "poster_path": "/nQLdzYYB71sUugtSR7e7YdjF6Vx.jpg",
+      "release_date": "2021-12-03",
+      "softcore": false,
+      "video": false,
+      "vote_average": 6.7,
+      "vote_count": 18
+    },
+    {
+      "adult": false,
+      "backdrop_path": null,
+      "genre_ids": [
+        12
+      ],
+      "id": 633787,
+      "title": "Golden Dune",
+      "original_language": "ru",
+      "original_title": "Золотая дюна",
+      "overview": "A fascinating story about three teenagers who found an ancient medallion of the Teutonic Order in the basements of a former German hospital in Kaliningrad (formerly Konigsberg). A story that gradually develops into a dangerous and mystical adventure, with chases, struggle, constant risk. The children will have to solve the mystery of the amber medallion, find the treasure, save the girl and make their choice. And, of course, this is a film about the first youthful love.",
+      "popularity": 1.2119,
+      "poster_path": "/piX74vNjTslY2aUdJXvocZSlVjv.jpg",
+      "release_date": "2021-08-28",
+      "softcore": false,
+      "video": false,
+      "vote_average": 4.8,
+      "vote_count": 4
+    },
+    {
+      "adult": false,
+      "backdrop_path": null,
+      "genre_ids": [],
+      "id": 539644,
+      "title": "The House on the Dune",
+      "original_language": "fr",
+      "original_title": "La Maison dans la dune",
+      "overview": "In a village on the French-Belgian border, a smuggler named Sylvain falls in love with the pretty Pascaline, which infuriates Germaine, his mistress. The jealous woman reports Sylvain to the police. As a result, the young man gets hurt during a night chase. Fortunately Pascaline offers him hospitality and looks after him.",
+      "popularity": 0.5191,
+      "poster_path": null,
+      "release_date": "1934-08-03",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.2,
+      "vote_count": 5
+    },
+    {
+      "adult": false,
+      "backdrop_path": null,
+      "genre_ids": [],
+      "id": 533365,
+      "title": "The House on the Dune",
+      "original_language": "fr",
+      "original_title": "La Maison dans la dune",
+      "overview": "A tough customs man, out to get a youth smuggling tobacco into France across the Belgium border, falls for the jaded ex bar hostess the smuggler lives with.Meanwhile the young man is intrigued by another, more innocent girl.",
+      "popularity": 0.4518,
+      "poster_path": "/A0tuKoV7nEjc9TMePf64Be2vJ5O.jpg",
+      "release_date": "1952-02-29",
+      "softcore": false,
+      "video": false,
+      "vote_average": 6.25,
+      "vote_count": 12
+    },
+    {
+      "adult": false,
+      "backdrop_path": null,
+      "genre_ids": [
+        99
+      ],
+      "id": 1274770,
+      "title": "The Dune",
+      "original_language": "it",
+      "original_title": "La Duna",
+      "overview": "Who owns the land? Legend has it that ex-prime minister Silvio Berlusconi stole a dune in Sardinia, while the locals are fighting for their land and struggling with their dependence on tourism. La Duna is an irresistibly cathartic and humorous documentary that intertwines a portrait of a community with absurd almost-fairytales.",
+      "popularity": 0.1627,
+      "poster_path": "/ssOSQT4hc651eegZDGvA4iinBx4.jpg",
+      "release_date": "2025-03-23",
+      "softcore": false,
+      "video": false,
+      "vote_average": 0.0,
+      "vote_count": 0
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/vFU53Ue7s2RflLl7wBjTZmRpivb.jpg",
+      "genre_ids": [
+        878
+      ],
+      "id": 744738,
+      "title": "Dune Drifter",
+      "original_language": "en",
+      "original_title": "Dune Drifter",
+      "overview": "When the trainee pilot and her mortally wounded gunner are shot down, they crash land on a nearby planet. An enemy craft offers the chance of spare parts to fix her ship, but then she spots another survivor - an enemy alien soldier with no intention of letting her escape.",
+      "popularity": 1.1278,
+      "poster_path": "/hBLJzYriF9zZAHc2Gjb3KTQGTGT.jpg",
+      "release_date": "2020-10-24",
+      "softcore": false,
+      "video": false,
+      "vote_average": 4.6,
+      "vote_count": 54
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/dJww8jI8Zqx1vL70lDK3EcxiZ04.jpg",
+      "genre_ids": [
+        28,
+        878
+      ],
+      "id": 222339,
+      "title": "Dune Warriors",
+      "original_language": "en",
+      "original_title": "Dune Warriors",
+      "overview": "After the end of the world, Earth is a thirsty planet ruled by vicious warlords. One woman is brave enough to fight back; she bands together five warriors to save her town and their precious water",
+      "popularity": 0.8937,
+      "poster_path": "/gIdY8sYd3joPeHqnK5qUxABNieD.jpg",
+      "release_date": "1991-01-18",
+      "softcore": false,
+      "video": false,
+      "vote_average": 4.019,
+      "vote_count": 26
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/4qRPA39X45JgaZxJpOAyYweKs8Z.jpg",
+      "genre_ids": [
+        99
+      ],
+      "id": 919946,
+      "title": "Destination Dune",
+      "original_language": "en",
+      "original_title": "Destination Dune",
+      "overview": "A short documentary that was originally produced to promote the film at conventions and publicity events in the lead-up to its release.",
+      "popularity": 0.5751,
+      "poster_path": "/yW7NUUcDRNxGt6nlooVidFRPG6x.jpg",
+      "release_date": "1983-01-01",
+      "softcore": false,
+      "video": false,
+      "vote_average": 6.5,
+      "vote_count": 2
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/nWiKdO1ZQVJ1N6NhAhjhrF6mVTB.jpg",
+      "genre_ids": [
+        14,
+        53,
+        9648
+      ],
+      "id": 818926,
+      "title": "Dune Dreams",
+      "original_language": "fr",
+      "original_title": "Dune Dreams",
+      "overview": "In the wake of his wife’s death, Simon tries to make a fresh start by moving with his son Camille to Dubai. In that extraordinary city, Camille manages to forget, let go, and begin a new life. But for Simon, it’s not so easy. He begins to feel an alarming presence in their home - someone quietly, patiently lurking in the shadows. Could it really be his double? Simon slowly succumbs to anxiety and thinks he is going mad. But he’s not the only one to feel threatened this way. It seems to be happening to all people in Dubai who refuse to cut off all ties to their past.",
+      "popularity": 0.8034,
+      "poster_path": "/5UI57QaaKArOx7vUrmHQ8symLPj.jpg",
+      "release_date": "2021-06-02",
+      "softcore": false,
+      "video": false,
+      "vote_average": 4.9,
+      "vote_count": 8
+    },
+    {
+      "adult": false,
+      "backdrop_path": null,
+      "genre_ids": [
+        18
+      ],
+      "id": 1255476,
+      "title": "Dui Dune Panch",
+      "original_language": "or",
+      "original_title": "ଦୁଇ ଦୁଣେ ପାଞ୍ଚ",
+      "overview": "Raju, fixated on wealth, exploits villagers with deceitful investment schemes promising double returns. He inadvertently becomes a puppet for a local MLA and his son. What will happen when the MLA's control tightens? Will Raju resist?",
+      "popularity": 0.3575,
+      "poster_path": "/47ISZjJLPlNq0GjfQLJ4gdW2LFB.jpg",
+      "release_date": "2024-03-06",
+      "softcore": false,
+      "video": false,
+      "vote_average": 0.0,
+      "vote_count": 0
+    },
+    {
+      "adult": false,
+      "backdrop_path": null,
+      "genre_ids": [
+        18,
+        35
+      ],
+      "id": 306391,
+      "title": "Be Dune Saade Chaar",
+      "original_language": "mr",
+      "original_title": "बे दुणे साडे चार",
+      "overview": "Anant Kitturkar is guilty of being married to two women and keeping it a secret for twenty-two years. He gets into a tight spot when both his wives meet at their children's wedding.",
+      "popularity": 0.499,
+      "poster_path": "/oVlAqpUZq1f7RtDUGSB9kHbx7so.jpg",
+      "release_date": "2009-01-01",
+      "softcore": false,
+      "video": false,
+      "vote_average": 0.0,
+      "vote_count": 0
+    }
+  ],
+  "total_pages": 55,
+  "total_results": 1095
+}

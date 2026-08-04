@@ -531,16 +531,19 @@ fn architecture_review() -> Review {
 
 // --- Movie detail -------------------------------------------------------------
 
-/// `reference/stitch_lumi_cinema_social 2/movie_detail_desktop/code.html`.
+/// The demo film, laid out for `reference/movie page/code.html`.
 ///
-/// Alt text is the export's `data-alt` prompts verbatim. The Gallery heading
-/// claims 12 stills while the grid holds 4 — that mismatch is in the export and
-/// is preserved, hence `still_count` being separate from `gallery.len()`.
+/// Alt text is the export's `data-alt` prompts verbatim, and everything invented
+/// here belongs to Neon Reverie — the one film the Stitch export actually
+/// designed. Every other film is served this same page under its own id and
+/// title; where the catalogue knows a film's real year, genres and poster those
+/// are used, and the rest (synopsis, cast, credits, score, runtime) is Neon
+/// Reverie's.
 ///
-/// Only Neon Reverie was designed, so every other film is served this same page
-/// under its own id and title. Where the catalogue knows a film's real year,
-/// genres and poster, those are used and the rest (synopsis, cast, gallery,
-/// credits, runtime) is Neon Reverie's.
+/// The invented numbers are chosen to exercise the layout rather than to
+/// flatter it: a score with a decimal that half-stars would round away, a vote
+/// count that needs thousands separators, and a certification, so the metadata
+/// line renders all three of its segments in demo mode too.
 fn detail_for(id: &str, title: &str) -> MovieDetail {
     let listed = catalogue().into_iter().find(|entry| entry.id == id);
 
@@ -548,7 +551,7 @@ fn detail_for(id: &str, title: &str) -> MovieDetail {
         id: id.into(),
         title: title.into(),
         year: listed.as_ref().map_or(2024, |entry| entry.year),
-        director: "Elara Vance".into(),
+        certification: Some("R".into()),
         runtime: "1h 58m".into(),
         genres: listed
             .as_ref()
@@ -604,49 +607,36 @@ fn detail_for(id: &str, title: &str) -> MovieDetail {
                 ),
             },
         ],
-        still_count: 12,
-        gallery: vec![
-            GalleryStill {
-                id: "still-cityscape-window".into(),
-                image: Image::new(
-                    "img/still-cityscape-window.jpg",
-                    "A wide, cinematic still showing a futuristic cityscape viewed through a rain-streaked window. The dominant colors are deep slate grays and muted blues, with solitary pinpricks of warm yellow light from distant skyscrapers. The composition is stark and architectural, emphasizing negative space and a lonely, contemplative mood.",
-                ),
-                shape: StillShape::Hero,
-            },
-            GalleryStill {
-                id: "still-memory-device".into(),
-                image: Image::new(
-                    "img/still-memory-device.jpg",
-                    "A close-up cinematic still of a glowing, intricate technological device—perhaps a memory synthesizer—resting on a dark, reflective surface. The lighting is surgical and cold, casting sharp shadows. The visual aesthetic is highly detailed yet minimalist, focusing entirely on the object against a dark void.",
-                ),
-                shape: StillShape::Companion,
-            },
-            GalleryStill {
-                id: "still-empty-room".into(),
-                image: Image::new(
-                    "img/still-empty-room.jpg",
-                    "A cinematic still of a dimly lit, minimalist interior space. A single chair sits in the center of the room, illuminated by a harsh, singular spotlight from above. The surrounding walls are smooth concrete, creating a sense of isolation and tension. The color palette is almost monochromatic, relying on stark contrasts between light and shadow.",
-                ),
-                shape: StillShape::Compact,
-            },
-            GalleryStill {
-                id: "still-billboard-plaza".into(),
-                image: Image::new(
-                    "img/still-billboard-plaza.jpg",
-                    "A wide cinematic shot of two figures silhouetted against a massive, glowing digital billboard in a sprawling, empty plaza. The scale of the environment dwarfs the characters, emphasizing themes of alienation. The billboard emits a cool, blue light that washes over the brutalist architecture. The scene is quiet, still, and visually arresting.",
-                ),
-                shape: StillShape::Panorama,
-            },
-        ],
+        score: 7.8,
+        vote_count: 12_450,
         details: vec![
-            DetailFact { label: "Studio".into(), value: "Aether Films".into() },
+            DetailFact { label: "Director".into(), value: "Elara Vance".into() },
+            DetailFact {
+                label: "Writers".into(),
+                value: "Elara Vance, Idris Okonkwo".into(),
+            },
             DetailFact { label: "Cinematography".into(), value: "Sarah Chen".into() },
-            DetailFact { label: "Original Score".into(), value: "Trent Reznor".into() },
-            DetailFact { label: "Release Date".into(), value: "October 12, 2024".into() },
+            DetailFact { label: "Music".into(), value: "Trent Reznor".into() },
+            DetailFact { label: "Production".into(), value: "Aether Films".into() },
         ],
-        watch_progress_percent: 0,
-        watch_progress_label: "Not Started".into(),
+        // No video was ever invented for the demo film, and a play button over a
+        // still that plays nothing is the kind of dead end the export's mocks
+        // could afford and an SPA can't. `None` hides the Media block, which is
+        // the same thing that happens for a real film TMDB has no trailer for.
+        trailer: None,
+        watch_options: vec![
+            WatchOption {
+                provider: "Aether Stream".into(),
+                kind: "Stream".into(),
+                // No logo files exist for the invented services, which also
+                // exercises the frontend's generic-glyph fallback in demo mode.
+                logo: None,
+            },
+            WatchOption { provider: "Kino Rental".into(), kind: "Rent".into(), logo: None },
+        ],
+        // Nowhere to link: TMDB's watch page is the only permitted destination
+        // and these two services don't exist.
+        watch_link: None,
         // Both come from the store — `hydrate` fills them per request.
         on_watchlist: false,
         your_rating_half_stars: None,
@@ -656,14 +646,17 @@ fn detail_for(id: &str, title: &str) -> MovieDetail {
 // --- The catalogue ------------------------------------------------------------
 
 /// The sidebar's genre chips, in the export's order.
-const GENRE_FACETS: [&str; 5] = ["Drama", "Sci-Fi", "Thriller", "Romance", "Documentary"];
+///
+/// Public because TMDB mode counts the same chips over its own candidate window
+/// (`content::facets`) — the sidebar's vocabulary is one list either way.
+pub const GENRE_FACETS: [&str; 5] = ["Drama", "Sci-Fi", "Thriller", "Romance", "Documentary"];
 
 /// The sidebar's decade radios, in the export's order.
 ///
 /// The export offered exactly these three, so films outside them (Le Souffle,
 /// 1960; Morning Haze, 1998) are only reachable with no decade selected. Adding
 /// decades would mean redrawing a sidebar the reference fixed at three rows.
-const YEAR_FACETS: [&str; 3] = ["2020s", "2010s", "2000s"];
+pub const YEAR_FACETS: [&str; 3] = ["2020s", "2010s", "2000s"];
 
 /// One searchable film.
 ///

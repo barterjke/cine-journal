@@ -5,8 +5,11 @@
  * shape kept here is the desktop feed's, parameterized by which tab is active.
  * Links marked `#` were inert in the export and stay inert.
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+
+import type { Status } from '../api'
+import { api } from '../api'
 
 export type Tab = 'feed' | 'movies' | 'friends' | 'profile'
 
@@ -189,6 +192,83 @@ export function BottomNavBar({ active }: { active: Tab }) {
         })}
       </div>
     </nav>
+  )
+}
+
+/**
+ * Memoized across mounts: `data_source` can only change when the server
+ * restarts, so re-asking on every client-side navigation would be six identical
+ * requests for one unchanging fact. A rejection isn't cached — if the backend was
+ * simply down when the first page mounted, the next navigation retries.
+ */
+let statusRequest: Promise<Status> | null = null
+
+function fetchStatus(): Promise<Status> {
+  statusRequest ??= api.status().catch((error: unknown) => {
+    statusRequest = null
+    throw error
+  })
+  return statusRequest
+}
+
+/**
+ * "These films are made up" band, shown on every screen when the backend has no
+ * TMDB token and is serving `data.rs` instead. Renders nothing in TMDB mode, and
+ * nothing while the request is in flight — a band that appears a beat after the
+ * page would shove the content down as you started reading it.
+ *
+ * Deliberately *not* inside `TopAppBar`: that bar's height is fixed so it is
+ * byte-identical on every route, and a conditional band inside it would undo
+ * that. Out here it scrolls away as you read, which is the right weight for a
+ * notice you only need to see once.
+ *
+ * A failed status request is swallowed. It means the API is unreachable, which
+ * every screen already reports through `ErrorNote` — and the one thing worse than
+ * no warning is a warning about the warning.
+ */
+export function DemoBanner() {
+  const [status, setStatus] = useState<Status | null>(null)
+
+  useEffect(() => {
+    let active = true
+    fetchStatus().then(
+      (next) => {
+        if (active) setStatus(next)
+      },
+      () => {},
+    )
+    return () => {
+      active = false
+    }
+  }, [])
+
+  if (status === null || status.data_source !== 'demo') return null
+
+  return (
+    <div className="w-full bg-secondary/10 border-b border-secondary/40">
+      <div
+        role="status"
+        className="max-w-[1440px] mx-auto px-margin-mobile md:px-margin-desktop py-sm flex items-start gap-sm text-on-surface"
+      >
+        <span className="material-symbols-outlined text-secondary text-lg shrink-0">
+          science
+        </span>
+        {/* `font-body-md` rather than `font-label-sm`: the label face is
+            JetBrains Mono, which is right for a chip but wraps this sentence to
+            four hard-to-skim lines on a phone. */}
+        <p className="flex-grow font-body-md text-sm">
+          {status.message ?? 'Showing demo data — no TMDB token.'}{' '}
+          <a
+            href={status.docs_url}
+            target="_blank"
+            rel="noreferrer"
+            className="font-label-sm text-label-sm text-primary underline hover:opacity-70 transition-opacity whitespace-nowrap"
+          >
+            Get a token
+          </a>
+        </p>
+      </div>
+    </div>
   )
 }
 

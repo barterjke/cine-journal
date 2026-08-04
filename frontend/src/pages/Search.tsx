@@ -24,13 +24,54 @@ import type { SearchResult } from '../api'
 import { api } from '../api'
 import { useApi } from '../useApi'
 import { useAction } from '../useAction'
-import { ActionError, BottomNavBar, ErrorNote, Loading, TopAppBar } from '../components/Chrome'
+import {
+  ActionError,
+  BottomNavBar,
+  DemoBanner,
+  ErrorNote,
+  Loading,
+  TopAppBar,
+} from '../components/Chrome'
 
 const FILLED = { fontVariationSettings: "'FILL' 1" }
 const OUTLINED = { fontVariationSettings: "'FILL' 0" }
 
 /** Long enough that typing doesn't fire a request per keystroke. */
 const DEBOUNCE_MS = 250
+
+/**
+ * How many numbered buttons the pager draws, at most. The rest are reached by
+ * stepping — a real catalogue runs to 1250 pages of 8, and one button each put
+ * 1250 of them in a row that can't wrap, which stretched the results `<section>`
+ * to 50,000px and dragged the grid's four columns out to 12,599px apiece. Odd,
+ * so the current page sits in the middle of the window.
+ */
+const PAGE_WINDOW = 7
+
+/**
+ * The page numbers to draw: always the first and last, the current page with a
+ * neighbour or two either side, and `null` wherever a run was skipped (rendered
+ * as an ellipsis). Short paginations are returned whole — with `page_count` at or
+ * below the window there is nothing to elide, which is every demo-mode case.
+ */
+function pageWindow(current: number, count: number): (number | null)[] {
+  if (count <= PAGE_WINDOW) return Array.from({ length: count }, (_, i) => i + 1)
+
+  // Reserve two slots for the first and last page and two for the ellipses.
+  const span = PAGE_WINDOW - 4
+  const half = Math.floor(span / 2)
+  // Clamped so the window keeps its width at both ends instead of shrinking.
+  const start = Math.min(Math.max(current - half, 2), count - span)
+  const end = start + span - 1
+
+  return [
+    1,
+    ...(start > 2 ? [null] : []),
+    ...Array.from({ length: end - start + 1 }, (_, i) => start + i),
+    ...(end < count - 1 ? [null] : []),
+    count,
+  ]
+}
 
 function ResultCard({
   result,
@@ -189,6 +230,7 @@ export function Search() {
   return (
     <div className="bg-background text-on-background font-body-md min-h-screen flex flex-col">
       <TopAppBar active="movies" />
+      <DemoBanner />
 
       {error && <ErrorNote error={error} />}
 
@@ -322,8 +364,10 @@ export function Search() {
             </div>
           </aside>
 
-          {/* Results */}
-          <section className="flex-grow">
+          {/* Results. `min-w-0` because a flex item defaults to `min-width:auto`,
+              which lets any over-wide child stretch the column past the viewport
+              instead of being constrained by it — the pager did exactly that. */}
+          <section className="flex-grow min-w-0">
             <div className="mb-lg flex justify-between items-end border-b border-surface-variant pb-xs">
               <div>
                 <h1 className="font-headline-lg text-headline-lg-mobile md:text-headline-lg text-on-background">
@@ -422,20 +466,33 @@ export function Search() {
                     chevron_left
                   </span>
                 </button>
-                {Array.from({ length: data.page_count }, (_, i) => i + 1).map((n) => (
-                  <button
-                    key={n}
-                    onClick={() => commit({ page: n }, true)}
-                    aria-current={n === data.page ? 'page' : undefined}
-                    className={
-                      n === data.page
-                        ? 'font-label-sm text-label-sm text-primary font-bold'
-                        : 'font-label-sm text-label-sm text-outline hover:text-on-surface cursor-pointer'
-                    }
-                  >
-                    {n}
-                  </button>
-                ))}
+                {pageWindow(data.page, data.page_count).map((n, i) =>
+                  n === null ? (
+                    <span
+                      // Index-keyed: there are at most two of these and their
+                      // position in the list is the only thing that identifies them.
+                      key={`gap-${i}`}
+                      aria-hidden="true"
+                      className="font-label-sm text-label-sm text-outline-variant select-none"
+                    >
+                      …
+                    </span>
+                  ) : (
+                    <button
+                      key={n}
+                      onClick={() => commit({ page: n }, true)}
+                      aria-current={n === data.page ? 'page' : undefined}
+                      aria-label={`Page ${n}`}
+                      className={
+                        n === data.page
+                          ? 'font-label-sm text-label-sm text-primary font-bold'
+                          : 'font-label-sm text-label-sm text-outline hover:text-on-surface cursor-pointer'
+                      }
+                    >
+                      {n}
+                    </button>
+                  ),
+                )}
                 <button
                   onClick={() => commit({ page: Math.min(data.page_count, page + 1) }, true)}
                   disabled={page >= data.page_count}

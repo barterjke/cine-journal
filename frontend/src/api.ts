@@ -106,41 +106,63 @@ export interface CastMember {
   portrait: Image
 }
 
-/**
- * Slot in the detail screen's asymmetric bento grid. Semantic rather than a
- * class string because Tailwind's JIT only emits CSS for classes it finds in
- * scanned source — see `SHAPE_CLASSES` in `pages/MovieDetail.tsx`.
- */
-export type StillShape = 'hero' | 'companion' | 'compact' | 'panorama'
-
-export interface GalleryStill {
-  id: string
-  image: Image
-  shape: StillShape
-}
-
+/** One label/value row of the detail screen's credits grid. */
 export interface DetailFact {
   label: string
   value: string
+}
+
+/**
+ * The video the detail screen's Media block plays.
+ *
+ * `key` and `site` rather than a finished URL: the thumbnail and the `<iframe>`
+ * src are built from them here, and only YouTube is embeddable, so `site` has to
+ * be checked at the point of rendering.
+ */
+export interface Trailer {
+  name: string
+  /** Site-scoped id — on YouTube, what follows `watch?v=`. */
+  key: string
+  /** "YouTube" or "Vimeo". */
+  site: string
+  thumbnail: Image
+}
+
+/**
+ * One "Where to Watch" row. No per-row URL: TMDB's terms permit linking only to
+ * their own watch page, which `MovieDetail.watch_link` carries for all of them.
+ */
+export interface WatchOption {
+  provider: string
+  /** "Stream", "Rent", "Buy" or "Free". */
+  kind: string
+  /** `null` for a service with no artwork upstream — drawn as a generic glyph. */
+  logo: Image | null
 }
 
 export interface MovieDetail {
   id: string
   title: string
   year: number
-  director: string
+  /** "PG-13", "R". `null` where there's no rating, and the segment is omitted. */
+  certification: string | null
   runtime: string
   genres: string[]
   poster: Image
+  /** Backs the Media block's play tile — TMDB has no per-video thumbnail. */
   backdrop: Image
   synopsis: string
-  cast: CastMember[]
-  /** May exceed `gallery.length` — the export claims 12 and shows 4. */
-  still_count: number
-  gallery: GalleryStill[]
+  /** The crowd average on a 0–10 scale, printed to one decimal beside "/ 10". */
+  score: number
+  /** How many votes that average is over. 0 hides the attribution line. */
+  vote_count: number
   details: DetailFact[]
-  watch_progress_percent: number
-  watch_progress_label: string
+  /** `null` for a film with no embeddable video — the Media block hides itself. */
+  trailer: Trailer | null
+  /** Empty is normal; the section hides itself. */
+  watch_options: WatchOption[]
+  watch_link: string | null
+  cast: CastMember[]
   on_watchlist: boolean
   /** The visitor's own rating in half-stars; `null` if they haven't rated it. */
   your_rating_half_stars: number | null
@@ -225,6 +247,16 @@ export interface LikeState {
   like_count: number | null
 }
 
+/** Where the films came from. `demo` means they're invented — see `DemoBanner`. */
+export type DataSource = 'tmdb' | 'demo'
+
+export interface Status {
+  data_source: DataSource
+  /** Why the data is fake and what to do about it; `null` in TMDB mode. */
+  message: string | null
+  docs_url: string
+}
+
 /**
  * Prefers the API's own `{ error }` message over the bare status line — the
  * backend explains rejected writes ("body must not be empty"), and that text is
@@ -268,6 +300,7 @@ function searchQuery({ q, genre, year, minRating, page }: SearchParams): string 
 }
 
 export const api = {
+  status: () => get<Status>('/api/status'),
   feed: () => get<Feed>('/api/feed'),
   mobileFeed: () => get<MobileFeed>('/api/feed/mobile'),
   reviews: () => get<Review[]>('/api/reviews'),

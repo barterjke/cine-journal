@@ -1,8 +1,9 @@
 /**
  * Friend Review — Desktop. Ported from `reference/cine-journal/review.html`.
  *
- * Serves the `dune-part-two` review: faded backdrop, sticky poster column, and
- * the comment thread with one nested reply.
+ * Faded backdrop, sticky poster column, and the comment thread with one nested
+ * reply. The export served `dune-part-two`; the screen now shows whichever review
+ * the API lists first, since in TMDB mode the ids depend on what's trending.
  *
  * All four actions the export drew as buttons now work — LIKE REVIEW, REPLY,
  * POST, and the per-comment heart. Posting returns the whole review, so the
@@ -18,10 +19,15 @@ import type { Comment, Review as ReviewData } from '../api'
 import { api } from '../api'
 import { useApi } from '../useApi'
 import { useAction } from '../useAction'
-import { ActionError, BottomNavBar, ErrorNote, Loading, TopAppBar } from '../components/Chrome'
+import {
+  ActionError,
+  BottomNavBar,
+  DemoBanner,
+  ErrorNote,
+  Loading,
+  TopAppBar,
+} from '../components/Chrome'
 import { StarRating } from '../components/StarRating'
-
-const REVIEW_ID = 'dune-part-two'
 
 function CommentBlock({
   comment,
@@ -139,7 +145,15 @@ function CommentBlock({
 }
 
 export function Review() {
-  const { data, error, loading, update, replace } = useApi(() => api.review(REVIEW_ID))
+  // The first review the API lists rather than a fixed id: which reviews exist
+  // depends on what's trending, so `dune-part-two` only resolves in demo mode. An
+  // empty list is thrown rather than returned as null — a screen with no loader,
+  // no error and no content reads as a bug.
+  const { data, error, loading, update, replace } = useApi(async () => {
+    const reviews = await api.reviews()
+    if (reviews.length === 0) throw new Error('No reviews to show yet.')
+    return reviews[0]
+  })
 
   const [draft, setDraft] = useState('')
   const composer = useRef<HTMLTextAreaElement>(null)
@@ -151,7 +165,10 @@ export function Review() {
     : 0
 
   const likeReview = useAction(async () => {
-    const previous = { liked: data?.liked ?? false, count: data?.like_count ?? null }
+    // Every control is rendered inside `{data && …}`, so this can't be null when
+    // one fires — it's here because the review's id comes from `data` now.
+    if (!data) return
+    const previous = { liked: data.liked, count: data.like_count }
     const setLike = (liked: boolean, count: number | null) => (current: ReviewData) => ({
       ...current,
       liked,
@@ -172,7 +189,7 @@ export function Review() {
       ),
     )
     try {
-      const state = await api.likeReview(REVIEW_ID)
+      const state = await api.likeReview(data.id)
       update(setLike(state.liked, state.like_count))
     } catch (cause) {
       update(setLike(previous.liked, previous.count))
@@ -181,7 +198,8 @@ export function Review() {
   })
 
   const likeComment = useAction(async (commentId: string) => {
-    const target = data?.comments.find((c) => c.id === commentId)
+    if (!data) return
+    const target = data.comments.find((c) => c.id === commentId)
     const previous = { liked: target?.liked ?? false, count: target?.like_count ?? null }
     const setLike = (liked: boolean, count: number | null) => (current: ReviewData) => ({
       ...current,
@@ -199,7 +217,7 @@ export function Review() {
       ),
     )
     try {
-      const state = await api.likeComment(REVIEW_ID, commentId)
+      const state = await api.likeComment(data.id, commentId)
       update(setLike(state.liked, state.like_count))
     } catch (cause) {
       update(setLike(previous.liked, previous.count))
@@ -210,12 +228,14 @@ export function Review() {
   // Posting returns the whole review rather than a patch, so there is nothing to
   // apply optimistically — the server's copy replaces ours.
   const postComment = useAction(async () => {
-    replace(await api.postComment(REVIEW_ID, draft))
+    if (!data) return
+    replace(await api.postComment(data.id, draft))
     setDraft('')
   })
 
   const postReply = useAction(async (commentId: string, body: string) => {
-    replace(await api.postReply(REVIEW_ID, commentId, body))
+    if (!data) return
+    replace(await api.postReply(data.id, commentId, body))
   })
 
   // A reply's own error surfaces at the top with the others; `run` never throws,
@@ -236,6 +256,7 @@ export function Review() {
   return (
     <div className="bg-background text-on-background font-body-md min-h-screen relative overflow-x-hidden">
       <TopAppBar active="friends" />
+      <DemoBanner />
 
       {data?.backdrop && (
         <div

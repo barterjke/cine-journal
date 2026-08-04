@@ -16,7 +16,7 @@ import type { MobileFeed as MobileFeedData, MobileFeedItem, Story } from '../api
 import { api } from '../api'
 import { useApi } from '../useApi'
 import { useAction } from '../useAction'
-import { ActionError, BottomNavBar, ErrorNote, Loading } from '../components/Chrome'
+import { ActionError, BottomNavBar, DemoBanner, ErrorNote, Loading } from '../components/Chrome'
 import { StarRating } from '../components/StarRating'
 
 function StoryCircle({ story }: { story: Story }) {
@@ -160,6 +160,7 @@ export function FeedMobile() {
           </div>
         </div>
       </header>
+      <DemoBanner />
 
       {loading && <Loading />}
       {error && <ErrorNote error={error} />}

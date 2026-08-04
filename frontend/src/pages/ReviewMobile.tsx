@@ -1,8 +1,9 @@
 /**
  * Friend Review — Mobile. Ported from `reference/cine-journal/review-mobile.html`.
  *
- * Serves the `architecture-of-silence` review: full-bleed poster and a sticky
- * comment composer.
+ * Full-bleed poster and a sticky comment composer. The export served
+ * `architecture-of-silence`; the screen now shows whichever review the API lists
+ * second, since in TMDB mode the ids depend on what's trending.
  *
  * NB: the export put `md:hidden` on <body>, so the original screen rendered
  * blank at >=768px. That quirk is NOT reproduced here — a blank route in an SPA
@@ -18,17 +19,26 @@ import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { useApi } from '../useApi'
 import { useAction } from '../useAction'
-import { ActionError, ErrorNote, Loading } from '../components/Chrome'
+import { ActionError, DemoBanner, ErrorNote, Loading } from '../components/Chrome'
 import { StarRating } from '../components/StarRating'
 
-const REVIEW_ID = 'architecture-of-silence'
-
 export function ReviewMobile() {
-  const { data, error, loading, replace } = useApi(() => api.review(REVIEW_ID))
+  // The second review rather than a fixed id: which reviews exist depends on
+  // what's trending, so `architecture-of-silence` only resolves in demo mode.
+  // Taking [1] keeps this screen showing something other than the desktop one,
+  // as the export's two mocks did; [0] when there's only one to show.
+  const { data, error, loading, replace } = useApi(async () => {
+    const reviews = await api.reviews()
+    // Reported as an error rather than returned as null: a blank screen with no
+    // loader and no message reads as a bug, and this one has a cause worth naming.
+    if (reviews.length === 0) throw new Error('No reviews to show yet.')
+    return reviews[1] ?? reviews[0]
+  })
   const [draft, setDraft] = useState('')
 
   const postComment = useAction(async () => {
-    replace(await api.postComment(REVIEW_ID, draft))
+    if (!data) return
+    replace(await api.postComment(data.id, draft))
     setDraft('')
   })
 
@@ -50,6 +60,7 @@ export function ReviewMobile() {
         </Link>
         <div className="w-8"></div>
       </header>
+      <DemoBanner />
 
       {loading && <Loading />}
       {error && <ErrorNote error={error} />}

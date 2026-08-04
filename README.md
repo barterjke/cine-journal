@@ -10,24 +10,50 @@ A film journal / social platform, split into a **Rust API** and a **React fronte
 
 The design is a 1:1 re-creation of a **Google Stitch** export — "Lumi Cinema Social", in an
 *Editorial Minimalism* style. The first four screens were built as static HTML; that version
-is kept under `reference/` as the source of truth for both the markup and the data.
+is kept under `reference/` as the source of truth for the markup, and for the demo dataset
+that stands in when TMDB isn't configured.
 
 ```
-backend/     Rust + Axum API. Serves the demo dataset as JSON, plus the images.
+backend/     Rust + Axum API. Films from TMDB, social layer in SQLite, plus the images.
 frontend/    React + Vite + TypeScript. Renders the six screens from the API.
 reference/   The original static HTML re-creation and the Stitch exports it came from.
 ```
 
-The backend holds no database. Content lives in three layers that never mix:
+## Where the data comes from
 
-- `data.rs` — a static module transcribed verbatim from the demo markup, so every string,
-  rating, year, and alt text matches the original. Immutable.
-- `state.rs` — what the visitor changed this session (watchlist, ratings, likes, posts),
-  in memory only. Lost on restart.
-- `hydrate.rs` — folds the second into the first on the way out, so `data` never has to
-  know a store exists.
+Three layers that never mix:
+
+- **Films** — [TMDB](https://www.themoviedb.org/), live, via `tmdb/` and the `content.rs`
+  seam. Titles, posters, backdrops, runtimes, cast, galleries, crowd ratings and the
+  long-form reviews are all real. With no token configured, `data.rs` stands in — see
+  *Demo mode* below.
+- **The social layer + the visitor's own actions** — SQLite (`db.rs`). Friends, the stories
+  rail, live-discussion rooms and comment threads have no upstream equivalent (TMDB's
+  `/reviews` is flat prose with no replies), so they're seeded there; the visitor's
+  watchlist, ratings, likes and posted comments live in the same file and survive a
+  restart.
+- **`hydrate.rs`** — folds the second into the first on the way out, so neither layer has to
+  know about the other.
+
+Rows in the social layer carry no film ids: at request time template *i* is paired with
+trending film *i*, so the rail can't go stale and the DB holds no ids that could rot.
+
+### Demo mode
+
+Without `TMDB_TOKEN` the backend does not fail to start — it serves the invented dataset in
+`data.rs` (1015 lines transcribed verbatim from the Stitch export) and every screen shows a
+banner saying the films are made up, with a link to get a free token. `GET /api/status`
+reports which mode is live; `DemoBanner` in `frontend/src/components/Chrome.tsx` renders it.
+
+The same banner appears with a different message when a token *is* present but TMDB rejected
+it or is unreachable — a flaky upstream degrades to the demo data rather than to a blank
+screen.
 
 ## Run it
+
+Copy `.env.example` to `.env` and paste in a TMDB **API Read Access Token** (the long v4
+JWT), free from [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api). Skip
+this to run in demo mode.
 
 Two terminals:
 
@@ -39,8 +65,17 @@ cd frontend && npm install && npm run dev   # UI on http://localhost:5173
 Then open http://localhost:5173. Vite proxies `/api` and `/img` to the backend, so the
 browser only ever talks to one origin.
 
+The SQLite file is created on first run at `backend/cine-journal.db` (gitignored;
+`DATABASE_PATH` overrides it) and seeded only when it's empty, so a restart neither
+duplicates the friends rail nor clobbers anything you changed. Delete the file to start over.
+
 Override the API port with `PORT=4000 cargo run` (and `API_URL=http://127.0.0.1:4000
 npm run dev` to match).
+
+The token is read once at startup and never logged — the log line is `tmdb: enabled` or
+`tmdb: disabled` and nothing more. It travels in an `Authorization: Bearer` header rather
+than as TMDB's `?api_key=` query parameter, which the request-tracing layer would print.
+`.env` is gitignored; `.env.example` is the committed template.
 
 ## Screens
 
@@ -50,7 +85,7 @@ npm run dev` to match).
 | Friend Review — Desktop | `/review` | `reference/cine-journal/review.html` |
 | Movie Feed — Mobile | `/feed-mobile` | `reference/cine-journal/feed-mobile.html` |
 | Friend Review — Mobile | `/review-mobile` | `reference/cine-journal/review-mobile.html` |
-| Movie Detail | `/movie/:id` | `reference/stitch_lumi_cinema_social 2/movie_detail_desktop/` |
+| Movie Detail | `/movie/:id` | `reference/movie page/` |
 | Search & Filter | `/search` | `reference/stitch_lumi_cinema_social 2/movie_search_desktop/` |
 
 The two `*-mobile` routes are the export's separate mobile-only designs, kept as distinct
@@ -60,6 +95,12 @@ device emulation (Chrome: ⌥⌘I → ⌘⇧M).
 The two newer screens came from a second Stitch export and had no static-HTML stage — they
 were built straight from its markup.
 
+The detail screen has been through two designs. The first (`reference/stitch_lumi_cinema_social 2/movie_detail_desktop/`)
+led with a full-bleed 70vh backdrop and a four-tile bento gallery of stills; the current one
+is editorial — three columns, no hero image, no stills — and the backdrop survives only
+behind the Media block's play button. Both references are kept, since the older one is still
+what the search and feed screens were drawn against.
+
 ## What you can do
 
 Every poster and film name links to `/movie/:id`, from all of the feed, search, and the
@@ -67,8 +108,10 @@ friends-activity rail.
 
 - **Watchlist** — the "+" over any poster, and the button on the detail page. One shared
   list, so a film logged on the mobile feed shows as watchlisted on its detail page.
-- **Rating** — click a star on the detail page; click the same one again to clear it.
-  Half-stars come from the left/right half of each glyph.
+- **Rating** — "Rate" on the detail page reveals a five-star picker; click the same star
+  again to clear it. Half-stars come from the left/right half of each glyph.
+- **Trailer** — the detail page's Media tile swaps itself for a YouTube embed. Non-YouTube
+  videos are dropped upstream rather than shown as a play button that can't play.
 - **Search** — text, genre, decade, and minimum rating, with pagination. The state lives in
   the URL, so `/search?q=shift&genre=Sci-Fi&min_rating=4` is shareable and the back button
   works. Text input is debounced 250ms; the filters apply immediately.
@@ -80,20 +123,41 @@ friends-activity rail.
 Mutations are optimistic — the button flips first, then reconciles with what the server
 stored, and rolls back with an inline error if the request failed.
 
+### One caveat on text search
+
+TMDB's `/search/movie` **ignores `with_genres`** (verified: `query=dune` and
+`query=dune&with_genres=878` both report 1095 results), and `/discover/movie` — which does
+filter — has no free-text parameter. So the backend takes two routes:
+
+- **No text** → `/discover/movie` with the genre, decade and rating pushed upstream. Counts
+  and pagination are exact, across all of TMDB — except that TMDB serves no page past 500, so
+  the paginator only ever offers the reachable prefix (500 × 20 upstream items = 1250 of our
+  pages of 8). It won't offer a page the next click would fail on, even when `total_results`
+  is larger. The sidebar's own paginator shows the first page, the last, and a window around
+  the current one; at 1250 pages, a button each is a row that can't wrap.
+- **Text** → `/search/movie`, three pages (60 candidates), with the genre, decade and rating
+  applied locally over that window.
+
+In the second case `total_results` and the facet counts describe matches *within the
+60-candidate window*, not all of TMDB. That's the deliberate trade: one window means a chip's
+count and the results it yields come from the same set, so the leave-one-out promise above
+holds. Counting against all of TMDB while filtering against a window would make the chips lie.
+
 ## API
 
-`GET` endpoints are pure reads. Mutations write to the in-memory visitor state and are
-reflected by every subsequent read.
+`GET` endpoints are pure reads. Mutations write to SQLite and are reflected by every
+subsequent read, including after a restart.
 
 | Endpoint | Returns |
 | --- | --- |
 | `GET /api/health` | `{"status":"ok"}` |
+| `GET /api/status` | `{data_source: "tmdb"｜"demo", message, docs_url}` — drives the demo banner |
 | `GET /api/feed` | Live discussions, recent entries, friends activity |
 | `GET /api/feed/mobile` | Stories rail + poster cards |
-| `GET /api/reviews` | Both long-form reviews |
+| `GET /api/reviews` | The long-form reviews of one trending film |
 | `GET /api/reviews/{id}` | One review; `404` with `{"error":…}` if unknown |
-| `GET /api/movies` | The catalogue as detail pages |
-| `GET /api/movies/{id}` | One detail page — **any** id resolves (see below) |
+| `GET /api/movies` | Detail pages for the current trending films |
+| `GET /api/movies/{id}` | One detail page; `404` if unknown (see below) |
 | `GET /api/search?q=&genre=&year=&min_rating=&page=` | Results, facet counts, page count |
 | `GET /api/watchlist` | The visitor's watchlist as movie ids |
 | `POST /api/movies/{id}/watchlist` | `{on_watchlist}` — body `{"on_watchlist":bool}`, or omit it to toggle |
@@ -102,18 +166,27 @@ reflected by every subsequent read.
 | `POST /api/reviews/{id}/comments` | The whole review, with the comment appended |
 | `POST /api/reviews/{id}/comments/{cid}/like` | `{liked, like_count}` — toggles |
 | `POST /api/reviews/{id}/comments/{cid}/replies` | The whole review, with the reply attached |
-| `/img/*` | The export's posters, avatars, and stills |
+| `/img/*` | The export's avatars and the demo dataset's posters and stills |
 
 The two comment endpoints return the whole review rather than just the new row, so the
 thread, the "Conversation (n)" heading, and the row itself all update from one response.
 
-`GET /api/movies/{id}` never 404s. The catalogue only has details for a handful of films,
-and only one of them (Neon Reverie) was actually designed, so every film borrows its
-synopsis, cast, gallery, and credits — the title is the only thing that varies. An id that
-isn't in the catalogue at all gets a title guessed from the slug (`/movie/some-quiet-film`
-→ "Some Quiet Film") rather than a 404, so a hand-typed URL doesn't look broken either.
-This is demo scaffolding, not a design decision — the endpoint should 404 once there is
-real content behind it.
+### Ids
+
+Film ids are `<tmdb_id>-<slug>` — `157336-interstellar`. Only the leading integer is parsed,
+so `/movie/157336` works too, and the slug is there to make a pasted URL readable. A demo
+slug can never collide with one: those never start with a digit.
+
+`GET /api/movies/{id}` returns a real `404` for an id TMDB doesn't know. In demo mode it
+still resolves any id — the catalogue has details for only a handful of films, only one of
+which (Neon Reverie) was actually designed, so every film borrows its synopsis, cast and
+gallery, and an unknown slug gets a title guessed from it (`/movie/some-quiet-film` →
+"Some Quiet Film"). That's scaffolding for a dataset with nothing behind it, and it goes
+away as soon as there is.
+
+Review ids are `<tmdb_movie_id>-<tmdb_review_id>`. Which reviews exist depends on what's
+trending, so the two review screens fetch `GET /api/reviews` and take the first and second
+entry rather than naming an id.
 
 Ratings travel as `rating_half_stars` — an integer 0–10 rather than a float. The screens
 draw discrete full/half/empty star glyphs, and integers keep that exact with no rounding
@@ -121,12 +194,31 @@ ambiguity. `frontend/src/components/StarRating.tsx` is the only place that decod
 `SearchResult.star_rating` is the exception: it's a crowd average shown as a number, so it
 is genuinely fractional.
 
+### Backend layout
+
+```
+tmdb/mod.rs   HTTP client: bearer auth, a TTL cache, one method per endpoint
+tmdb/dto.rs   serde structs for the TMDB payloads — only the fields we render
+tmdb/map.rs   dto -> models::*, pure and unit-tested against recorded fixtures
+db.rs         SQLite: schema, seed, and the read/write helpers
+content.rs    the seam — every screen, backed by TMDB or by `data`
+data.rs       the demo dataset, as it was when it was the only dataset
+hydrate.rs    folds the visitor's deltas into the content, unchanged
+routes.rs     handlers; they call `content::` and never touch either source
+```
+
+Tests run offline: `tmdb/map.rs` deserializes recorded responses from
+`backend/tests/fixtures/`, and the DB tests use `Connection::open_in_memory()`. One of them
+checks the transcribed genre table against TMDB's real list by id, so a renamed genre
+upstream fails a test rather than a request.
+
 ### No authentication
 
 There is one visitor, shared by everyone who can reach the port, and the mutation endpoints
 take no credentials. That is fine for a local demo and is why the backend binds
 `127.0.0.1`. **Do not expose it publicly** without putting real auth in front of the writes
-— see the note at the top of `backend/src/main.rs`.
+— see the note at the top of `backend/src/main.rs`. This matters more now than it did when
+the visitor state was in memory: writes land in a real file on disk, and nothing prunes it.
 
 ## Frontend notes
 
@@ -139,6 +231,12 @@ defaults — are carried over in `frontend/src/index.css`.
 Two export quirks are preserved on purpose and documented in the files that keep them: the
 mobile feed's square poster corners (the markup used `rounded-DEFAULT`, which emits no CSS)
 and its 20px titles.
+
+Two are per-poster art direction with no upstream equivalent, so they only appear in demo
+mode: the third search card's desaturated poster (`grayscale`) and the Gallery heading's
+"12 Stills" over a 4-tile grid. `still_count` is still carried separately from
+`gallery.length` — in TMDB mode it's the film's real backdrop count, which also exceeds the
+four tiles shown, so the field means the same thing in both modes.
 
 Three are deliberately *not* preserved, all for the same reason — in a static mock a dead
 end is a still image, but in an SPA it reads as a bug:
@@ -171,7 +269,13 @@ frontend owns the class vocabulary — see `SHAPE_CLASSES` in `MovieDetail.tsx`.
 Image `src`es are normalized to root-relative in `Image::new`. The export was a flat
 directory, so `img/poster.jpg` resolved from every page; in an SPA it doesn't — on
 `/movie/red-shift` the browser asks for `/movie/img/poster.jpg` and the dev server answers
-with `index.html`. Fixing it in one constructor keeps all ~60 call sites verbatim.
+with `index.html`. Fixing it in one constructor keeps all ~60 call sites verbatim. Anything
+with a scheme passes through untouched, which is how TMDB's CDN URLs and the monogram
+`data:` URI below both survive it.
+
+Review authors whose TMDB profile has no picture — more than half of them — get an initials
+monogram rather than a stock photograph. Putting one of the export's faces on a majority of
+real reviews would attribute them to someone who didn't write them.
 
 Fidelity was verified by rendering each route in headless Chrome and comparing against the
 export's reference screenshots in `reference/stitch_lumi_cinema_social*/*/screen.png`. Use

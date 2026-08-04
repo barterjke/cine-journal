@@ -14,7 +14,14 @@ import type { Feed as FeedData, FeedEntry, FriendActivity, LiveDiscussion } from
 import { api } from '../api'
 import { useApi } from '../useApi'
 import { useAction } from '../useAction'
-import { ActionError, BottomNavBar, ErrorNote, Loading, TopAppBar } from '../components/Chrome'
+import {
+  ActionError,
+  BottomNavBar,
+  DemoBanner,
+  ErrorNote,
+  Loading,
+  TopAppBar,
+} from '../components/Chrome'
 import { StarRating } from '../components/StarRating'
 
 function LiveCard({ item }: { item: LiveDiscussion }) {
@@ -212,6 +219,7 @@ export function Feed() {
   return (
     <div className="bg-background text-on-background min-h-screen font-body-md text-body-md overflow-x-hidden selection:bg-primary-container selection:text-on-primary-container">
       <TopAppBar active="feed" />
+      <DemoBanner />
 
       {loading && <Loading />}
       {error && <ErrorNote error={error} />}
@@ -311,11 +319,13 @@ export function Feed() {
                   <ActivityItem key={item.id} item={item} />
                 ))}
               </div>
+              {/* The export named Elena here. Who wrote the featured review now
+                  depends on what's trending, so the link can't name anyone. */}
               <Link
                 to="/review"
                 className="font-label-sm text-label-sm text-primary uppercase tracking-widest hover:opacity-70 transition-opacity"
               >
-                Read Elena's review →
+                Read the featured review →
               </Link>
             </div>
           </aside>

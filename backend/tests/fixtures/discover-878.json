@@ -1,0 +1,424 @@
+{
+  "page": 1,
+  "results": [
+    {
+      "adult": false,
+      "backdrop_path": "/qeQJx07rK2xm8SD2sJxFKhE7gs0.jpg",
+      "genre_ids": [
+        878,
+        28,
+        12
+      ],
+      "id": 969681,
+      "title": "Spider-Man: Brand New Day",
+      "original_language": "en",
+      "original_title": "Spider-Man: Brand New Day",
+      "overview": "Fighting crime full-time as Spider-Man in a world that doesn't remember him—and the pressure of seeing his old friends move on without him—sparks a change in Peter Parker he may not have the power to control. But that transformation might also be the only thing that can stop a shocking new threat to the city and those he loves - a powerful villain no one can even see.",
+      "popularity": 2011.4042,
+      "poster_path": "/iPOn6DinuVyLY17YM9mKuPofV08.jpg",
+      "release_date": "2026-07-28",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.971,
+      "vote_count": 861
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/4X2YSe8PaYbsBqX3TDmmIU4vOju.jpg",
+      "genre_ids": [
+        28,
+        12,
+        878
+      ],
+      "id": 1081003,
+      "title": "Supergirl",
+      "original_language": "en",
+      "original_title": "Supergirl",
+      "overview": "When an unexpected and ruthless adversary strikes too close to home, Kara Zor-El, aka Supergirl, reluctantly joins forces with an unlikely companion on an epic, interstellar journey of vengeance and justice.",
+      "popularity": 497.4835,
+      "poster_path": "/1QCWdqzTfh2x9UylVpspIU6QTuM.jpg",
+      "release_date": "2026-06-24",
+      "softcore": false,
+      "video": false,
+      "vote_average": 6.736,
+      "vote_count": 1500
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/14QbnygCuTO0vl7CAFmPf1fgZfV.jpg",
+      "genre_ids": [
+        28,
+        12,
+        878
+      ],
+      "id": 634649,
+      "title": "Spider-Man: No Way Home",
+      "original_language": "en",
+      "original_title": "Spider-Man: No Way Home",
+      "overview": "Peter Parker is unmasked and no longer able to separate his normal life from the high-stakes of being a super-hero. When he asks for help from Doctor Strange the stakes become even more dangerous, forcing him to discover what it truly means to be Spider-Man.",
+      "popularity": 487.6625,
+      "poster_path": "/1g0dhYtq4irTY1GPXvft6k4YLjm.jpg",
+      "release_date": "2021-12-15",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.936,
+      "vote_count": 22453
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/yQIdU11DYQQp0neGtGtGxbGfRer.jpg",
+      "genre_ids": [
+        28,
+        14,
+        878
+      ],
+      "id": 454639,
+      "title": "Masters of the Universe",
+      "original_language": "en",
+      "original_title": "Masters of the Universe",
+      "overview": "After being separated for 15 years, the Sword of Power leads Prince Adam back to Eternia, where he discovers his home shattered under the fiendish rule of Skeletor. To save his family and his world, Adam must join forces with his closest allies, Teela and Duncan/Man-At-Arms, and embrace his true destiny as He-Man — the most powerful man in the universe.",
+      "popularity": 393.722,
+      "poster_path": "/oRuyGUHdoaQxWP3SDfafGkStxTC.jpg",
+      "release_date": "2026-06-03",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.275,
+      "vote_count": 1546
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/flxau5Iu7bChQHsESqvGZ3FQRaI.jpg",
+      "genre_ids": [
+        878,
+        53
+      ],
+      "id": 1275779,
+      "title": "Disclosure Day",
+      "original_language": "en",
+      "original_title": "Disclosure Day",
+      "overview": "A cybersecurity expert becomes a whistleblower after uncovering secrets about aliens, putting him on the run from a corporation. Meanwhile, a meteorologist experiencing strange phenomena joins forces with him to prove there's life beyond our understanding.",
+      "popularity": 394.3346,
+      "poster_path": "/AnJ8IQJI23hNpYXVNaythu061Ru.jpg",
+      "release_date": "2026-06-10",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.427,
+      "vote_count": 2325
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/wjwMC7u3xWKkrronolBqsIy4L0L.jpg",
+      "genre_ids": [
+        27,
+        9648,
+        878
+      ],
+      "id": 1083381,
+      "title": "Backrooms",
+      "original_language": "en",
+      "original_title": "Backrooms",
+      "overview": "A strange doorway appears in the basement of a furniture showroom.",
+      "popularity": 258.4743,
+      "poster_path": "/rhGx6E3qRNMgj3i5su2oukNHwIQ.jpg",
+      "release_date": "2026-05-27",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.097,
+      "vote_count": 2480
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/jDvxsBemt2Iyslg7qn2WMzgxz23.jpg",
+      "genre_ids": [
+        28,
+        27,
+        878
+      ],
+      "id": 1375646,
+      "title": "Colony",
+      "original_language": "ko",
+      "original_title": "군체",
+      "overview": "Professor Se-jeong is thrust into a bloody nightmare when a rapidly mutating virus is released during a biotech conference causing authorities to seal the facility. Trapped inside with no escape, Se-jeong along with a small group of survivors must fight to stay alive while the infected undergo horrific transformations.",
+      "popularity": 210.7822,
+      "poster_path": "/tN799oUR0f1gUKDYdMNrDaY7I51.jpg",
+      "release_date": "2026-05-21",
+      "softcore": false,
+      "video": false,
+      "vote_average": 8.094,
+      "vote_count": 388
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/zQ8AxTPiCiS5nnwXpwTBPBHSaa5.jpg",
+      "genre_ids": [
+        28,
+        878
+      ],
+      "id": 557,
+      "title": "Spider-Man",
+      "original_language": "en",
+      "original_title": "Spider-Man",
+      "overview": "After being bitten by a genetically altered spider at Oscorp, nerdy but endearing high school student Peter Parker is endowed with amazing powers to become the superhero known as Spider-Man.",
+      "popularity": 188.8814,
+      "poster_path": "/nXdAh5vUwERL4WGVMaee8RoDEAS.jpg",
+      "release_date": "2002-05-01",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.339,
+      "vote_count": 21001
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/fn4n6uOYcB6Uh89nbNPoU2w80RV.jpg",
+      "genre_ids": [
+        28,
+        12,
+        878
+      ],
+      "id": 315635,
+      "title": "Spider-Man: Homecoming",
+      "original_language": "en",
+      "original_title": "Spider-Man: Homecoming",
+      "overview": "Following the events of Captain America: Civil War, Peter Parker, with the help of his mentor Tony Stark, tries to balance his life as an ordinary high school student in Queens, New York City, with fighting crime as his superhero alter ego Spider-Man as a new threat, the Vulture, emerges.",
+      "popularity": 180.7367,
+      "poster_path": "/c24sv2weTHPsmDa7jEMN0m2P3RT.jpg",
+      "release_date": "2017-07-05",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.331,
+      "vote_count": 23466
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/8Tfys3mDZVp4tNoH2ktm06a0Tau.jpg",
+      "genre_ids": [
+        878,
+        12
+      ],
+      "id": 687163,
+      "title": "Project Hail Mary",
+      "original_language": "en",
+      "original_title": "Project Hail Mary",
+      "overview": "Science teacher Ryland Grace wakes up on a spaceship light years from home with no recollection of who he is or how he got there. As his memory returns, he begins to uncover his mission: solve the riddle of the mysterious substance causing the sun to die out. He must call on his scientific knowledge and unorthodox ideas to save everything on Earth from extinction.",
+      "popularity": 162.7023,
+      "poster_path": "/yihdXomYb5kTeSivtFndMy5iDmf.jpg",
+      "release_date": "2026-03-15",
+      "softcore": false,
+      "video": false,
+      "vote_average": 8.658,
+      "vote_count": 6748
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/uOQtyMV2G9yJvc0s14zmLoRC5H9.jpg",
+      "genre_ids": [
+        878,
+        28,
+        14
+      ],
+      "id": 1698856,
+      "title": "Master of the Universe",
+      "original_language": "en",
+      "original_title": "Master of the Universe",
+      "overview": "A young man must use his untapped powers to fight back against an evil alien and their army, who will stop at nothing to take over Earth and then the universe.",
+      "popularity": 124.9473,
+      "poster_path": "/a77OcLmarwiBJakOPPC36m58t4L.jpg",
+      "release_date": "2026-05-22",
+      "softcore": false,
+      "video": false,
+      "vote_average": 4.763,
+      "vote_count": 40
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/MJcERawyqGqJdPsOBc0C449hQ9.jpg",
+      "genre_ids": [
+        28,
+        12,
+        878
+      ],
+      "id": 1228710,
+      "title": "The Mandalorian and Grogu",
+      "original_language": "en",
+      "original_title": "The Mandalorian and Grogu",
+      "overview": "The evil Empire has fallen, and Imperial warlords remain scattered throughout the galaxy. As the fledgling New Republic works to protect everything the Rebellion fought for, they have enlisted the help of legendary Mandalorian bounty hunter Din Djarin and his young apprentice Grogu.",
+      "popularity": 109.9912,
+      "poster_path": "/7GV5rrUJf0BRUhoh2cyFoeNthlQ.jpg",
+      "release_date": "2026-05-20",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.426,
+      "vote_count": 1107
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/vamhMTvh9m9zFHDoR0v1nRtf6T4.jpg",
+      "genre_ids": [
+        28,
+        12,
+        878
+      ],
+      "id": 429617,
+      "title": "Spider-Man: Far From Home",
+      "original_language": "en",
+      "original_title": "Spider-Man: Far From Home",
+      "overview": "Peter Parker and his friends go on a summer trip to Europe. However, they will hardly be able to rest - Peter will have to agree to help Nick Fury uncover the mystery of creatures that cause natural disasters and destruction throughout the continent.",
+      "popularity": 114.0726,
+      "poster_path": "/4q2NNj4S5dG2RLF9CpXsej7yXl.jpg",
+      "release_date": "2019-06-28",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.395,
+      "vote_count": 17244
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/sdZSjtGUTSN8B3al5o0f2WoQfQQ.jpg",
+      "genre_ids": [
+        878,
+        12,
+        14
+      ],
+      "id": 83533,
+      "title": "Avatar: Fire and Ash",
+      "original_language": "en",
+      "original_title": "Avatar: Fire and Ash",
+      "overview": "In the wake of the devastating war against the RDA and the loss of their eldest son, Jake Sully and Neytiri face a new threat on Pandora: the Ash People, a violent and power-hungry Na'vi tribe led by the ruthless Varang. Jake's family must fight for their survival and the future of Pandora in a conflict that pushes them to their emotional and physical limits.",
+      "popularity": 95.5319,
+      "poster_path": "/bRBeSHfGHwkEpImlhxPmOcUsaeg.jpg",
+      "release_date": "2025-12-17",
+      "softcore": false,
+      "video": false,
+      "vote_average": 7.636,
+      "vote_count": 4030
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/ebcOSaZLxdCMHDjJJQzx5PiEyzl.jpg",
+      "genre_ids": [
+        27,
+        878,
+        53
+      ],
+      "id": 1307118,
+      "title": "Soulm8te",
+      "original_language": "en",
+      "original_title": "Soulm8te",
+      "overview": "After a ruthless tech giant acquires a small robotics company, a grieving engineer is tasked with testing their new AI companion. But when he attempts to reprogram her to be a truly sentient soulmate, she develops needs of her own—unleashing a relentless spree of precision-engineered mayhem.",
+      "popularity": 89.4643,
+      "poster_path": "/bNErActDctl6cdUGw9pnjSCmyhQ.jpg",
+      "release_date": "2026-07-31",
+      "softcore": false,
+      "video": false,
+      "vote_average": 6.382,
+      "vote_count": 38
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/hwg3vj8MAXM8WISFnvjJsXXLHdw.jpg",
+      "genre_ids": [
+        28,
+        878,
+        12
+      ],
+      "id": 1656061,
+      "title": "Immortal Combat",
+      "original_language": "en",
+      "original_title": "Immortal Combat",
+      "overview": "History's greatest warriors, including Genghis Khan and Joan of Arc, are summoned by a shadowy organization to fight in a battle to the death. But unknown to their captors, the fighters have been plotting to turn the tables and dismantle the deadly enterprise from within.",
+      "popularity": 85.9357,
+      "poster_path": "/mhRAgvQ04DTE4zQN3OSyc9Lonj3.jpg",
+      "release_date": "2026-04-24",
+      "softcore": false,
+      "video": false,
+      "vote_average": 4.853,
+      "vote_count": 17
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/hS4FcOM5y71FurkBQgDLTBxmWZh.jpg",
+      "genre_ids": [
+        878,
+        27,
+        53
+      ],
+      "id": 1469342,
+      "title": "Her Private Hell",
+      "original_language": "en",
+      "original_title": "Her Private Hell",
+      "overview": "When a mysterious mist engulfs a futuristic metropolis, unleashing a deadly and elusive entity, a troubled young woman searches for her father. Her quest collides with an American GI on a harrowing odyssey to rescue his daughter from Hell.",
+      "popularity": 85.3193,
+      "poster_path": "/kiFacg75KVjy0AM3S4QmbPas8zL.jpg",
+      "release_date": "2026-07-23",
+      "softcore": false,
+      "video": false,
+      "vote_average": 5.0,
+      "vote_count": 26
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/HVcza6tJtWFrLriuh3Ano4Vt46.jpg",
+      "genre_ids": [
+        28,
+        12,
+        878
+      ],
+      "id": 1930,
+      "title": "The Amazing Spider-Man",
+      "original_language": "en",
+      "original_title": "The Amazing Spider-Man",
+      "overview": "A teenage Peter Parker grapples with both high school and amazing super-human crises as his alter-ego Spider-Man.",
+      "popularity": 82.4019,
+      "poster_path": "/jexoNYnPd6vVrmygwF6QZmWPFdu.jpg",
+      "release_date": "2012-06-23",
+      "softcore": false,
+      "video": false,
+      "vote_average": 6.746,
+      "vote_count": 18779
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/mDfJG3LC3Dqb67AZ52x3Z0jU0uB.jpg",
+      "genre_ids": [
+        12,
+        28,
+        878
+      ],
+      "id": 299536,
+      "title": "Avengers: Infinity War",
+      "original_language": "en",
+      "original_title": "Avengers: Infinity War",
+      "overview": "As the Avengers and their allies have continued to protect the world from threats too large for any one hero to handle, a new danger has emerged from the cosmic shadows: Thanos. A despot of intergalactic infamy, his goal is to collect all six Infinity Stones, artifacts of unimaginable power, and use them to inflict his twisted will on all of reality. Everything the Avengers have fought for has led up to this moment - the fate of Earth and existence itself has never been more uncertain.",
+      "popularity": 83.8358,
+      "poster_path": "/7WsyChQLEftFiDOVTGkv3hFpyyt.jpg",
+      "release_date": "2018-04-25",
+      "softcore": false,
+      "video": false,
+      "vote_average": 8.24,
+      "vote_count": 32452
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/k0hlAzTryCYX1O1LyC6P8tAa8s0.jpg",
+      "genre_ids": [
+        28,
+        12,
+        878
+      ],
+      "id": 102382,
+      "title": "The Amazing Spider-Man 2",
+      "original_language": "en",
+      "original_title": "The Amazing Spider-Man 2",
+      "overview": "For Peter Parker, life is busy. Between taking out the bad guys as Spider-Man and spending time with the person he loves, Gwen Stacy, high school graduation cannot come quickly enough. Peter has not forgotten about the promise he made to Gwen’s father to protect her by staying away, but that is a promise he cannot keep. Things will change for Peter when a new villain, Electro, emerges, an old friend, Harry Osborn, returns, and Peter uncovers new clues about his past.",
+      "popularity": 79.6107,
+      "poster_path": "/dGjoPttcbKR5VWg1jQuNFB247KL.jpg",
+      "release_date": "2014-04-16",
+      "softcore": false,
+      "video": false,
+      "vote_average": 6.549,
+      "vote_count": 14467
+    }
+  ],
+  "total_pages": 1344,
+  "total_results": 26868
+}

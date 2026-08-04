@@ -1,16 +1,17 @@
-//! Mutable state for the interactive parts of the demo.
+//! What the visitor changed, and the handles the handlers need to reach it.
 //!
-//! Everything lives in memory behind one `RwLock` and is lost on restart — there
-//! is no database and no per-user identity, so "the visitor" is whoever is
-//! talking to this process. That is enough for a design demo and keeps the
-//! static content in `data` authoritative: the store only ever holds the deltas
-//! the visitor creates (watchlist adds, ratings, likes, posted comments).
+//! `Store` is a **snapshot**, rebuilt from SQLite once per request by
+//! `db::load_store` and thrown away after. It holds only deltas — watchlist adds,
+//! ratings, likes, posted comments — which `hydrate` folds into the content on the
+//! way out, so the film data stays authoritative wherever it came from.
 //!
-//! Locks are held for the length of a single field access. Nothing awaits while
-//! holding one, so `std::sync::RwLock` is fine here.
+//! There is still no per-user identity: "the visitor" is whoever is talking to
+//! this process, and everyone shares one row set. What changed with SQLite is that
+//! their changes now outlive the process.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, RwLock};
+
+use crate::content::{Db, Source};
 
 /// A comment the visitor posted, before it is dressed up as a `models::Comment`.
 #[derive(Debug, Clone)]
@@ -26,6 +27,12 @@ pub struct PostedReply {
     pub body: String,
 }
 
+/// One request's view of the visitor's state.
+///
+/// Ordered maps rather than hash maps because `hydrate` renders posted content in
+/// insertion order and the ids sort the way they were created — `comment-1` before
+/// `comment-2`. Writes go straight to SQLite (see `db`), never through here, so
+/// there is nothing to flush.
 #[derive(Debug, Default)]
 pub struct Store {
     /// Movie ids on the watchlist.
@@ -40,30 +47,27 @@ pub struct Store {
     pub posted_comments: BTreeMap<String, Vec<PostedComment>>,
     /// (review id, comment id) -> replies the visitor posted, oldest first.
     pub posted_replies: BTreeMap<(String, String), Vec<PostedReply>>,
-    counter: u64,
 }
 
-impl Store {
-    /// Monotonic id for freshly posted content, e.g. "comment-3".
-    pub fn next_id(&mut self, prefix: &str) -> String {
-        self.counter += 1;
-        format!("{prefix}-{}", self.counter)
-    }
-}
-
-#[derive(Clone, Default)]
+/// Everything a handler needs: where films come from, and where the visitor's own
+/// rows live.
+///
+/// `Source` is behind the same `Arc` as the rest because axum clones the state for
+/// every request and `Tmdb` owns a connection pool and a cache — cloning that per
+/// request would throw the cache away each time.
+#[derive(Clone)]
 pub struct AppState {
-    pub store: Arc<RwLock<Store>>,
+    pub source: std::sync::Arc<Source>,
+    pub db: Db,
 }
 
 impl AppState {
-    /// Read the store. Panics only if a writer panicked while holding the lock,
-    /// which would mean the process is already in an unknown state.
-    pub fn read(&self) -> std::sync::RwLockReadGuard<'_, Store> {
-        self.store.read().expect("store lock poisoned")
+    pub fn new(source: Source, db: Db) -> Self {
+        Self { source: std::sync::Arc::new(source), db }
     }
 
-    pub fn write(&self) -> std::sync::RwLockWriteGuard<'_, Store> {
-        self.store.write().expect("store lock poisoned")
+    /// A fresh snapshot of the visitor's state.
+    pub fn store(&self) -> Store {
+        crate::content::store(&self.db)
     }
 }

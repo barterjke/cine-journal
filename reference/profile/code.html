@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Profile - CinéJournal</title>
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Google Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:ital,wght@0,100..900;1,100..900&amp;family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Tailwind Config injected from system prompt -->
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "surface-container-highest": "#e5e2e1",
+                    "tertiary-fixed": "#ffdbd1",
+                    "secondary-fixed": "#ffdad5",
+                    "primary-fixed": "#dce1ff",
+                    "outline-variant": "#c3c5d9",
+                    "on-primary-fixed": "#001551",
+                    "on-primary": "#ffffff",
+                    "on-tertiary-fixed-variant": "#872100",
+                    "surface-bright": "#fcf9f8",
+                    "on-secondary-fixed-variant": "#930005",
+                    "secondary-fixed-dim": "#ffb4aa",
+                    "surface-container-high": "#eae7e7",
+                    "surface-container": "#f0eded",
+                    "error": "#ba1a1a",
+                    "primary-fixed-dim": "#b6c4ff",
+                    "primary-container": "#0055ff",
+                    "on-error": "#ffffff",
+                    "surface-tint": "#004dea",
+                    "on-surface": "#1c1b1b",
+                    "secondary-container": "#e2241f",
+                    "surface-dim": "#dcd9d9",
+                    "inverse-on-surface": "#f3f0ef",
+                    "on-tertiary-container": "#ffe1d9",
+                    "primary": "#0041c8",
+                    "surface-variant": "#e5e2e1",
+                    "on-background": "#1c1b1b",
+                    "secondary": "#bc000a",
+                    "tertiary-container": "#c13301",
+                    "inverse-primary": "#b6c4ff",
+                    "on-primary-container": "#e3e6ff",
+                    "tertiary-fixed-dim": "#ffb5a0",
+                    "outline": "#737688",
+                    "on-secondary": "#ffffff",
+                    "on-error-container": "#93000a",
+                    "surface-container-low": "#f6f3f2",
+                    "on-tertiary-fixed": "#3b0900",
+                    "on-secondary-fixed": "#410001",
+                    "inverse-surface": "#313030",
+                    "surface": "#fcf9f8",
+                    "error-container": "#ffdad6",
+                    "tertiary": "#972500",
+                    "on-primary-fixed-variant": "#0039b3",
+                    "surface-container-lowest": "#ffffff",
+                    "on-secondary-container": "#fffbff",
+                    "on-surface-variant": "#434656",
+                    "on-tertiary": "#ffffff",
+                    "background": "#fcf9f8"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "lg": "24px",
+                    "md": "16px",
+                    "xxl": "80px",
+                    "xs": "4px",
+                    "margin-mobile": "16px",
+                    "xl": "48px",
+                    "gutter": "24px",
+                    "unit": "4px",
+                    "margin-desktop": "64px",
+                    "sm": "8px"
+            },
+            "fontFamily": {
+                    "body-lg": [
+                            "Hanken Grotesk"
+                    ],
+                    "display-lg": [
+                            "Hanken Grotesk"
+                    ],
+                    "body-md": [
+                            "Hanken Grotesk"
+                    ],
+                    "headline-lg": [
+                            "Hanken Grotesk"
+                    ],
+                    "label-sm": [
+                            "JetBrains Mono"
+                    ],
+                    "headline-md": [
+                            "Hanken Grotesk"
+                    ],
+                    "headline-lg-mobile": [
+                            "Hanken Grotesk"
+                    ]
+            },
+            "fontSize": {
+                    "body-lg": [
+                            "18px",
+                            {
+                                    "lineHeight": "28px",
+                                    "fontWeight": "400"
+                            }
+                    ],
+                    "display-lg": [
+                            "48px",
+                            {
+                                    "lineHeight": "56px",
+                                    "letterSpacing": "-0.02em",
+                                    "fontWeight": "700"
+                            }
+                    ],
+                    "body-md": [
+                            "16px",
+                            {
+                                    "lineHeight": "24px",
+                                    "fontWeight": "400"
+                            }
+                    ],
+                    "headline-lg": [
+                            "32px",
+                            {
+                                    "lineHeight": "40px",
+                                    "letterSpacing": "-0.01em",
+                                    "fontWeight": "600"
+                            }
+                    ],
+                    "label-sm": [
+                            "12px",
+                            {
+                                    "lineHeight": "16px",
+                                    "letterSpacing": "0.05em",
+                                    "fontWeight": "500"
+                            }
+                    ],
+                    "headline-md": [
+                            "20px",
+                            {
+                                    "lineHeight": "28px",
+                                    "fontWeight": "600"
+                            }
+                    ],
+                    "headline-lg-mobile": [
+                            "24px",
+                            {
+                                    "lineHeight": "32px",
+                                    "fontWeight": "600"
+                            }
+                    ]
+            }
+    },
+        },
+      }
+    </script>
+<style>
+        body {
+            background-color: theme('colors.surface');
+            color: theme('colors.on-surface');
+            font-family: theme('fontFamily.body-md');
+        }
+        
+        /* Subtle poster inner stroke for light posters against white bg */
+        .poster-card {
+            position: relative;
+        }
+        .poster-card::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: inherit;
+            pointer-events: none;
+        }
+        
+        /* Hide scrollbar for horizontal scroll areas */
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="antialiased min-h-screen flex flex-col pb-24 md:pb-0">
+<!-- TopAppBar -->
+<header class="w-full top-0 sticky z-40 bg-surface border-b border-surface-variant">
+<div class="flex justify-between items-center px-margin-mobile md:px-margin-desktop py-md w-full max-w-7xl mx-auto">
+<!-- Brand -->
+<a class="font-headline-md text-headline-md font-bold text-primary tracking-tight" href="#">
+                CinéJournal
+            </a>
+<!-- Desktop Nav (Hidden on Mobile) -->
+<nav class="hidden md:flex items-center gap-gutter">
+<a class="text-on-surface-variant font-body-md text-body-md hover:text-primary transition-colors cursor-pointer active:opacity-70" href="#">Feed</a>
+<a class="text-on-surface-variant font-body-md text-body-md hover:text-primary transition-colors cursor-pointer active:opacity-70" href="#">Movies</a>
+<a class="text-on-surface-variant font-body-md text-body-md hover:text-primary transition-colors cursor-pointer active:opacity-70" href="#">Friends</a>
+<a class="text-primary font-bold border-b-2 border-primary font-body-md text-body-md cursor-pointer active:opacity-70" href="#">Profile</a>
+</nav>
+<!-- Trailing Actions -->
+<div class="flex items-center gap-sm">
+<button class="p-2 text-on-surface-variant hover:text-primary transition-colors cursor-pointer active:opacity-70 rounded-full hover:bg-surface-container">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="p-2 text-on-surface-variant hover:text-primary transition-colors cursor-pointer active:opacity-70 rounded-full hover:bg-surface-container">
+<span class="material-symbols-outlined" data-icon="cast">cast</span>
+</button>
+</div>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="flex-grow w-full max-w-7xl mx-auto px-margin-mobile md:px-margin-desktop py-xl md:py-xxl flex flex-col gap-md">
+<!-- Profile Header -->
+<section class="flex items-center gap-md text-left py-md">
+<div class="w-24 h-24 shrink-0 rounded-full overflow-hidden border border-surface-variant shadow-sm bg-surface-container relative">
+<img alt="Alex Mercer Profile Picture" class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDNAVbz2es8XxcTXVHxom2A7fWIqtlZNh02G311h7p3Zotx2t3JwaUWqNPpXo6uhgvujQZAwBora0hyAOocudMv0sORrNiHRqc8Hu5TEpE5pz3021rDk4gac6BjibtKdfki4kogW4mv0hQy1kJEx2oZf_7mX03rK7klLnMAnZEGXZOU5mAyyyF-JYXLOxHpTudYI_ezSrYzPha7Fq-Jy-hCyZTCbS07hP95OFaWZkN2-acVhJ_U"/>
+</div>
+<div class="flex flex-col gap-xs flex-grow">
+<div class="flex items-center justify-between">
+<h1 class="font-headline-md text-headline-md text-on-background">Alex Mercer</h1>
+<div class="flex gap-sm">
+<button class="px-4 py-1 bg-primary text-on-primary rounded-full font-label-sm text-label-sm">Edit</button>
+<button class="p-1 border border-surface-variant text-on-background rounded-full hover:bg-surface-container-low transition-colors"><span class="material-symbols-outlined text-sm">share</span></button>
+</div>
+</div>
+<p class="font-label-sm text-label-sm text-outline uppercase tracking-wider">@alexm_cinema • Cinephile since 2018</p>
+<p class="font-body-md text-body-md text-on-surface-variant line-clamp-1">Amateur critic, full-time dreamer. Obsessed with French New Wave and neon-lit neo-noirs.</p>
+</div>
+</section>
+<!-- Favorite Movies (Horizontal Scroll) -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-md">
+<!-- Favorite Films Tile -->
+<div class="bg-surface-container-low rounded-xl p-md border border-surface-variant flex flex-col gap-sm">
+<div class="flex items-center justify-between">
+<h2 class="font-label-sm text-label-sm font-bold uppercase tracking-wider text-outline">Favorite Films</h2>
+<a class="material-symbols-outlined text-primary text-md" href="#">chevron_right</a>
+</div>
+<div class="flex gap-sm overflow-hidden">
+<div class="w-16 aspect-[2/3] rounded bg-surface-container overflow-hidden shrink-0"><img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB4EW894BdcnkO3TFD4xESuyZxhohvrIeGjpKpbdbZA3KbwH8CEqkPPRB8K19UaP2u9M8RzJFQRCOrbLvx-OKQoj-dXC_EK50D9wGeCiyHTAoepdr2rY0xra__5VZqdTNz5AQu1Jl1DG-GH4krjTkoh-xUtyIgYsr787qABJLKS9o7zUAXrWH6-lm95xWLAbOfjSZhoe3w4GFTyP49E0H_3CO74xsM8YbRcvKks_a6Ce-FiA062"/></div>
+<div class="w-16 aspect-[2/3] rounded bg-surface-container overflow-hidden shrink-0"><img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDyzRzI5xUT70peL7M1rqz2tvNxpz8eCRhKYQXrA1tPLYNEbMB34v49crGXoQj0szEwpHOzbeu_d5xNj-RmkIBxPjTWUcv44yEGFntKvNmW5jAzt28I0cfJE_UHLgrF6i524vqDQdomxlgfy0OG0AmO_djx7QBt-w7W7aNMeLUrndtuvUL22WXLL4lGm9lWt3Pk0KP9UINhflPT7B35eFatYyqrb7a2JuAqDFMxDtbCg6vNg-hp"/></div>
+<div class="w-16 aspect-[2/3] rounded bg-surface-container overflow-hidden shrink-0"><img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC_2P0puvCeAl-bSvEJnybUX1adbimyAaiDa1CdTBGKxgrb4WEWug3-tX92UTNKOnBpptjMhcIxglX11aTW0xiqmkCmX27gLRRYDkfStYqzkAtZA3ldpt2-koW9FGsS5mGIsbYIfKG2lKgw78yrHfnBIpqnxKe-qRTmmLiF93RLkLv_aBiTgrW4ZNuIEdDaMRFT_aplA6g2-YYmSTz-BNbQyP3E374uUN0b183st7PNC1yilO96"/></div>
+<div class="w-16 aspect-[2/3] rounded bg-surface-container overflow-hidden shrink-0"><img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCgqA5pgvZzi-T65TalF85FSxtpFn1uQCJIf4WxeB4bXYC4SvEMMLSN_iZS7NkIuyaSl66RF3WFbbDDaodOwpoqw347Qh4nkE-nPqV__M-L1KIAGLtNKfsQb-IrM6uyJYbphOjFW_u5_LJOJZk21kXaloe4bg8ZmFBc8nH4nHW713R9aC4NhQl9kiiS94y9rCEeVPpQR54vZcVdmolemt8Buw0fS7tY_mTscWbkYjkGvzZOk9v5"/></div>
+</div>
+</div>
+<!-- Watchlist Tile -->
+<div class="bg-surface-container-low rounded-xl p-md border border-surface-variant flex flex-col gap-sm">
+<div class="flex items-center justify-between">
+<h2 class="font-label-sm text-label-sm font-bold uppercase tracking-wider text-outline">Watchlist</h2>
+<a class="material-symbols-outlined text-primary text-md" href="#">chevron_right</a>
+</div>
+<div class="flex gap-sm overflow-hidden">
+<div class="w-16 aspect-[2/3] rounded bg-surface-container overflow-hidden shrink-0"><img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC8uNyyZS5sY--KN5FGjdIVI9mbEAfni_6-bKQ72a6ma7brX0D3FQ4JUyLZ8XhA99FE2mWAcDvltxoOFPFYUD-OPOMVXMnsqB-tKmdsrXGrWU6Z2qhiF0I4BSXD-4NOpoIUzkt8ltHnK1Az4YgFOgm8bNKDJ7Twe-bJSTmGJ9HUR32iMwedF_XD01og2uXM3cXKjJRgu7dnSldgJ_oNvg7UqSiJhVS10-iMj7ltUFISn_XL4-em"/></div>
+<div class="w-16 aspect-[2/3] rounded bg-surface-container overflow-hidden shrink-0"><img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBWmKKMyOGAeN0ZaWm6aKCWzmGqyymWBz0hbtIrfJUnBzw_UWY47hnmHZM9c8-qN08QFVWuQDhPwifUb5-GfUe2nCjJKLguAzzo7qp-3f8yjwHRxSEYujR-AVbMy1jlLXh2Ap2nqITVp_2CzHu6ggThCpWd10MFrajrBWRb9vbzx-XsEf0oTV7o7xJ5d8jrLTg1-8FQBu91w85IbuKtixjx_aGh_biv6v-6MIbYpfqnc_RsRicc"/></div>
+<div class="w-16 aspect-[2/3] rounded bg-surface-container overflow-hidden shrink-0"><img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCJe_nITO1vLyn1CYQbu5A_Ie2Cl12nH-z-HVeRXi-AAh4hE58a_qYyQgloZI9hvpd_z3sVRJTDtR0eDMI-KH6J7vX29XCLvwh4wPPbbG1CX1Gy50R42Doh2Unya8SF7kaYETpZqTQXUYEB7M9ETFkGinuKu4l00oISUlj9M2BLNo62UST64T7g-Pe7-cxiAgJ6GrBHqPI8XBqBUjnhVE6L8o-FlYJZkbA24d8o30aFS2LVBOwI"/></div>
+</div>
+</div>
+<!-- Following Tile -->
+<div class="bg-surface-container-low rounded-xl p-md border border-surface-variant flex flex-col gap-sm">
+<div class="flex items-center justify-between">
+<h2 class="font-label-sm text-label-sm font-bold uppercase tracking-wider text-outline">Following (124)</h2>
+<a class="material-symbols-outlined text-primary text-md" href="#">chevron_right</a>
+</div>
+<div class="flex gap-sm">
+<div class="w-8 h-8 rounded-full overflow-hidden border border-surface-variant"><img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC9kmLZ0mjBwfJQBA5eOFZGfSkyP8eCeH7a92sEQJf6y-5gc1GbmIrtxhhwAJPk08quzyOJyKu6avEif04oEj0cTOCZ6cmUMkWCHaPGGQP_1xHfhbEI5vrrVsQS8lPZQ37aTuSu_NqNayapzU3kp1bDLRtaPE5eLFzi9tlMzp3dZUipCTb5K1w2ecfVRa2X0Fv-XJqtySqBo2q9SEJb0ryuvytZ02V6s26YpDPxDsLgl5gGcgdI"/></div>
+<div class="w-8 h-8 rounded-full overflow-hidden border border-surface-variant"><img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAI_tcyW8GnG-9zjnAXJOn8nKTreQc9xRMF6ro7gFcIlJUewW5UfMCEjn-Q6WOegAXpTF8Icz2BXSuS-YPZD8lLpD8mFkXxje9IkM14J4OoeOMwWNEB2yEYSjlPJhIc1avh5vZY1CcClhD03FyHLfgPzxZNjUXHARgmNpyUYZrmoCJ5DJng3A-otUMvbmpXgqpMCUeJ-6IKvNiLwIaoNKirqCV1h08zsbH90N-27TFePN2K2AIm"/></div>
+<div class="w-8 h-8 rounded-full overflow-hidden border border-surface-variant"><img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAd6gKMsUAy9dfztQAew39iGOF8VA9zCXHm87YhUkr6vrMP_PkV9YxJ1ghL14GDgDvrbM7AB6acgpNHjhUa2CTKrbZ25aYRUpeNhtuJJzk4uDE9U6z58ktre3r5AMZTabA5ywDIydxsfOlTbCVCgdkFTXw9Sp8WGZoYxFg_YQhXzvDstK_uD58Gm9AgOBA4n6ladwl3uJOWFvgXC6Mc--uZPHyH8D0zBwn5K6VPdSZtV_Mqxl9Y"/></div>
+</div>
+</div>
+<!-- Recent Reviews Tile -->
+<div class="bg-surface-container-low rounded-xl p-md border border-surface-variant flex flex-col gap-sm">
+<div class="flex items-center justify-between">
+<h2 class="font-label-sm text-label-sm font-bold uppercase tracking-wider text-outline">Recent Reviews</h2>
+<a class="material-symbols-outlined text-primary text-md" href="#">chevron_right</a>
+</div>
+<div class="flex flex-col gap-xs">
+<div class="flex items-center justify-between">
+<span class="font-body-md text-body-md font-bold truncate">Shattered Glass</span>
+<div class="flex text-primary scale-75 origin-right">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">star</span>
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">star</span>
+</div>
+</div>
+<p class="text-sm text-on-surface-variant line-clamp-1">A mesmerizing descent into paranoia...</p>
+</div>
+</div>
+</div>
+<!-- Bento Grid: Wishlist & Friends -->
+<section class="grid grid-cols-1 md:grid-cols-12 gap-gutter">
+<!-- Wishlist (Takes up more space) -->
+<div class="md:col-span-8 flex flex-col gap-md">
+<div class="flex items-baseline justify-between mb-sm">
+<h2 class="font-headline-lg-mobile md:font-headline-lg text-headline-lg-mobile md:text-headline-lg text-on-background">Watchlist</h2>
+</div>
+<div class="grid grid-cols-2 sm:grid-cols-3 gap-md">
+<!-- Wishlist Item 1 -->
+<div class="relative group cursor-pointer rounded-lg overflow-hidden poster-card aspect-[2/3] bg-surface-container">
+<img alt="Blade of Silence" class="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" data-alt="A minimalist, high-contrast poster for a Japanese samurai film. Stark black ink brush strokes on a pure white background form the shape of a katana. A single, small red circle (like a rising sun or stamp) sits in the bottom right corner. The text is vertically aligned in a clean, modern sans-serif font. The aesthetic is sparse, elegant, and impactful." src="https://lh3.googleusercontent.com/aida-public/AB6AXuC8uNyyZS5sY--KN5FGjdIVI9mbEAfni_6-bKQ72a6ma7brX0D3FQ4JUyLZ8XhA99FE2mWAcDvltxoOFPFYUD-OPOMVXMnsqB-tKmdsrXGrWU6Z2qhiF0I4BSXD-4NOpoIUzkt8ltHnK1Az4YgFOgm8bNKDJ7Twe-bJSTmGJ9HUR32iMwedF_XD01og2uXM3cXKjJRgu7dnSldgJ_oNvg7UqSiJhVS10-iMj7ltUFISn_XL4-em"/>
+<div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex flex-col justify-end p-md text-white">
+<span class="font-body-md text-body-md font-bold truncate">Blade of Silence</span>
+</div>
+</div>
+<!-- Wishlist Item 2 -->
+<div class="relative group cursor-pointer rounded-lg overflow-hidden poster-card aspect-[2/3] bg-surface-container">
+<img alt="Lunar Descent" class="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" data-alt="A surrealistic movie poster featuring a massive, pale moon floating impossibly low over a dark, dense pine forest. The color palette is restricted to midnight blue, silver, and stark white. A tiny silhouette of a lone wolf stands on a ridge. The mood is eerie, quiet, and atmospheric, fitting a sophisticated indie horror or thriller." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBWmKKMyOGAeN0ZaWm6aKCWzmGqyymWBz0hbtIrfJUnBzw_UWY47hnmHZM9c8-qN08QFVWuQDhPwifUb5-GfUe2nCjJKLguAzzo7qp-3f8yjwHRxSEYujR-AVbMy1jlLXh2Ap2nqITVp_2CzHu6ggThCpWd10MFrajrBWRb9vbzx-XsEf0oTV7o7xJ5d8jrLTg1-8FQBu91w85IbuKtixjx_aGh_biv6v-6MIbYpfqnc_RsRicc"/>
+<div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex flex-col justify-end p-md text-white">
+<span class="font-body-md text-body-md font-bold truncate">Lunar Descent</span>
+</div>
+</div>
+<!-- Wishlist Item 3 (Hidden on very small screens for balance) -->
+<div class="hidden sm:block relative group cursor-pointer rounded-lg overflow-hidden poster-card aspect-[2/3] bg-surface-container">
+<img alt="Concrete Dreams" class="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" data-alt="An abstract poster for a documentary about architecture. The image shows a dizzying, upward-looking perspective of Brutalist concrete buildings against a stark, cloudless pale blue sky. Strong leading lines and sharp geometric shadows dominate the composition. The typography is bold and placed vertically along the edge of a building. Minimalist and structured." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCJe_nITO1vLyn1CYQbu5A_Ie2Cl12nH-z-HVeRXi-AAh4hE58a_qYyQgloZI9hvpd_z3sVRJTDtR0eDMI-KH6J7vX29XCLvwh4wPPbbG1CX1Gy50R42Doh2Unya8SF7kaYETpZqTQXUYEB7M9ETFkGinuKu4l00oISUlj9M2BLNo62UST64T7g-Pe7-cxiAgJ6GrBHqPI8XBqBUjnhVE6L8o-FlYJZkbA24d8o30aFS2LVBOwI"/>
+<div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex flex-col justify-end p-md text-white">
+<span class="font-body-md text-body-md font-bold truncate">Concrete Dreams</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Friends (Takes up less space) -->
+<div class="md:col-span-4 flex flex-col gap-md">
+<div class="flex items-baseline justify-between mb-sm">
+<h2 class="font-headline-lg-mobile md:font-headline-lg text-headline-lg-mobile md:text-headline-lg text-on-background">Following</h2>
+<span class="font-label-sm text-label-sm text-outline">124</span>
+</div>
+<div class="bg-surface-container-low rounded-xl p-lg border border-surface-variant flex flex-col gap-md">
+<!-- Friend 1 -->
+<div class="flex items-center gap-md cursor-pointer group">
+<div class="w-12 h-12 rounded-full overflow-hidden bg-surface-container border border-surface-variant shrink-0">
+<img alt="Sarah J." class="w-full h-full object-cover" data-alt="A bright, cheerful portrait of a young woman with curly hair, smiling genuinely. The lighting is soft and natural, suggesting an outdoor setting in the afternoon. The background is a soft, out-of-focus blur of green foliage. The aesthetic is warm, inviting, and human, contrasting with the starkness of the UI." src="https://lh3.googleusercontent.com/aida-public/AB6AXuC9kmLZ0mjBwfJQBA5eOFZGfSkyP8eCeH7a92sEQJf6y-5gc1GbmIrtxhhwAJPk08quzyOJyKu6avEif04oEj0cTOCZ6cmUMkWCHaPGGQP_1xHfhbEI5vrrVsQS8lPZQ37aTuSu_NqNayapzU3kp1bDLRtaPE5eLFzi9tlMzp3dZUipCTb5K1w2ecfVRa2X0Fv-XJqtySqBo2q9SEJb0ryuvytZ02V6s26YpDPxDsLgl5gGcgdI"/>
+</div>
+<div class="flex flex-col flex-grow">
+<span class="font-body-md text-body-md text-on-background group-hover:text-primary transition-colors">Sarah Jenkins</span>
+<span class="font-label-sm text-label-sm text-outline truncate">Loved 'The Grand Budapest Hotel'</span>
+</div>
+</div>
+<hr class="border-t border-surface-variant w-full"/>
+<!-- Friend 2 -->
+<div class="flex items-center gap-md cursor-pointer group">
+<div class="w-12 h-12 rounded-full overflow-hidden bg-surface-container border border-surface-variant shrink-0">
+<img alt="David C." class="w-full h-full object-cover" data-alt="A moody, low-key portrait of a man in his 30s looking slightly away from the camera. Half his face is in shadow, lit by a cool blue light, perhaps from a screen or window. He wears thick-rimmed glasses. The image feels intimate and contemplative, like a director pondering his next shot." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAI_tcyW8GnG-9zjnAXJOn8nKTreQc9xRMF6ro7gFcIlJUewW5UfMCEjn-Q6WOegAXpTF8Icz2BXSuS-YPZD8lLpD8mFkXxje9IkM14J4OoeOMwWNEB2yEYSjlPJhIc1avh5vZY1CcClhD03FyHLfgPzxZNjUXHARgmNpyUYZrmoCJ5DJng3A-otUMvbmpXgqpMCUeJ-6IKvNiLwIaoNKirqCV1h08zsbH90N-27TFePN2K2AIm"/>
+</div>
+<div class="flex flex-col flex-grow">
+<span class="font-body-md text-body-md text-on-background group-hover:text-primary transition-colors">David Chen</span>
+<span class="font-label-sm text-label-sm text-outline truncate">Watched 4 films this week</span>
+</div>
+</div>
+<hr class="border-t border-surface-variant w-full"/>
+<!-- Friend 3 -->
+<div class="flex items-center gap-md cursor-pointer group">
+<div class="w-12 h-12 rounded-full overflow-hidden bg-surface-container border border-surface-variant shrink-0">
+<img alt="Elena R." class="w-full h-full object-cover" data-alt="A highly stylized, artsy profile picture of a person entirely in silhouette against a vibrant, neon-pink and purple sunset sky. The setting appears to be an urban rooftop. The aesthetic is highly saturated and evokes a synthwave or indie-pop album cover vibe." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAd6gKMsUAy9dfztQAew39iGOF8VA9zCXHm87YhUkr6vrMP_PkV9YxJ1ghL14GDgDvrbM7AB6acgpNHjhUa2CTKrbZ25aYRUpeNhtuJJzk4uDE9U6z58ktre3r5AMZTabA5ywDIydxsfOlTbCVCgdkFTXw9Sp8WGZoYxFg_YQhXzvDstK_uD58Gm9AgOBA4n6ladwl3uJOWFvgXC6Mc--uZPHyH8D0zBwn5K6VPdSZtV_Mqxl9Y"/>
+</div>
+<div class="flex flex-col flex-grow">
+<span class="font-body-md text-body-md text-on-background group-hover:text-primary transition-colors">Elena Rossi</span>
+<span class="font-label-sm text-label-sm text-outline truncate">Added 12 films to Watchlist</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- My Reviews List -->
+</main>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="md:hidden fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-safe h-16 bg-surface/80 backdrop-blur-md border-t border-surface-variant">
+<a class="flex flex-col items-center justify-center text-on-surface-variant px-4 py-1 hover:bg-surface-container-high active:scale-95 transition-transform duration-150" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="home">home</span>
+<span class="font-label-sm text-label-sm">Feed</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant px-4 py-1 hover:bg-surface-container-high active:scale-95 transition-transform duration-150" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="movie">movie</span>
+<span class="font-label-sm text-label-sm">Movies</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant px-4 py-1 hover:bg-surface-container-high active:scale-95 transition-transform duration-150" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="group">group</span>
+<span class="font-label-sm text-label-sm">Friends</span>
+</a>
+<a class="flex flex-col items-center justify-center text-primary font-bold bg-primary-container/10 rounded-xl px-4 py-1 active:scale-95 transition-transform duration-150" href="#">
+<span class="material-symbols-outlined mb-1" data-icon="person" data-weight="fill" style="font-variation-settings: 'FILL' 1;">person</span>
+<span class="font-label-sm text-label-sm">Profile</span>
+</a>
+</nav>
+<!-- Safe area padding for mobile bottom nav -->
+<style>
+        .pb-safe { padding-bottom: env(safe-area-inset-bottom, 16px); }
+    </style>
+</body></html>
