@@ -11,24 +11,15 @@
 
 use crate::models::*;
 
-/// The desktop feed: `reference/cine-journal/index.html`.
-pub fn feed() -> Feed {
-    Feed { live: live_discussions(), recent: recent_entries(), friend_activity: friend_activity() }
-}
-
-/// The mobile feed: `reference/cine-journal/feed-mobile.html`.
-pub fn mobile_feed() -> MobileFeed {
-    MobileFeed { stories: stories(), items: mobile_items() }
-}
-
-/// Both review screens, desktop first.
-pub fn reviews() -> Vec<Review> {
-    vec![dune_review(), architecture_review()]
-}
-
-pub fn review_by_id(id: &str) -> Option<Review> {
-    reviews().into_iter().find(|r| r.id == id)
-}
+// The two feeds used to be transcribed here as well — `live_discussions`,
+// `recent_entries`, `friend_activity`, `stories` and `mobile_items`. They are gone,
+// and with them the only screens in this file that could not be a fallback for
+// anything: every section of both feeds is now the visitor's own follows, journal and
+// taste, which live in SQLite and are therefore the same in both modes. There is
+// nothing left for a demo copy to stand in for. See `content::feed`.
+//
+// What remains here is the film catalogue and one designed detail page, which *are*
+// content and do need a source when there's no token.
 
 /// Every movie that has a detail page — which is all of them, since every id
 /// resolves (see `movie_detail_by_id`).
@@ -54,8 +45,11 @@ pub fn movie_detail_by_id(id: &str) -> MovieDetail {
 /// "the-silence-of-space" -> "The Silence Of Space".
 ///
 /// Only reached for ids that aren't in the catalogue, so it never overrides a
-/// real title — it just keeps hand-typed URLs from looking broken.
-fn title_from_slug(id: &str) -> String {
+/// real title — it just keeps hand-typed URLs from looking broken. `content` uses
+/// it for the same reason on a seeded review whose film the source has forgotten:
+/// the prose is the point, and dropping the review would silently shrink someone's
+/// page.
+pub fn title_from_slug(id: &str) -> String {
     let words: Vec<String> = id
         .split(['-', '_', '/'])
         .filter(|word| !word.is_empty())
@@ -94,8 +88,16 @@ pub fn search(query: &SearchQuery) -> SearchResponse {
     let year = query.year.as_deref().filter(|y| !y.is_empty());
     let min_rating = query.min_rating.unwrap_or(0);
 
+    // Nobody in this dataset has a filmography — the twelve films and their cast
+    // were invented for the export — so a `person=` filter matches nothing at all
+    // rather than being ignored. Ignoring it would show the whole catalogue under a
+    // heading naming one person, which is the fake functionality this mode exists to
+    // avoid claiming. Nothing here links a name, so it only arrives hand-typed.
+    let nobody = query.person.as_deref().is_some_and(|p| !p.is_empty());
+
     let matched: Vec<CatalogueEntry> = catalogue()
         .into_iter()
+        .filter(|_| !nobody)
         .filter(|entry| entry.matches_text(&text))
         .filter(|entry| genre.is_none_or(|g| entry.has_genre(g)))
         .filter(|entry| year.is_none_or(|y| entry.in_decade(y)))
@@ -118,9 +120,12 @@ pub fn search(query: &SearchQuery) -> SearchResponse {
         query: query.q.clone().unwrap_or_default(),
         total_results: matched.len() as u32,
         results,
-        filters: facets(&text, genre, year, min_rating),
+        filters: facets(&text, genre, year, min_rating, nobody),
         page,
         page_count: page_count as u32,
+        // Even when `person=` was set: it named nobody this dataset has, and putting
+        // an invented name over the grid is the one thing this mode must not do.
+        person: None,
     }
 }
 
@@ -129,9 +134,20 @@ pub fn search(query: &SearchQuery) -> SearchResponse {
 /// Counts are leave-one-out: a genre chip's count ignores the current genre
 /// selection but honours the query, the decade and the rating floor. Without
 /// that, every unselected chip would read 0 as soon as one was picked.
-fn facets(text: &str, genre: Option<&str>, year: Option<&str>, min_rating: u8) -> SearchFilters {
+///
+/// `nobody` is the exception to leave-one-out: a `person=` this dataset has no films
+/// for zeroes every chip, because every chip really would yield nothing. The invariant
+/// the whole screen rests on is that a chip's count and its results agree.
+fn facets(
+    text: &str,
+    genre: Option<&str>,
+    year: Option<&str>,
+    min_rating: u8,
+    nobody: bool,
+) -> SearchFilters {
     let pool: Vec<CatalogueEntry> = catalogue()
         .into_iter()
+        .filter(|_| !nobody)
         .filter(|entry| entry.matches_text(text))
         .filter(|entry| entry.meets_minimum(min_rating))
         .collect();
@@ -165,371 +181,37 @@ fn facets(text: &str, genre: Option<&str>, year: Option<&str>, min_rating: u8) -
     SearchFilters { genres, years, minimum_rating_stars: min_rating }
 }
 
-// --- Desktop feed: "Live Now" -------------------------------------------------
-
-fn live_discussions() -> Vec<LiveDiscussion> {
-    vec![
-        LiveDiscussion {
-            id: "live-silence-of-space".into(),
-            movie: Movie {
-                id: "silence-of-space".into(),
-                title: "The Silence of Space".into(),
-                year: Some(2024),
-                poster: poster_of("silence-of-space"),
-            },
-            rating_half_stars: 9,
-            blurb: "Join the discussion room. 142 members currently debating the ambiguous ending."
-                .into(),
-            participants: vec![
-                Image::new(
-                    "img/avatar-live-1.jpg",
-                    "A black and white studio portrait of a woman looking thoughtfully off-camera.",
-                ),
-                Image::new(
-                    "img/avatar-live-2.jpg",
-                    "A black and white studio portrait of a man with glasses looking directly at the camera.",
-                ),
-            ],
-            overflow_count: Some(14),
-        },
-        LiveDiscussion {
-            id: "live-morning-haze".into(),
-            movie: Movie {
-                id: "morning-haze".into(),
-                title: "Morning Haze".into(),
-                year: Some(1998),
-                poster: poster_of("morning-haze"),
-            },
-            rating_half_stars: 10,
-            blurb: "Live watch party starting in 10 minutes. Grab your coffee.".into(),
-            participants: vec![Image::new(
-                "img/avatar-live-3.jpg",
-                "A black and white studio portrait of a woman laughing.",
-            )],
-            overflow_count: None,
-        },
-    ]
-}
-
-// --- Desktop feed: "Recent Entries" ------------------------------------------
-
-fn recent_entries() -> Vec<FeedEntry> {
-    // `on_watchlist` is false here for every tile; `hydrate` sets it per request.
-    vec![
-        FeedEntry {
-            id: "entry-le-souffle".into(),
-            movie: Movie {
-                id: "le-souffle".into(),
-                title: "Le Souffle".into(),
-                year: Some(1960),
-                poster: poster_of("le-souffle"),
-            },
-            rating_half_stars: 10,
-            on_watchlist: false,
-        },
-        FeedEntry {
-            id: "entry-the-drop".into(),
-            movie: Movie {
-                id: "the-drop".into(),
-                title: "The Drop".into(),
-                year: Some(2023),
-                poster: poster_of("the-drop"),
-            },
-            rating_half_stars: 6,
-            on_watchlist: false,
-        },
-        FeedEntry {
-            id: "entry-estate-of-mind".into(),
-            movie: Movie {
-                id: "estate-of-mind".into(),
-                title: "Estate of Mind".into(),
-                year: Some(2019),
-                poster: poster_of("estate-of-mind"),
-            },
-            rating_half_stars: 10,
-            on_watchlist: false,
-        },
-        FeedEntry {
-            id: "entry-blue-notes".into(),
-            movie: Movie {
-                id: "blue-notes".into(),
-                title: "Blue Notes".into(),
-                year: Some(2021),
-                poster: poster_of("blue-notes"),
-            },
-            rating_half_stars: 6,
-            on_watchlist: false,
-        },
-    ]
-}
-
-// --- Desktop feed: "Friends Activity" sidebar --------------------------------
-
-fn friend_activity() -> Vec<FriendActivity> {
-    vec![
-        FriendActivity {
-            id: "activity-alex".into(),
-            author_name: "Alex M.".into(),
-            author_avatar: Image::new(
-                "img/avatar-alex-m.jpg",
-                "A bright, airy profile photo of a young man smiling outdoors in soft sunlight.",
-            ),
-            timestamp: "2h ago".into(),
-            kind: ActivityKind::Watched,
-            movie_id: "silence-of-space".into(),
-            movie_title: "The Silence of Space".into(),
-            rating_half_stars: Some(10),
-            quote: Some(
-                "\"A masterpiece of visual storytelling. The silence is deafening in the best way possible.\""
-                    .into(),
-            ),
-        },
-        FriendActivity {
-            id: "activity-sarah".into(),
-            author_name: "Sarah K.".into(),
-            author_avatar: Image::new(
-                "img/avatar-sarah-k.jpg",
-                "A bright, high-key studio portrait of a woman with short hair against a crisp white background.",
-            ),
-            timestamp: "5h ago".into(),
-            kind: ActivityKind::AddedToWatchlist,
-            movie_id: "morning-haze".into(),
-            movie_title: "Morning Haze".into(),
-            rating_half_stars: None,
-            quote: None,
-        },
-        FriendActivity {
-            id: "activity-david".into(),
-            author_name: "David P.".into(),
-            author_avatar: Image::new(
-                "img/avatar-david-p.jpg",
-                "A black and white portrait photo of a man looking off to the side with cinematic lighting.",
-            ),
-            timestamp: "Yesterday".into(),
-            kind: ActivityKind::Watched,
-            movie_id: "le-souffle".into(),
-            movie_title: "Le Souffle".into(),
-            rating_half_stars: Some(6),
-            quote: Some("\"Style over substance, perhaps. But what style it is.\"".into()),
-        },
-    ]
-}
-
-// --- Mobile feed: stories rail ----------------------------------------------
-
-fn stories() -> Vec<Story> {
-    vec![
-        Story {
-            id: "story-elena".into(),
-            name: "Elena".into(),
-            avatar: Image::new(
-                "img/avatar-story-elena.jpg",
-                "A close up portrait of a young woman with short dark hair against a stark white background.",
-            ),
-            unseen: true,
-        },
-        Story {
-            id: "story-marcus".into(),
-            name: "Marcus".into(),
-            avatar: Image::new(
-                "img/avatar-story-marcus.jpg",
-                "A black and white portrait of a man looking thoughtfully off-camera, wearing a simple dark turtleneck.",
-            ),
-            unseen: true,
-        },
-        Story {
-            id: "story-sarah".into(),
-            name: "Sarah".into(),
-            avatar: Image::new(
-                "img/avatar-story-sarah.jpg",
-                "A casual portrait of a person with glasses, brightly lit in an airy, minimalist space.",
-            ),
-            unseen: false,
-        },
-        Story {
-            id: "story-david".into(),
-            name: "David".into(),
-            avatar: Image::new(
-                "img/avatar-story-david.jpg",
-                "A profile picture showing a silhouette of a person against a bright window.",
-            ),
-            unseen: false,
-        },
-        Story {
-            id: "story-anna".into(),
-            name: "Anna".into(),
-            avatar: Image::new(
-                "img/avatar-story-anna.jpg",
-                "A minimalist abstract avatar featuring simple geometric shapes in primary blue and slate white.",
-            ),
-            unseen: false,
-        },
-    ]
-}
-
-// --- Mobile feed: poster grid -----------------------------------------------
-
-fn mobile_items() -> Vec<MobileFeedItem> {
-    vec![
-        MobileFeedItem {
-            id: "mobile-the-horizon".into(),
-            movie: Movie {
-                id: "the-horizon".into(),
-                title: "The Horizon".into(),
-                year: None,
-                poster: poster_of("the-horizon"),
-            },
-            subtitle: "Elena watched • 4h ago".into(),
-            rating_half_stars: Some(8),
-            on_watchlist: false,
-        },
-        MobileFeedItem {
-            id: "mobile-fractured".into(),
-            movie: Movie {
-                id: "fractured".into(),
-                title: "Fractured".into(),
-                year: None,
-                poster: poster_of("fractured"),
-            },
-            subtitle: "Marcus rated • 5h ago".into(),
-            rating_half_stars: Some(6),
-            on_watchlist: false,
-        },
-        MobileFeedItem {
-            id: "mobile-red-shift".into(),
-            movie: Movie {
-                id: "red-shift".into(),
-                title: "Red Shift".into(),
-                year: None,
-                poster: poster_of("red-shift"),
-            },
-            subtitle: "Anna added to watchlist".into(),
-            rating_half_stars: None,
-            on_watchlist: false,
-        },
-        MobileFeedItem {
-            id: "mobile-endless".into(),
-            movie: Movie {
-                id: "endless".into(),
-                title: "Endless".into(),
-                year: None,
-                poster: poster_of("endless"),
-            },
-            subtitle: "David wrote a review".into(),
-            rating_half_stars: Some(10),
-            on_watchlist: false,
-        },
-    ]
-}
-
-// --- Reviews ----------------------------------------------------------------
-
-/// `reference/cine-journal/review.html` — Elena Rostova on Dune: Part Two.
-///
-/// Note the prose uses typographic apostrophes and an em dash exactly as the
-/// export did (he's, doesn't, "be—the thumpers").
-fn dune_review() -> Review {
-    let elena_avatar_alt = "A close-up portrait of a young woman with a sharp, modern haircut wearing minimalist geometric glasses against a pure white background.";
-
-    Review {
-        id: "dune-part-two".into(),
-        movie: Movie {
-            id: "dune-part-two".into(),
-            title: "Dune: Part Two".into(),
-            year: Some(2024),
-            poster: poster_of("dune-part-two"),
-        },
-        backdrop: Some(Image::new("img/backdrop-dune.jpg", "")),
-        director: Some("Denis Villeneuve".into()),
-        genres: vec!["Sci-Fi".into(), "Adventure".into()],
-        author_name: "Elena Rostova".into(),
-        author_avatar: Image::new("img/avatar-elena-rostova.jpg", elena_avatar_alt),
-        watched_on: "Watched on March 15, 2024".into(),
-        rating_half_stars: 9,
-        paragraphs: vec![
-            "Villeneuve has managed something nearly impossible here: he\u{2019}s taken the dense, almost impenetrable lore of Herbert\u{2019}s universe and rendered it not just coherent, but profoundly emotional. The sheer scale of Arrakis is felt in every frame, thanks to Fraser\u{2019}s monolithic cinematography.".into(),
-            "What struck me most on this viewing was the sound design. It\u{2019}s oppressive when it needs to be\u{2014}the thumpers echoing through the floorboards of the theater\u{2014}but incredibly delicate in moments of intimacy between Paul and Chani. The score doesn't just accompany the film; it acts as a geological force within it.".into(),
-            "While the pacing sags slightly in the second act during the sietch politics, the convergence of all these massive thematic plates in the finale is breathtaking. A true cinematic spectacle that demands to be seen on the largest screen possible.".into(),
-        ],
-        like_count: Some(24),
-        comments: vec![
-            Comment {
-                id: "comment-marcus".into(),
-                author_name: "Marcus".into(),
-                author_avatar: Image::new(
-                    "img/avatar-marcus.jpg",
-                    "A candid profile photo of a young man wearing a simple black t-shirt against a clean white background.",
-                ),
-                timestamp: "2 hours ago".into(),
-                body: "Completely agree about the sound design. The Harkonnen arena sequence shook my bones."
-                    .into(),
-                like_count: Some(2),
-                replies: vec![],
-                liked: false,
-            },
-            Comment {
-                id: "comment-sarah-j".into(),
-                author_name: "Sarah J.".into(),
-                author_avatar: Image::new(
-                    "img/avatar-sarah-j.jpg",
-                    "An artistic, high-key portrait of a person with silver-dyed hair wearing a pristine white mock-neck sweater.",
-                ),
-                timestamp: "5 hours ago".into(),
-                body: "I actually liked the sietch politics! Felt it gave necessary weight to Paul's integration. But yes, overall masterpiece."
-                    .into(),
-                like_count: None,
-                replies: vec![Reply {
-                    id: "reply-elena".into(),
-                    author_name: "Elena (Author)".into(),
-                    author_avatar: Image::new(
-                        "img/avatar-elena-rostova-sm.jpg",
-                        elena_avatar_alt,
-                    ),
-                    body: "Fair point! I just felt the pacing dragged a tiny bit compared to the breathless first act."
-                        .into(),
-                }],
-                liked: false,
-            },
-        ],
-        hashtags: vec![],
-        liked: false,
-    }
-}
-
-/// `reference/cine-journal/review-mobile.html` — Alex Mercer on The Architecture
-/// of Silence. The heading says "Conversation (3)" on the desktop screen; this
-/// one ships no comment thread, only the sticky composer.
-fn architecture_review() -> Review {
-    Review {
-        id: "architecture-of-silence".into(),
-        movie: Movie {
-            id: "architecture-of-silence".into(),
-            title: "The Architecture of Silence".into(),
-            year: Some(2023),
-            poster: poster_of("architecture-of-silence"),
-        },
-        backdrop: None,
-        director: None,
-        genres: vec!["Documentary".into()],
-        author_name: "Alex Mercer".into(),
-        author_avatar: Image::new(
-            "img/avatar-alex-mercer.jpg",
-            "A portrait of a young person in a brightly lit, modern setting wearing stylish minimalist clothing.",
-        ),
-        watched_on: "Reviewed yesterday".into(),
-        rating_half_stars: 9,
-        paragraphs: vec![
-            "An absolute masterclass in visual storytelling. The director manages to convey profound isolation without uttering a single line of dialogue for the first forty minutes.".into(),
-            "I was particularly struck by the framing—every shot feels like it could be hung in a gallery. The use of negative space in the urban environments perfectly mirrors the protagonist's internal emptiness. It's not a fast-paced film, but if you let it wash over you, it's incredibly moving.".into(),
-        ],
-        like_count: None,
-        comments: vec![],
-        hashtags: vec!["#Cinematography".into(), "#MustWatch".into()],
-        liked: false,
-    }
-}
-
 // --- Movie detail -------------------------------------------------------------
+
+/// The Media carousel's frames in demo mode: the four stills the export drew.
+///
+/// Alt text is the export's own `data-alt` prompts, verbatim. `full` is the same
+/// file as `image` because there is only one rendition on disk — these are local
+/// files, not a CDN with a size in the path, so a lightbox showing the same JPEG
+/// larger is the honest version of that.
+fn demo_stills() -> Vec<Still> {
+    [
+        (
+            "img/still-cityscape-window.jpg",
+            "A wide, cinematic still showing a futuristic cityscape viewed through a rain-streaked window. The dominant colors are deep slate grays and muted blues, with solitary pinpricks of warm yellow light from distant skyscrapers. The composition is stark and architectural, emphasizing negative space and a lonely, contemplative mood.",
+        ),
+        (
+            "img/still-memory-device.jpg",
+            "A close-up cinematic still of a glowing, intricate technological device—perhaps a memory synthesizer—resting on a dark, reflective surface. The lighting is surgical and cold, casting sharp shadows. The visual aesthetic is highly detailed yet minimalist, focusing entirely on the object against a dark void.",
+        ),
+        (
+            "img/still-empty-room.jpg",
+            "A cinematic still of a dimly lit, minimalist interior space. A single chair sits in the center of the room, illuminated by a harsh, singular spotlight from above. The surrounding walls are smooth concrete, creating a sense of isolation and tension. The color palette is almost monochromatic, relying on stark contrasts between light and shadow.",
+        ),
+        (
+            "img/still-billboard-plaza.jpg",
+            "A wide cinematic shot of two figures silhouetted against a massive, glowing digital billboard in a sprawling, empty plaza. The scale of the environment dwarfs the characters, emphasizing themes of alienation. The billboard emits a cool, blue light that washes over the brutalist architecture. The scene is quiet, still, and visually arresting.",
+        ),
+    ]
+    .into_iter()
+    .map(|(src, alt)| Still { image: Image::new(src, alt), full: Image::new(src, alt) })
+    .collect()
+}
 
 /// The demo film, laid out for `reference/movie page/code.html`.
 ///
@@ -550,7 +232,7 @@ fn detail_for(id: &str, title: &str) -> MovieDetail {
     MovieDetail {
         id: id.into(),
         title: title.into(),
-        year: listed.as_ref().map_or(2024, |entry| entry.year),
+        year: listed.as_ref().map_or(Some(2024), |entry| entry.year),
         certification: Some("R".into()),
         runtime: "1h 58m".into(),
         genres: listed
@@ -578,6 +260,10 @@ fn detail_for(id: &str, title: &str) -> MovieDetail {
                     "img/cast-julian-black.jpg",
                     "A stark, high-contrast black and white studio portrait of a male actor in his late 40s. The lighting is dramatic, highlighting the texture of his skin and the intensity in his eyes. The background is pure white, adhering to the minimalist editorial aesthetic. The composition is focused and intimate, reminiscent of a high-end magazine photoshoot.",
                 ),
+                // Invented for the export: a real name and portrait with no
+                // filmography behind them, so the name is drawn unlinked rather
+                // than leading to an empty search.
+                searchable: false,
             },
             CastMember {
                 id: "maya-lin".into(),
@@ -587,6 +273,7 @@ fn detail_for(id: &str, title: &str) -> MovieDetail {
                     "img/cast-maya-lin.jpg",
                     "A clean, minimalist studio portrait of a female actress in her 30s. Soft, diffused lighting creates a gentle, almost ethereal mood against a pristine white background. Her expression is enigmatic. The image is rendered in black and white, maintaining the sophisticated, gallery-like visual style of the platform. The focus is entirely on her face.",
                 ),
+                searchable: false,
             },
             CastMember {
                 id: "arthur-vance".into(),
@@ -596,6 +283,7 @@ fn detail_for(id: &str, title: &str) -> MovieDetail {
                     "img/cast-arthur-vance.jpg",
                     "A high-contrast, editorial-style headshot of a mature male actor with a weathered face. Shot against a bright white backdrop, the black and white image emphasizes the lines and character of his features. The lighting is direct but controlled, fitting a premium, minimalist design system. He looks slightly off-camera.",
                 ),
+                searchable: false,
             },
             CastMember {
                 id: "leo-thorne".into(),
@@ -605,25 +293,43 @@ fn detail_for(id: &str, title: &str) -> MovieDetail {
                     "img/cast-leo-thorne.jpg",
                     "A minimalist, bright studio portrait of a young male actor. The aesthetic is clean and modern, utilizing a pure white background and soft, even lighting. The black and white treatment gives it a timeless, sophisticated editorial feel. His expression is serious and intense.",
                 ),
+                searchable: false,
             },
         ],
         score: 7.8,
         vote_count: 12_450,
+        // Every name here was invented for the export and has no filmography, so
+        // no row carries linkable people — the same reason the cast above is
+        // `searchable: false`.
         details: vec![
-            DetailFact { label: "Director".into(), value: "Elara Vance".into() },
+            DetailFact { label: "Director".into(), value: "Elara Vance".into(), people: Vec::new() },
             DetailFact {
                 label: "Writers".into(),
                 value: "Elara Vance, Idris Okonkwo".into(),
+                people: Vec::new(),
             },
-            DetailFact { label: "Cinematography".into(), value: "Sarah Chen".into() },
-            DetailFact { label: "Music".into(), value: "Trent Reznor".into() },
-            DetailFact { label: "Production".into(), value: "Aether Films".into() },
+            DetailFact {
+                label: "Cinematography".into(),
+                value: "Sarah Chen".into(),
+                people: Vec::new(),
+            },
+            DetailFact { label: "Music".into(), value: "Trent Reznor".into(), people: Vec::new() },
+            DetailFact {
+                label: "Production".into(),
+                value: "Aether Films".into(),
+                people: Vec::new(),
+            },
         ],
         // No video was ever invented for the demo film, and a play button over a
         // still that plays nothing is the kind of dead end the export's mocks
-        // could afford and an SPA can't. `None` hides the Media block, which is
-        // the same thing that happens for a real film TMDB has no trailer for.
-        trailer: None,
+        // could afford and an SPA can't. Empty is the same thing that happens for
+        // a real film TMDB has no embeddable video for, and the carousel then
+        // shows only the stills below.
+        trailers: Vec::new(),
+        // The four the export drew, which are real files under `reference/.../img`.
+        // A demo Media block with nothing in it would leave the carousel
+        // unexercised in the mode that's easiest to run.
+        stills: demo_stills(),
         watch_options: vec![
             WatchOption {
                 provider: "Aether Stream".into(),
@@ -637,9 +343,11 @@ fn detail_for(id: &str, title: &str) -> MovieDetail {
         // Nowhere to link: TMDB's watch page is the only permitted destination
         // and these two services don't exist.
         watch_link: None,
-        // Both come from the store — `hydrate` fills them per request.
+        // All four come from the store — `hydrate` fills them per request.
         on_watchlist: false,
+        is_favorite: false,
         your_rating_half_stars: None,
+        your_review: None,
     }
 }
 
@@ -673,12 +381,18 @@ pub struct CatalogueEntry {
     /// there, as the export drew it); these are only for search. Where the
     /// export never stated a year — the four mobile-feed films — one is assigned
     /// here so the film is reachable by decade rather than invisible.
-    pub year: u16,
+    ///
+    /// `None` only in TMDB mode, for an announced film with no release date. Every
+    /// demo film has one.
+    pub year: Option<u16>,
     /// 0.0–5.0 crowd average. Derived from the half-star rating the export drew
     /// where there was one (9 halves -> 4.5), assigned otherwise.
-    pub star_rating: f32,
+    ///
+    /// `None` only in TMDB mode, for a film nobody has voted on. Every demo film
+    /// carries a number, including Project: Kepler's 0.0 — the export drew that,
+    /// and the rating floor is meant to drop it.
+    pub star_rating: Option<f32>,
     pub poster: Option<Image>,
-    pub grayscale: bool,
     /// Mostly taken from the export — either an explicit genre chip or the
     /// wording of the poster's alt text ("a modern thriller", "an indie drama") —
     /// and assigned where it said nothing. Genres outside `GENRE_FACETS`
@@ -704,16 +418,26 @@ impl CatalogueEntry {
 
     /// Whether the film's year falls in a decade label like "2010s". An
     /// unparseable label matches nothing rather than everything.
+    ///
+    /// An undated film is in no decade, so a decade chip excludes it — the same
+    /// answer the old sentinel `0` gave, now without a year the card could print.
     pub fn in_decade(&self, label: &str) -> bool {
+        let Some(year) = self.year else {
+            return false;
+        };
         match label.trim_end_matches('s').parse::<u16>() {
-            Ok(start) => self.year >= start && self.year < start + 10,
+            Ok(start) => year >= start && year < start + 10,
             Err(_) => false,
         }
     }
 
     /// `min` is whole stars out of 5; 0 lets everything through.
+    ///
+    /// An unrated film clears only a floor of 0, the same answer the demo's 0.0
+    /// gives: a floor asks for films rated at least that highly, and one with no
+    /// votes isn't known to be.
     pub fn meets_minimum(&self, min: u8) -> bool {
-        self.star_rating >= f32::from(min)
+        self.star_rating.unwrap_or(0.0) >= f32::from(min)
     }
 
     /// `on_watchlist` is left false here — `hydrate` fills it from the store.
@@ -724,7 +448,6 @@ impl CatalogueEntry {
             year: self.year,
             star_rating: self.star_rating,
             poster: self.poster.clone(),
-            grayscale: self.grayscale,
             genres: self.genres.clone(),
             on_watchlist: false,
         }
@@ -743,17 +466,19 @@ fn entry(
     CatalogueEntry {
         id: id.into(),
         title: title.into(),
-        year,
-        star_rating,
+        // Both taken bare rather than as `Option`s, because every film below has a
+        // year and a rating — writing `Some(...)` seventeen times twice over would
+        // only add noise. TMDB mode is where either can be missing.
+        year: Some(year),
+        star_rating: Some(star_rating),
         poster,
-        grayscale: false,
         genres: genres.iter().map(|g| (*g).to_string()).collect(),
     }
 }
 
 /// Every film in the demo, drawn from all six screens.
 pub fn catalogue() -> Vec<CatalogueEntry> {
-    let mut films = vec![
+    vec![
         // Desktop feed — "Live Now".
         entry("silence-of-space", "The Silence of Space", 2024, 4.5, &["Sci-Fi", "Drama"], Some(Image::new(
             "img/poster-silence-of-space.jpg",
@@ -827,42 +552,21 @@ pub fn catalogue() -> Vec<CatalogueEntry> {
         // No poster on purpose — this is the "Poster Missing" placeholder state,
         // and its 0.0 rating means any rating floor above 0 filters it out.
         entry("project-kepler", "Project: Kepler", 2024, 0.0, &["Sci-Fi"], None),
-    ];
-
-    // The export renders Void Geometry's poster desaturated. A per-item art
-    // direction choice, not a rule the grid can infer, so it is carried as data.
-    if let Some(film) = films.iter_mut().find(|f| f.id == "void-geometry") {
-        film.grayscale = true;
-    }
-
-    films
+    ]
 }
 
-/// The poster the export used for `id`.
-///
-/// Panics for an id that isn't in the catalogue or has no poster. Every call site
-/// passes a literal id from this module, so a panic means the catalogue and a
-/// screen have drifted apart — the tests below call every screen to catch that.
-fn poster_of(id: &str) -> Image {
-    catalogue()
-        .into_iter()
-        .find(|entry| entry.id == id)
-        .unwrap_or_else(|| panic!("no catalogue entry '{id}'"))
-        .poster
-        .unwrap_or_else(|| panic!("catalogue entry '{id}' has no poster"))
-}
+// `poster_of(id)` lived here, looking a poster up in the catalogue by id and
+// panicking if it wasn't there. Only the two feeds called it, hand-writing the ids of
+// films they drew; with the feeds gone the remaining screens carry their images
+// inline, so there is nothing left for it to reconcile.
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Every screen builds without panicking, which is what proves the ids the
-    /// screens pass to `poster_of` all exist in the catalogue.
+    /// Every screen this module still builds does so without panicking.
     #[test]
     fn every_screen_builds() {
-        feed();
-        mobile_feed();
-        reviews();
         movie_details();
         search(&SearchQuery::default());
     }
@@ -903,7 +607,8 @@ mod tests {
         assert!(response.total_results > 0);
         for result in &response.results {
             assert!(result.genres.contains(&"Sci-Fi".to_string()));
-            assert!((2010..2020).contains(&result.year), "{} is not a 2010s film", result.title);
+            let year = result.year.expect("every demo film has a year");
+            assert!((2010..2020).contains(&year), "{} is not a 2010s film", result.title);
         }
     }
 

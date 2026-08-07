@@ -53,10 +53,15 @@ pub struct MovieSummary {
     pub title: String,
     pub release_date: Option<String>,
     pub poster_path: Option<String>,
-    /// 0.0–10.0. Zero for a film nobody has voted on, which is distinct from
-    /// "unrated" but renders the same.
+    /// 0.0–10.0. Zero for a film nobody has voted on — `vote_count` is what tells
+    /// the two apart, and `map::star_rating` reads both.
     #[serde(default)]
     pub vote_average: f32,
+    /// How many votes that average is over. Zero exactly when `vote_average` is
+    /// (verified across 111 credits in `person-525.json`), so it's what makes
+    /// "unrated" distinguishable from "rated zero" on a search card.
+    #[serde(default)]
+    pub vote_count: u32,
     #[serde(default)]
     pub genre_ids: Vec<u32>,
 }
@@ -145,26 +150,68 @@ pub struct CastCredit {
 
 #[derive(Debug, Deserialize)]
 pub struct CrewCredit {
+    /// The person, not the credit. Carried so the credits grid can link a name to
+    /// `discover?with_people=`, which is how "everything this director made" is
+    /// asked for — a name alone would only reach `/search/movie`, which matches
+    /// film titles and would find nothing.
+    pub id: u32,
     pub name: String,
     /// "Director", "Director of Photography", "Original Music Composer" — the
     /// three the detail screen names. Matched exactly; see `map::crew_named`.
     pub job: String,
 }
 
+/// `GET /3/person/{id}?append_to_response=movie_credits`, behind `/search?person=`.
+///
+/// The search URL carries only the id, so the name has to be resolved somewhere;
+/// doing it here keeps `/search?person=525` short, shareable and impossible to
+/// mislabel by hand.
+#[derive(Debug, Deserialize)]
+pub struct Person {
+    pub name: String,
+    #[serde(default)]
+    pub movie_credits: PersonCredits,
+}
+
+/// Everything one person was credited on, split by how.
+///
+/// Both halves are read and merged: the detail screen links actors and directors
+/// with the same affordance, and a director who also acted belongs under their own
+/// name for both. The two lists overlap — Nolan appears in `cast` and `crew` for the
+/// films he cameos in — so `map::filmography` dedupes by film id.
+#[derive(Debug, Default, Deserialize)]
+pub struct PersonCredits {
+    #[serde(default)]
+    pub cast: Vec<MovieSummary>,
+    #[serde(default)]
+    pub crew: Vec<MovieSummary>,
+}
+
 /// The appended `images` block.
 ///
-/// Only `backdrops` is declared: they fill the gallery grid and back up a film with
-/// no `backdrop_path`. Alternative posters aren't rendered anywhere — the screens
-/// show one poster per film, and `poster_path` is already the chosen one.
+/// Only `backdrops` is declared: they fill the Media carousel and back up a film
+/// with no `backdrop_path`. Alternative posters aren't rendered anywhere — the
+/// screens show one poster per film, and `poster_path` is already the chosen one.
 #[derive(Debug, Default, Deserialize)]
 pub struct Images {
     #[serde(default)]
     pub backdrops: Vec<ImageRecord>,
 }
 
+/// One still. Films carry 72–192 of these, far more than a carousel wants, so the
+/// fields beyond the path are all there to choose *which* — see `map::stills`.
 #[derive(Debug, Deserialize)]
 pub struct ImageRecord {
     pub file_path: String,
+    /// The language of any text burned into the image. `None` — the majority —
+    /// means a plain frame from the film, which is what a stills rail wants; a
+    /// value means a title card or a localized poster crop.
+    #[serde(default)]
+    pub iso_639_1: Option<String>,
+    /// TMDB's own crowd score for the image. Their list arrives sorted by this
+    /// descending, so it is the ranking rather than a filter.
+    #[serde(default)]
+    pub vote_average: f32,
 }
 
 /// The appended `videos` block — trailers, teasers, clips and featurettes.
@@ -258,11 +305,13 @@ pub struct Provider {
 
 /// A page of `GET /3/movie/{id}/reviews`.
 ///
-/// Flat prose with no reply thread — which is why the conversation under a
-/// review comes from SQLite instead. See `db`.
+/// Read once, at startup, by `content::harvest_graph` — the prose becomes a review
+/// row belonging to one of our own users, and nothing re-reads it afterwards. TMDB's
+/// own review id is deliberately not kept: our reviews are keyed on
+/// `(person, film)`, so carrying the upstream id would imply a link back that
+/// doesn't exist.
 #[derive(Debug, Deserialize)]
 pub struct ReviewRecord {
-    pub id: String,
     pub author: String,
     pub author_details: AuthorDetails,
     pub content: String,
@@ -272,6 +321,11 @@ pub struct ReviewRecord {
 
 #[derive(Debug, Deserialize)]
 pub struct AuthorDetails {
+    /// The author's TMDB nickname ("msbreviews", "Spartan117"), distinct from the
+    /// display `author` name beside it. This is what `content::harvest_graph` seeds
+    /// the app's own handles from — a real chosen nickname reads as one, which is
+    /// exactly what a search-by-nickname screen needs to be testable against.
+    pub username: Option<String>,
     /// 0.0–10.0, and genuinely absent on more than half of real reviews.
     pub rating: Option<f32>,
     /// A TMDB path like "/abc.jpg", but documented to also arrive as

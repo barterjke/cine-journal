@@ -86,11 +86,13 @@ function ResultCard({
     <div className="flex flex-col group">
       <div className="relative w-full aspect-[2/3] rounded bg-surface-container mb-sm overflow-hidden poster-shadow poster-inset">
         <Link to={`/movie/${result.id}`} className="block w-full h-full" aria-label={result.title}>
+          {/* One card in the export was desaturated — a `grayscale` flag carried per
+              result. It described one invented film's art direction and was always
+              false for a real one, so it said nothing about any film a visitor can
+              now search for. */}
           {result.poster ? (
             <img
-              className={`w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 ${
-                result.grayscale ? 'grayscale' : ''
-              }`}
+              className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
               alt={result.poster.alt}
               src={result.poster.src}
             />
@@ -139,15 +141,24 @@ function ResultCard({
             {result.title}
           </h3>
         </Link>
+        {/* "2024 · ★ 4.5", minus whatever the film doesn't have. Both halves are
+            genuinely optional on a filmography, which lists announced films (no
+            year) and obscure ones nobody has voted on (no average) — and the
+            separator dot belongs to neither, so it's drawn only between two of
+            them rather than trailing one. */}
         <div className="flex items-center gap-2 font-label-sm text-label-sm text-outline">
-          <span>{result.year}</span>
-          <span className="w-1 h-1 rounded-full bg-outline-variant"></span>
-          <span className="flex items-center gap-0.5 text-on-surface-variant">
-            <span className="material-symbols-outlined text-[14px]" style={FILLED}>
-              star
-            </span>{' '}
-            {result.star_rating.toFixed(1)}
-          </span>
+          {result.year !== null && <span>{result.year}</span>}
+          {result.year !== null && result.star_rating !== null && (
+            <span className="w-1 h-1 rounded-full bg-outline-variant"></span>
+          )}
+          {result.star_rating !== null && (
+            <span className="flex items-center gap-0.5 text-on-surface-variant">
+              <span className="material-symbols-outlined text-[14px]" style={FILLED}>
+                star
+              </span>{' '}
+              {result.star_rating.toFixed(1)}
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -164,6 +175,9 @@ export function Search() {
   const year = params.get('year')
   const minRating = Number(params.get('min_rating') ?? 0)
   const page = Number(params.get('page') ?? 1)
+  // Set by clicking a name on a film's detail page. Narrows to that person's
+  // filmography, which the text box and the chips then filter further.
+  const person = params.get('person')
 
   // Typing updates the input immediately but the URL only after a pause.
   const [draft, setDraft] = useState(q)
@@ -197,8 +211,8 @@ export function Search() {
   useEffect(() => setDraft(q), [q])
 
   const { data, error, loading, update } = useApi(
-    () => api.search({ q, genre, year, minRating, page }),
-    [q, genre, year, minRating, page],
+    () => api.search({ q, genre, year, minRating, page, person }),
+    [q, genre, year, minRating, page, person],
   )
 
   const watchlist = useAction(async (id: string) => {
@@ -225,7 +239,7 @@ export function Search() {
     }
   })
 
-  const hasFilters = Boolean(q || genre || year || minRating)
+  const hasFilters = Boolean(q || genre || year || minRating || person)
 
   return (
     <div className="bg-background text-on-background font-body-md min-h-screen flex flex-col">
@@ -250,6 +264,40 @@ export function Search() {
                   </button>
                 )}
               </div>
+
+              {/* The person filter, when a cast or credits name sent you here.
+                  Above Search because it's the widest-reaching of the filters —
+                  everything below narrows within it — and removable, since
+                  arriving from a film shouldn't trap you in one filmography.
+
+                  Keyed off the URL rather than `data.person`, so the pill is there
+                  from the first paint and stays reachable for an id that resolved to
+                  nobody; the name fills in once the response names them. */}
+              {person && (
+                <div className="border-b border-surface-variant pb-md">
+                  <h3 className="font-label-sm text-label-sm text-outline mb-sm uppercase tracking-wider">
+                    Person
+                  </h3>
+                  <button
+                    onClick={() => commit({ person: null })}
+                    /* Labelled rather than left to its contents: the visible text
+                       is a name, which says who is filtered but not that pressing
+                       it undoes that. */
+                    aria-label={`Remove the ${data?.person?.name ?? 'person'} filter`}
+                    title="Remove this filter"
+                    className="w-full flex items-center gap-1 bg-primary text-on-primary font-label-sm text-label-sm px-2 py-1 rounded shadow-sm cursor-pointer text-left"
+                  >
+                    <span className="truncate">{data?.person?.name ?? 'Unknown person'}</span>
+                    <span
+                      aria-hidden="true"
+                      className="material-symbols-outlined text-[16px] ml-auto shrink-0"
+                      style={OUTLINED}
+                    >
+                      close
+                    </span>
+                  </button>
+                </div>
+              )}
 
               <div className="border-b border-surface-variant pb-md">
                 <h3 className="font-label-sm text-label-sm text-outline mb-sm uppercase tracking-wider">
@@ -370,8 +418,10 @@ export function Search() {
           <section className="flex-grow min-w-0">
             <div className="mb-lg flex justify-between items-end border-b border-surface-variant pb-xs">
               <div>
+                {/* Named when a person is filtered on — arriving from a cast
+                    portrait, "Search Results" doesn't say whose films these are. */}
                 <h1 className="font-headline-lg text-headline-lg-mobile md:text-headline-lg text-on-background">
-                  Search Results
+                  {data?.person ? `Films with ${data.person.name}` : 'Search Results'}
                 </h1>
                 <p className="font-body-md text-body-md text-on-surface-variant mt-1">
                   {data
@@ -422,7 +472,11 @@ export function Search() {
                 </span>
                 <p className="font-body-lg text-body-lg text-on-background">No films match.</p>
                 <p className="font-label-sm text-label-sm text-on-surface-variant">
-                  Try a different genre or lower the rating floor.
+                  {/* A person filter that named nobody is its own case: no chip
+                      change will help, and the only way out is dropping it. */}
+                  {person && !data.person
+                    ? 'That person is not on file. Remove the filter to search everything.'
+                    : 'Try a different genre or lower the rating floor.'}
                 </p>
               </div>
             )}

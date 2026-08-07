@@ -85,6 +85,8 @@ async fn main() {
     // becomes a banner rather than six broken screens. Never logs the token.
     let source = content::Source::from_env().await;
 
+    seed_graph(&conn, &source).await;
+
     let state = state::AppState::new(source, Arc::new(Mutex::new(conn)));
     let app = routes::router(state)
         .nest_service("/img", ServeDir::new(img_dir))
@@ -103,4 +105,36 @@ async fn main() {
     tracing::info!("listening on http://{addr}");
 
     axum::serve(listener, app).await.expect("server error");
+}
+
+/// Fill the social graph on first run: some users, some followers, some reviews,
+/// so the friend screens have something to show before anyone has used the app.
+///
+/// Never fatal. A harvest needs the network, and refusing to boot because TMDB was
+/// slow would trade a partly-populated friend list for no application at all — the
+/// screens already say when a list is empty. Runs before the server binds rather
+/// than in a background task, so the graph is never half-visible mid-request.
+async fn seed_graph(conn: &rusqlite::Connection, source: &content::Source) {
+    match db::needs_graph_seed(conn) {
+        // Already seeded, or the visitor has since followed people — either way the
+        // graph is theirs now and re-seeding would talk over it.
+        Ok(false) => return,
+        Ok(true) => {}
+        Err(error) => {
+            tracing::warn!(%error, "could not check the social graph; skipping the seed");
+            return;
+        }
+    }
+
+    let users = content::harvest_graph(source).await;
+    if users.is_empty() {
+        tracing::warn!("social graph left empty — no people to seed");
+        return;
+    }
+
+    let reviews: usize = users.iter().map(|u| u.reviews.len()).sum();
+    match db::seed_graph(conn, &users) {
+        Ok(count) => tracing::info!(people = count, reviews, "social graph seeded"),
+        Err(error) => tracing::warn!(%error, "could not seed the social graph"),
+    }
 }

@@ -103,6 +103,12 @@ pub fn tmdb_id(app_id: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+/// A URL- and id-safe form of arbitrary text — used for the seeded users' ids,
+/// where the source is a TMDB nickname rather than a film title.
+pub fn slug(text: &str) -> String {
+    slugify(text)
+}
+
 /// "Dune: Part Two" -> "dune-part-two". Capped so one absurd title can't produce
 /// an unwieldy URL.
 fn slugify(title: &str) -> String {
@@ -141,9 +147,10 @@ fn slugify(title: &str) -> String {
 /// Which CDN and which rendition to ask for.
 ///
 /// Sizes are chosen against how the screens actually draw them: posters at most
-/// ~300px wide (`w500` covers a 2× display), the Media tile ~640px (`w1280`),
-/// cast circles ~80px (`w185`), provider logos 32px (`w92`). Asking for
-/// `original` would ship multi-megabyte JPEGs into a row of thumbnails.
+/// ~300px wide (`w500` covers a 2× display), a wide frame ~640px (`w1280`),
+/// carousel thumbnails ~300px (`w780` — see `still`), cast circles ~80px (`w185`),
+/// provider logos 32px (`w92`). Asking for `original` would ship multi-megabyte
+/// JPEGs into a row of thumbnails.
 #[derive(Debug, Clone)]
 pub struct ImageBase {
     base: String,
@@ -193,6 +200,21 @@ impl ImageBase {
         Image::new(&self.url(&self.backdrop, path), &format!("A still frame from {title}."))
     }
 
+    /// One frame of the Media carousel: a rail thumbnail and the same frame at
+    /// full size for the lightbox behind it.
+    ///
+    /// The rail asks for `w780` rather than the configured backdrop size. A slide
+    /// is ~300px wide, and eight `w1280` frames is around 2 MB of JPEG for a
+    /// section most visitors scroll past; the lightbox pays for `original` only
+    /// when one is actually opened.
+    pub fn still(&self, path: &str, title: &str) -> Still {
+        let alt = format!("A still frame from {title}.");
+        Still {
+            image: Image::new(&self.url("w780", path), &alt),
+            full: Image::new(&self.url("original", path), &alt),
+        }
+    }
+
     pub fn profile(&self, path: &str, name: &str) -> Image {
         Image::new(&self.url(&self.profile, path), &format!("A portrait of {name}."))
     }
@@ -218,9 +240,16 @@ impl ImageBase {
             // of a specific person on a majority of real reviews attributes them to
             // someone who didn't write them. Initials are honest about having no
             // photo, and the frontend draws them as a monogram.
-            _ => Image::new(&initials_avatar(name), &alt),
+            _ => monogram(name),
         }
     }
+}
+
+/// The photo-less avatar on its own, for callers with no `ImageBase` to hand —
+/// `data::demo_graph` gives its invented people one rather than borrowing a
+/// photograph of somebody else.
+pub fn monogram(name: &str) -> Image {
+    Image::new(&initials_avatar(name), &format!("{name}'s profile picture."))
 }
 
 /// A `data:` URI drawing someone's initials — the stand-in when there is no photo.
@@ -272,8 +301,16 @@ pub fn half_stars(vote_average: f32) -> u8 {
 }
 
 /// The fractional 0.0–5.0 average the search cards print as a number.
-pub fn star_rating(vote_average: f32) -> f32 {
-    (vote_average / 2.0).clamp(0.0, 5.0)
+///
+/// `None` when nobody has voted. TMDB reports `vote_average: 0.0` for those, and
+/// printing "★ 0.0" would state a crowd average that doesn't exist — the detail
+/// screen already declines to make that claim by gating its score block on the
+/// count, and a card holding one number has to decide the same way.
+pub fn star_rating(vote_average: f32, vote_count: u32) -> Option<f32> {
+    if vote_count == 0 {
+        return None;
+    }
+    Some((vote_average / 2.0).clamp(0.0, 5.0))
 }
 
 /// The year out of "2014-11-05".
@@ -346,11 +383,30 @@ pub fn paragraphs(content: &str) -> Vec<String> {
     }
 }
 
-fn crew_named(credits: &dto::Credits, job: &str) -> Option<String> {
-    credits.crew.iter().find(|c| c.job == job).map(|c| c.name.clone())
+/// One `DetailFact` row: a comma-joined value and the people it names.
+///
+/// Built together rather than derived from each other, because neither direction
+/// works: splitting the joined string back apart would break on a name containing
+/// a comma, and rendering from the people alone would lose the studio row, whose
+/// value is nobody.
+fn fact(label: &str, people: Vec<CreditedPerson>) -> Option<DetailFact> {
+    if people.is_empty() {
+        return None;
+    }
+    let value = people.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ");
+    Some(DetailFact { label: label.into(), value, people })
 }
 
-/// Everyone credited with the first of `jobs` that anyone holds, comma-joined.
+fn crew_named(credits: &dto::Credits, job: &str) -> Vec<CreditedPerson> {
+    credits
+        .crew
+        .iter()
+        .find(|c| c.job == job)
+        .map(|c| vec![CreditedPerson { name: c.name.clone(), id: c.id.to_string() }])
+        .unwrap_or_default()
+}
+
+/// Everyone credited with the first of `jobs` that anyone holds.
 ///
 /// Two things `crew_named` can't do, both forced by what the payloads actually
 /// contain (checked across five films): a film credits several writers, and the
@@ -361,24 +417,26 @@ fn crew_named(credits: &dto::Credits, job: &str) -> Option<String> {
 /// Only the first matching title's group is taken, not the union: a row reading
 /// "Writers" should name the people who wrote the screenplay, and appending the
 /// novelist would credit them for work they didn't do.
-fn crew_group(credits: &dto::Credits, jobs: &[&str]) -> Option<String> {
+fn crew_group(credits: &dto::Credits, jobs: &[&str]) -> Vec<CreditedPerson> {
     for job in jobs {
-        let mut names: Vec<&str> = Vec::new();
+        let mut people: Vec<CreditedPerson> = Vec::new();
         for credit in credits.crew.iter().filter(|c| c.job == *job) {
             // A person can hold the same job twice on one film (co-credits are
             // sometimes duplicated per department), and the row would repeat them.
-            if !names.contains(&credit.name.as_str()) {
-                names.push(&credit.name);
+            // Matched on the id rather than the name — that's what identifies them.
+            let id = credit.id.to_string();
+            if !people.iter().any(|p| p.id == id) {
+                people.push(CreditedPerson { name: credit.name.clone(), id });
             }
         }
         // Three names is what the grid's second column fits on one line; beyond
         // that the row wraps and the label stops lining up with its value.
-        if !names.is_empty() {
-            names.truncate(3);
-            return Some(names.join(", "));
+        if !people.is_empty() {
+            people.truncate(3);
+            return people;
         }
     }
-    None
+    Vec::new()
 }
 
 /// Which country's age rating and streaming availability to report.
@@ -406,16 +464,28 @@ pub fn certification(dates: &dto::ReleaseDates) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The one video the Media block plays.
+/// How many videos the Media carousel offers.
+///
+/// Films carry 45 to 170 (verified: Interstellar 45, Evil Dead Burn 131,
+/// Spider-Man: Brand New Day 170), and past the first handful they are foreign
+/// teasers and thirty-second TV spots. Six is what fits the rail beside the stills
+/// without the section becoming the page.
+const MEDIA_VIDEOS: usize = 6;
+
+/// How many stills it offers. Same reasoning: 72–192 exist, and the carousel is a
+/// section of a page rather than a gallery.
+const MEDIA_STILLS: usize = 10;
+
+/// Every video the Media carousel plays, best first.
 ///
 /// Ranked: official beats a fan upload, a `Trailer` beats a `Teaser` beats
-/// anything else, and newer beats older. Films carry two to five official
-/// trailers each, so without the recency tiebreak the tile would play whichever
-/// TMDB happened to list first — frequently a teaser from a year before release.
+/// anything else, and newer beats older. Films carry several official trailers, so
+/// without the recency tiebreak the rail would lead with whichever TMDB happened
+/// to list first — frequently a teaser from a year before release.
 ///
 /// Non-YouTube videos are dropped. Vimeo appears occasionally and the frontend
 /// only builds YouTube embeds, so a Vimeo `key` would render a dead player.
-fn pick_video(videos: &dto::Videos) -> Option<&dto::VideoRecord> {
+fn videos(videos: &dto::Videos) -> Vec<&dto::VideoRecord> {
     fn rank(kind: &str) -> u8 {
         match kind {
             "Trailer" => 2,
@@ -424,18 +494,60 @@ fn pick_video(videos: &dto::Videos) -> Option<&dto::VideoRecord> {
         }
     }
 
-    videos
-        .results
-        .iter()
-        .filter(|v| v.site == "YouTube")
-        .max_by(|a, b| {
-            a.official
-                .cmp(&b.official)
-                .then_with(|| rank(&a.kind).cmp(&rank(&b.kind)))
-                // RFC 3339 with a fixed offset sorts correctly as text, so no
-                // date parsing is needed to find the newest.
-                .then_with(|| a.published_at.cmp(&b.published_at))
-        })
+    let mut ranked: Vec<&dto::VideoRecord> =
+        videos.results.iter().filter(|v| v.site == "YouTube").collect();
+
+    // Descending, so `take(MEDIA_VIDEOS)` keeps the best. `sort_by` rather than
+    // `sort_unstable_by`: TMDB's own order is the last tiebreak, and two videos
+    // published the same second should stay in it.
+    ranked.sort_by(|a, b| {
+        b.official
+            .cmp(&a.official)
+            .then_with(|| rank(&b.kind).cmp(&rank(&a.kind)))
+            // RFC 3339 with a fixed offset sorts correctly as text, so no date
+            // parsing is needed to find the newest.
+            .then_with(|| b.published_at.cmp(&a.published_at))
+    });
+    ranked.truncate(MEDIA_VIDEOS);
+    ranked
+}
+
+/// The frames the Media carousel shows, best first.
+///
+/// Two rules. **Untagged first:** an `iso_639_1` on a backdrop means text is burned
+/// into the image — a localized title card or a poster crop — and those are what a
+/// "stills from the film" rail should not be full of. Most images carry no tag (152
+/// of Interstellar's 184), so there are always plenty; tagged ones fill in only
+/// when a film has nothing else, because text over a frame beats an empty section.
+/// **Then by crowd score:** TMDB does return the list in that order today, but
+/// they document no such guarantee, and the rail would silently become arbitrary if
+/// it changed.
+fn stills(images: &dto::Images, title: &str, base: &ImageBase) -> Vec<Still> {
+    let mut ranked: Vec<&dto::ImageRecord> = images.backdrops.iter().collect();
+    ranked.sort_by(|a, b| {
+        a.iso_639_1
+            .is_some()
+            .cmp(&b.iso_639_1.is_some())
+            .then_with(|| b.vote_average.total_cmp(&a.vote_average))
+    });
+
+    ranked.iter().take(MEDIA_STILLS).map(|record| base.still(&record.file_path, title)).collect()
+}
+
+/// YouTube's own frame for a video.
+///
+/// Not the film's backdrop, which is what a single-tile Media block used: with
+/// several videos in one rail, one shared image made every slide identical.
+///
+/// `hqdefault` rather than `maxresdefault`: the latter is 404 for older uploads
+/// (verified — one of Interstellar's nine fixture videos has none), and a broken
+/// thumbnail in a carousel is worse than a soft one. It is 480×360 with the 16:9
+/// frame letterboxed inside, which the frontend crops.
+fn video_thumbnail(video: &dto::VideoRecord) -> Image {
+    Image::new(
+        &format!("https://img.youtube.com/vi/{}/hqdefault.jpg", video.key),
+        &format!("A frame from {}.", video.name),
+    )
 }
 
 /// The "Where to Watch" rows for `COUNTRY`, and the one link they all share.
@@ -522,24 +634,54 @@ pub fn search_result(summary: &dto::MovieSummary, images: &ImageBase) -> Catalog
     CatalogueEntry {
         id: app_id(summary.id, &summary.title),
         title: summary.title.clone(),
-        // The decade filter needs a number. A film with no release date is
-        // unreleased; 0 puts it outside every decade facet, so it shows only
-        // when no decade is selected — the same treatment the demo gives
-        // Le Souffle (1960) against its three 2000s-and-later chips.
-        year: year(summary.release_date.as_deref()).unwrap_or(0),
-        star_rating: star_rating(summary.vote_average),
+        // `None` for an unreleased film rather than a sentinel year. It falls
+        // outside every decade facet either way — see `CatalogueEntry::in_decade` —
+        // but the card can now omit the year instead of printing it.
+        year: year(summary.release_date.as_deref()),
+        star_rating: star_rating(summary.vote_average, summary.vote_count),
         poster: summary.poster_path.as_deref().map(|p| images.poster(p, &summary.title)),
-        // Desaturating one poster was per-item art direction in the export, not
-        // a rule a grid can infer, and there is no upstream equivalent.
-        grayscale: false,
         genres: genre_labels_for_ids(&summary.genre_ids),
     }
 }
 
+/// One person's whole filmography as search cards, newest first.
+///
+/// The `cast` and `crew` halves are merged and deduped by film id: they overlap
+/// wherever someone both wrote and directed, or directed and cameoed, and the grid
+/// must not show that film twice.
+///
+/// Sorted by release date descending, which is how a filmography is read — and it's
+/// a stable ordering the local pagination can rely on, unlike TMDB's own credit
+/// order (which is by department, then by nothing in particular). Undated films are
+/// unreleased and sort to the front, where the newest things belong.
+pub fn filmography(person: &dto::Person, images: &ImageBase) -> Vec<CatalogueEntry> {
+    let mut seen = std::collections::HashSet::new();
+    let mut films: Vec<&dto::MovieSummary> = person
+        .movie_credits
+        .cast
+        .iter()
+        .chain(person.movie_credits.crew.iter())
+        .filter(|film| seen.insert(film.id))
+        .collect();
+    // Descending by date string, which sorts correctly because TMDB's dates are
+    // zero-padded ISO. An empty date is treated as the far future, not 0 — an
+    // undated credit is an announced film, and burying it under 1962 would read as
+    // wrong on a page sorted newest-first.
+    films.sort_by(|a, b| {
+        let key = |f: &dto::MovieSummary| match f.release_date.as_deref() {
+            Some(date) if !date.is_empty() => date.to_string(),
+            _ => "9999".to_string(),
+        };
+        key(b).cmp(&key(a))
+    });
+    films.into_iter().map(|film| search_result(film, images)).collect()
+}
+
 /// The detail screen.
 ///
-/// `on_watchlist` and `your_rating_half_stars` are left at their defaults — as in
-/// `data`, `hydrate` fills them from the store.
+/// The four visitor fields — `on_watchlist`, `is_favorite`, the rating and the
+/// review — are left at their defaults; as in `data`, `hydrate` fills them from the
+/// store.
 pub fn movie_detail(detail: &dto::MovieDetail, images: &ImageBase) -> MovieDetail {
     let title = detail.title.clone();
 
@@ -549,10 +691,9 @@ pub fn movie_detail(detail: &dto::MovieDetail, images: &ImageBase) -> MovieDetai
         .map(|p| images.poster(p, &title))
         .unwrap_or_else(|| Image::new("img/poster-neon-reverie.jpg", &format!("Poster for {title}.")));
 
-    // The still behind the Media block's play button. Prefers the film's own
-    // backdrop, then any from the images block, then the poster — TMDB serves no
-    // per-video thumbnail, and an empty src would leave a 16:9 hole with a play
-    // glyph floating in it.
+    // One wide frame, for the review screen's faded header. Prefers the film's own
+    // backdrop, then any from the images block, then the poster — an empty src
+    // there would leave a 60vh hole above the text.
     let backdrop = detail
         .backdrop_path
         .as_deref()
@@ -583,6 +724,8 @@ pub fn movie_detail(detail: &dto::MovieDetail, images: &ImageBase) -> MovieDetai
                 // reason as the review avatars — see `ImageBase::avatar`.
                 None => Image::new(&initials_avatar(&member.name), &format!("A portrait of {}.", member.name)),
             },
+            // A real TMDB id, so `/search?person=` has a filmography to find.
+            searchable: true,
         })
         .collect();
 
@@ -590,22 +733,22 @@ pub fn movie_detail(detail: &dto::MovieDetail, images: &ImageBase) -> MovieDetai
     // value TMDB doesn't have is omitted rather than shown as "Unknown" — the
     // frontend maps over this list, so a sparse film just draws fewer rows.
     let mut details = Vec::new();
-    if let Some(director) = crew_named(&detail.credits, "Director") {
-        details.push(DetailFact { label: "Director".into(), value: director });
-    }
+    details.extend(fact("Director", crew_named(&detail.credits, "Director")));
     // The job title varies by film, so this is a chain rather than one match —
     // see `crew_group`.
-    if let Some(writers) = crew_group(&detail.credits, &["Writer", "Screenplay", "Story", "Novel", "Author", "Book"]) {
-        details.push(DetailFact { label: "Writers".into(), value: writers });
-    }
-    if let Some(dop) = crew_named(&detail.credits, "Director of Photography") {
-        details.push(DetailFact { label: "Cinematography".into(), value: dop });
-    }
-    if let Some(composer) = crew_named(&detail.credits, "Original Music Composer") {
-        details.push(DetailFact { label: "Music".into(), value: composer });
-    }
+    details.extend(fact(
+        "Writers",
+        crew_group(&detail.credits, &["Writer", "Screenplay", "Story", "Novel", "Author", "Book"]),
+    ));
+    details.extend(fact("Cinematography", crew_named(&detail.credits, "Director of Photography")));
+    details.extend(fact("Music", crew_named(&detail.credits, "Original Music Composer")));
     if let Some(studio) = detail.production_companies.first() {
-        details.push(DetailFact { label: "Production".into(), value: studio.name.clone() });
+        // A studio, not a person — so the row carries no linkable name.
+        details.push(DetailFact {
+            label: "Production".into(),
+            value: studio.name.clone(),
+            people: Vec::new(),
+        });
     }
 
     let synopsis = detail
@@ -616,18 +759,24 @@ pub fn movie_detail(detail: &dto::MovieDetail, images: &ImageBase) -> MovieDetai
         .unwrap_or("No synopsis on file.")
         .to_string();
 
-    let trailer = pick_video(&detail.videos).map(|video| Trailer {
-        name: video.name.clone(),
-        key: video.key.clone(),
-        site: video.site.clone(),
-        thumbnail: backdrop.clone(),
-    });
+    let trailers = videos(&detail.videos)
+        .into_iter()
+        .map(|video| Trailer {
+            name: video.name.clone(),
+            key: video.key.clone(),
+            site: video.site.clone(),
+            kind: video.kind.clone(),
+            thumbnail: video_thumbnail(video),
+        })
+        .collect();
 
     let (watch_options, watch_link) = watch_options(&detail.watch_providers, images);
 
     MovieDetail {
         id: app_id(detail.id, &title),
-        year: year(detail.release_date.as_deref()).unwrap_or(0),
+        // `None` rather than 0 for an announced film — reachable from a filmography,
+        // where unreleased credits are ordinary. The title line omits the segment.
+        year: year(detail.release_date.as_deref()),
         certification: certification(&detail.release_dates),
         runtime: runtime(detail.runtime),
         genres: detail.genres.iter().map(|g| genre_label(&g.name)).collect(),
@@ -639,71 +788,17 @@ pub fn movie_detail(detail: &dto::MovieDetail, images: &ImageBase) -> MovieDetai
         score: detail.vote_average.clamp(0.0, 10.0),
         vote_count: detail.vote_count,
         details,
-        trailer,
+        trailers,
+        stills: stills(&detail.images, &title, images),
         watch_options,
         watch_link,
         cast,
         title,
         on_watchlist: false,
+        is_favorite: false,
         your_rating_half_stars: None,
+        your_review: None,
     }
-}
-
-/// One TMDB review as the review screens expect it.
-///
-/// `comments` is left empty: TMDB has no reply threads, so the conversation comes
-/// from SQLite and `hydrate::review` appends it. `like_count` is `None` for the
-/// same reason — there is no upstream count, and `hydrate::like_count` renders
-/// nothing until the visitor likes it, then 1, rather than a visible zero.
-pub fn review(
-    record: &dto::ReviewRecord,
-    film: &dto::MovieDetail,
-    images: &ImageBase,
-) -> Review {
-    let movie = Movie {
-        id: app_id(film.id, &film.title),
-        title: film.title.clone(),
-        year: year(film.release_date.as_deref()),
-        poster: film
-            .poster_path
-            .as_deref()
-            .map(|p| images.poster(p, &film.title))
-            .unwrap_or_else(|| Image::new("img/poster-neon-reverie.jpg", &format!("Poster for {}.", film.title))),
-    };
-
-    Review {
-        id: review_id(film.id, &record.id),
-        movie,
-        backdrop: film.backdrop_path.as_deref().map(|p| images.backdrop(p, &film.title)),
-        director: crew_named(&film.credits, "Director"),
-        genres: film.genres.iter().map(|g| genre_label(&g.name)).collect(),
-        author_name: record.author.clone(),
-        author_avatar: images.avatar(record.author_details.avatar_path.as_deref(), &record.author),
-        watched_on: match long_date(&record.created_at) {
-            Some(date) => format!("Reviewed on {date}"),
-            None => "Reviewed recently".into(),
-        },
-        // An unrated review still draws a star row, so fall back to the crowd
-        // average rather than to zero stars, which would misreport the author.
-        rating_half_stars: half_stars(record.author_details.rating.unwrap_or(film.vote_average)),
-        paragraphs: paragraphs(&record.content),
-        like_count: None,
-        comments: Vec::new(),
-        hashtags: Vec::new(),
-        liked: false,
-    }
-}
-
-/// `157336-5463856c0e0a267815002598` — the film scopes the review, which is what
-/// lets one id identify a review without a second lookup to find its film.
-pub fn review_id(tmdb_movie_id: u32, tmdb_review_id: &str) -> String {
-    format!("{tmdb_movie_id}-{tmdb_review_id}")
-}
-
-/// The film id and review id back out of one. Inverse of `review_id`.
-pub fn split_review_id(id: &str) -> Option<(u32, &str)> {
-    let (movie, review) = id.split_once('-')?;
-    Some((movie.parse().ok()?, review))
 }
 
 #[cfg(test)]
@@ -723,9 +818,9 @@ mod tests {
         serde_json::from_str(&fixture("movie-157336.json")).expect("movie-157336.json")
     }
 
-    fn reviews() -> dto::Page<dto::ReviewRecord> {
-        serde_json::from_str(&fixture("reviews-157336.json")).expect("reviews-157336.json")
-    }
+    // No `reviews()` helper any more: nothing in this module maps review prose
+    // since `content::harvest_graph` took that over, and the recorded payload is
+    // still covered by `every_fixture_deserializes`.
 
     /// The genre table is transcribed rather than fetched, so it has to be
     /// checked against the real list — otherwise a renamed or added genre would
@@ -790,8 +885,10 @@ mod tests {
         assert_eq!(half_stars(6.7), 7); // three and a half
         assert_eq!(half_stars(0.0), 0);
         assert_eq!(half_stars(11.0), 10); // clamped
-        assert_eq!(star_rating(8.0), 4.0);
-        assert_eq!(star_rating(0.0), 0.0);
+        assert_eq!(star_rating(8.0, 1200), Some(4.0));
+        // Rated zero by somebody is a real average; rated by nobody is not one.
+        assert_eq!(star_rating(0.0, 3), Some(0.0));
+        assert_eq!(star_rating(0.0, 0), None);
     }
 
     #[test]
@@ -945,7 +1042,7 @@ mod tests {
 
         assert_eq!(detail.id, "157336-interstellar");
         assert_eq!(detail.title, "Interstellar");
-        assert_eq!(detail.year, 2014);
+        assert_eq!(detail.year, Some(2014));
         assert_eq!(detail.certification.as_deref(), Some("PG-13"));
         assert_eq!(detail.runtime, "2h 49m");
         assert!(detail.genres.contains(&"Sci-Fi".to_string()), "got {:?}", detail.genres);
@@ -979,42 +1076,104 @@ mod tests {
         assert_eq!(detail.your_rating_half_stars, None);
     }
 
-    /// The Media block plays the newest official *trailer*, which is not the
+    /// The carousel *leads* with the newest official trailer, which is not the
     /// newest video: the fixture's two most recent entries are clips from after
-    /// the film's 10th anniversary, so a pure recency sort would play one of them.
+    /// the film's 10th anniversary, so a pure recency sort would lead with one.
     #[test]
-    fn the_media_block_prefers_the_newest_official_trailer() {
+    fn the_media_carousel_leads_with_the_newest_official_trailer() {
         let images = ImageBase::default();
         let detail = movie_detail(&interstellar(), &images);
 
-        let trailer = detail.trailer.expect("Interstellar has official trailers");
-        assert_eq!(trailer.name, "Trailer 4");
-        assert_eq!(trailer.key, "LY19rHKAaAg");
-        assert_eq!(trailer.site, "YouTube");
-        // No per-video thumbnail upstream, so the tile shows the film's backdrop.
-        assert_eq!(trailer.thumbnail.src, detail.backdrop.src);
+        let first = detail.trailers.first().expect("Interstellar has official trailers");
+        assert_eq!(first.name, "Trailer 4");
+        assert_eq!(first.key, "LY19rHKAaAg");
+        assert_eq!(first.site, "YouTube");
+        assert_eq!(first.kind, "Trailer");
+        // Its own YouTube frame, not the film's backdrop — several videos sharing
+        // one image would make every slide look the same.
+        assert_eq!(first.thumbnail.src, "https://img.youtube.com/vi/LY19rHKAaAg/hqdefault.jpg");
+        assert_ne!(first.thumbnail.src, detail.backdrop.src);
     }
 
-    /// A film with no video at all has no Media block, and a Vimeo-only one is
-    /// treated the same — the frontend builds YouTube embeds only, so a Vimeo key
-    /// would render a dead player.
+    /// And then the rest, in rank order, capped. The fixture has three trailers,
+    /// two teasers and four others, so the whole ordering is observable in one film.
     #[test]
-    fn a_film_with_no_embeddable_video_has_no_trailer() {
-        let videos: dto::Videos = serde_json::from_str(r#"{"results":[]}"#).unwrap();
-        assert!(pick_video(&videos).is_none());
+    fn the_carousel_ranks_trailers_over_teasers_over_everything_else() {
+        let detail = movie_detail(&interstellar(), &ImageBase::default());
+
+        // The sixth is a Clip rather than the Featurette: everything below Teaser
+        // ranks equal, so among those recency decides, and the fixture's clips are
+        // from 2026 against a featurette from 2015.
+        let kinds: Vec<&str> = detail.trailers.iter().map(|t| t.kind.as_str()).collect();
+        assert_eq!(kinds, ["Trailer", "Trailer", "Trailer", "Teaser", "Teaser", "Clip"]);
+        assert_eq!(detail.trailers.len(), MEDIA_VIDEOS, "capped");
+
+        // Newest first within a kind: Trailer 4 (2014-10) before :60 International
+        // (2014-08) before Trailer 3 (2014-07).
+        let names: Vec<&str> = detail.trailers.iter().take(3).map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["Trailer 4", ":60 International Trailer", "Trailer 3"]);
+    }
+
+    /// A film with no video has an empty rail, and a Vimeo-only one is treated the
+    /// same — the frontend builds YouTube embeds only, so a Vimeo key would render
+    /// a dead player.
+    #[test]
+    fn a_film_with_no_embeddable_video_has_no_trailers() {
+        let empty: dto::Videos = serde_json::from_str(r#"{"results":[]}"#).unwrap();
+        assert!(videos(&empty).is_empty());
 
         let vimeo: dto::Videos = serde_json::from_str(
             r#"{"results":[{"name":"T","key":"123","site":"Vimeo","type":"Trailer","official":true}]}"#,
         )
         .unwrap();
-        assert!(pick_video(&vimeo).is_none());
+        assert!(videos(&vimeo).is_empty());
 
         // A fan upload is still better than nothing when it's all there is.
         let unofficial: dto::Videos = serde_json::from_str(
             r#"{"results":[{"name":"T","key":"abc","site":"YouTube","type":"Trailer","official":false}]}"#,
         )
         .unwrap();
-        assert_eq!(pick_video(&unofficial).map(|v| v.key.as_str()), Some("abc"));
+        assert_eq!(videos(&unofficial).iter().map(|v| v.key.as_str()).collect::<Vec<_>>(), ["abc"]);
+    }
+
+    /// The stills rail skips images with text burned into them, which is what a
+    /// language tag on a backdrop means.
+    #[test]
+    fn the_stills_rail_prefers_frames_with_no_text_on_them() {
+        let detail = movie_detail(&interstellar(), &ImageBase::default());
+
+        // The fixture has ten backdrops, one of them tagged `de`, so nine survive
+        // the filter and the tagged one is appended to reach the cap.
+        assert_eq!(detail.stills.len(), 10);
+        let paths: Vec<&str> = detail.stills.iter().map(|s| s.image.src.as_str()).collect();
+        let tagged = "/1KJKaerVTo6z6ulY9clHW4I89E9.jpg";
+        assert!(paths.last().unwrap().ends_with(tagged), "tagged image goes last: {paths:?}");
+        assert_eq!(
+            paths.iter().filter(|p| p.ends_with(tagged)).count(),
+            1,
+            "and is not also counted among the untagged: {paths:?}",
+        );
+
+        // Thumbnails are the rail size; the lightbox copy is full resolution.
+        let first = &detail.stills[0];
+        assert_eq!(first.image.src, "https://image.tmdb.org/t/p/w780/5XNQBqnBwPA9yT0jZ0p3s8bbLh0.jpg");
+        assert_eq!(first.full.src, "https://image.tmdb.org/t/p/original/5XNQBqnBwPA9yT0jZ0p3s8bbLh0.jpg");
+        assert_eq!(first.image.alt, first.full.alt, "same frame, same description");
+    }
+
+    /// With nothing but tagged images there is still a rail — text over a frame
+    /// beats an empty section.
+    #[test]
+    fn tagged_images_are_a_fallback_rather_than_a_veto() {
+        let images: dto::Images = serde_json::from_str(
+            r#"{"backdrops":[{"file_path":"/a.jpg","iso_639_1":"en"},{"file_path":"/b.jpg","iso_639_1":"fr"}]}"#,
+        )
+        .unwrap();
+
+        let picked = stills(&images, "X", &ImageBase::default());
+        let paths: Vec<&str> = picked.iter().map(|s| s.image.src.as_str()).collect();
+        assert_eq!(paths.len(), 2, "both kept: {paths:?}");
+        assert!(paths[0].ends_with("/a.jpg"));
     }
 
     /// An empty certification means "released here, not rated" and has to be
@@ -1117,26 +1276,57 @@ mod tests {
     fn the_writers_row_falls_through_the_job_titles() {
         let credits = |json: &str| -> dto::Credits { serde_json::from_str(json).unwrap() };
         let jobs = ["Writer", "Screenplay", "Story", "Novel", "Author", "Book"];
+        let row = |c: &dto::Credits| fact("Writers", crew_group(c, &jobs)).map(|f| f.value);
 
-        let writer = credits(r#"{"crew":[{"name":"A","job":"Writer"},{"name":"B","job":"Writer"}]}"#);
-        assert_eq!(crew_group(&writer, &jobs).as_deref(), Some("A, B"));
+        let writer = credits(r#"{"crew":[{"id":1,"name":"A","job":"Writer"},{"id":2,"name":"B","job":"Writer"}]}"#);
+        assert_eq!(row(&writer).as_deref(), Some("A, B"));
 
         // No `Writer` credit at all: the next title in the chain answers.
-        let screenplay = credits(r#"{"crew":[{"name":"C","job":"Novel"},{"name":"D","job":"Screenplay"}]}"#);
+        let screenplay =
+            credits(r#"{"crew":[{"id":3,"name":"C","job":"Novel"},{"id":4,"name":"D","job":"Screenplay"}]}"#);
         // Screenplay outranks Novel, and only the winning group is named — a row
         // saying "Writers" shouldn't credit the novelist for the script.
-        assert_eq!(crew_group(&screenplay, &jobs).as_deref(), Some("D"));
+        assert_eq!(row(&screenplay).as_deref(), Some("D"));
 
         // Duplicated co-credits collapse; a fourth name is dropped so the row
         // stays on one line beside its label.
         let dupes = credits(
-            r#"{"crew":[{"name":"A","job":"Writer"},{"name":"A","job":"Writer"},
-                        {"name":"B","job":"Writer"},{"name":"C","job":"Writer"},
-                        {"name":"D","job":"Writer"}]}"#,
+            r#"{"crew":[{"id":1,"name":"A","job":"Writer"},{"id":1,"name":"A","job":"Writer"},
+                        {"id":2,"name":"B","job":"Writer"},{"id":3,"name":"C","job":"Writer"},
+                        {"id":4,"name":"D","job":"Writer"}]}"#,
         );
-        assert_eq!(crew_group(&dupes, &jobs).as_deref(), Some("A, B, C"));
+        assert_eq!(row(&dupes).as_deref(), Some("A, B, C"));
 
-        assert_eq!(crew_group(&credits(r#"{"crew":[]}"#), &jobs), None);
+        assert_eq!(row(&credits(r#"{"crew":[]}"#)), None);
+    }
+
+    /// The linkable names run parallel to the row's text, in the order they appear
+    /// there — that pairing is what lets the frontend turn each one into a link
+    /// without re-splitting the joined string.
+    #[test]
+    fn a_credits_row_carries_the_people_it_names() {
+        let credits: dto::Credits = serde_json::from_str(
+            r#"{"crew":[{"id":525,"name":"Christopher Nolan","job":"Writer"},
+                        {"id":527,"name":"Jonathan Nolan","job":"Writer"}]}"#,
+        )
+        .unwrap();
+        let row = fact("Writers", crew_group(&credits, &["Writer"])).unwrap();
+        assert_eq!(row.value, "Christopher Nolan, Jonathan Nolan");
+        assert_eq!(
+            row.people.iter().map(|p| (p.name.as_str(), p.id.as_str())).collect::<Vec<_>>(),
+            [("Christopher Nolan", "525"), ("Jonathan Nolan", "527")],
+        );
+
+        // The studio row names nobody, so nothing in it is a link.
+        let film = interstellar();
+        let detail = movie_detail(&film, &ImageBase::default());
+        let production = detail.details.iter().find(|f| f.label == "Production").unwrap();
+        assert!(production.people.is_empty(), "a studio is not a person");
+        let director = detail.details.iter().find(|f| f.label == "Director").unwrap();
+        assert_eq!(director.people.len(), 1);
+        assert_eq!(director.people[0].name, director.value);
+        // A real id, so the link has a filmography behind it.
+        assert!(director.people[0].id.parse::<u32>().is_ok(), "{}", director.people[0].id);
     }
 
     /// A cast member with no photograph gets a monogram, not a stock face — the
@@ -1152,52 +1342,6 @@ mod tests {
         assert!(portrait.src.contains(">MM<"), "got {}", portrait.src);
     }
 
-    #[test]
-    fn a_tmdb_review_maps_onto_the_review_screen() {
-        let film = interstellar();
-        let images = ImageBase::default();
-        let page = reviews();
-        let record = &page.results[0];
-
-        let review = review(record, &film, &images);
-        assert_eq!(review.id, format!("157336-{}", record.id));
-        assert_eq!(split_review_id(&review.id), Some((157336, record.id.as_str())));
-        assert_eq!(review.movie.title, "Interstellar");
-        assert_eq!(review.director.as_deref(), Some("Christopher Nolan"));
-        assert!(review.watched_on.starts_with("Reviewed on "));
-        assert!(!review.paragraphs.is_empty());
-        assert!(review.author_avatar.src.contains("://") || review.author_avatar.src.starts_with('/'));
-
-        // No upstream count and no upstream thread — both come from elsewhere.
-        assert_eq!(review.like_count, None);
-        assert!(review.comments.is_empty());
-        assert!(!review.liked);
-    }
-
-    /// An unrated review still draws a star row, so it borrows the crowd average
-    /// rather than reporting the author gave it zero.
-    #[test]
-    fn an_unrated_review_falls_back_to_the_crowd_average() {
-        let film = interstellar();
-        let images = ImageBase::default();
-        let page = reviews();
-
-        let unrated = page
-            .results
-            .iter()
-            .find(|r| r.author_details.rating.is_none())
-            .expect("fixture should contain an unrated review");
-        assert_eq!(review(unrated, &film, &images).rating_half_stars, half_stars(film.vote_average));
-
-        let rated = page
-            .results
-            .iter()
-            .find(|r| r.author_details.rating.is_some())
-            .expect("fixture should contain a rated review");
-        let expected = half_stars(rated.author_details.rating.unwrap());
-        assert_eq!(review(rated, &film, &images).rating_half_stars, expected);
-    }
-
     /// Every recorded payload deserializes — the point of keeping fixtures.
     #[test]
     fn every_fixture_deserializes() {
@@ -1209,5 +1353,46 @@ mod tests {
             serde_json::from_str(&fixture("discover-878.json")).unwrap();
         let _: dto::MovieDetail = serde_json::from_str(&fixture("movie-157336.json")).unwrap();
         let _: dto::Page<dto::ReviewRecord> = serde_json::from_str(&fixture("reviews-157336.json")).unwrap();
+        let _: dto::Person = serde_json::from_str(&fixture("person-525.json")).unwrap();
+    }
+
+    /// A filmography is the search screen's candidate set when a name is clicked,
+    /// so it has to be one film per row and newest-first — the ordering the local
+    /// pagination then slices.
+    #[test]
+    fn a_filmography_merges_the_cast_and_crew_credits() {
+        let nolan: dto::Person = serde_json::from_str(&fixture("person-525.json")).unwrap();
+        let films = filmography(&nolan, &ImageBase::default());
+
+        // 33 cast + 78 crew credits on the record, but far fewer films: he is
+        // credited several ways on most of his own.
+        let (cast, crew) = (nolan.movie_credits.cast.len(), nolan.movie_credits.crew.len());
+        assert!(films.len() < cast + crew, "{} vs {cast}+{crew} credits", films.len());
+        let ids: std::collections::HashSet<&str> = films.iter().map(|f| f.id.as_str()).collect();
+        assert_eq!(ids.len(), films.len(), "a film appears twice");
+
+        // Newest first, with undated credits — announced films — at the front
+        // rather than buried under the 1990s.
+        let years: Vec<Option<u16>> = films.iter().map(|f| f.year).collect();
+        let dated: Vec<u16> = years.iter().flatten().copied().collect();
+        assert!(dated.windows(2).all(|w| w[0] >= w[1]), "{years:?}");
+        // Carried as `None` rather than a sentinel, so the card omits the year
+        // instead of printing "(0)". Nolan has announced films at any given time,
+        // but the fixture is a recording — assert the shape, not that one is in it.
+        assert!(years.iter().take_while(|y| y.is_none()).count() < years.len());
+
+        // The cards carry what the grid draws.
+        let interstellar = films.iter().find(|f| f.title == "Interstellar").expect("Interstellar");
+        assert_eq!(interstellar.year, Some(2014));
+        assert!(interstellar.poster.is_some());
+        assert!(interstellar.genres.contains(&"Sci-Fi".to_string()), "{:?}", interstellar.genres);
+        assert!(interstellar.star_rating.is_some_and(|r| r > 4.0), "{:?}", interstellar.star_rating);
+
+        // A filmography is where obscure and unreleased credits live, so it's where
+        // both sentinels used to show: three of these have no votes at all, and
+        // "★ 0.0" would state an average nobody gave.
+        let unrated = films.iter().filter(|f| f.star_rating.is_none()).count();
+        assert!(unrated > 0, "the fixture has films with vote_count 0");
+        assert!(unrated < films.len(), "{unrated} of {} unrated", films.len());
     }
 }

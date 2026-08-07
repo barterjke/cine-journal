@@ -24,7 +24,9 @@ export type Tab = 'feed' | 'movies' | 'friends' | 'profile'
 const TABS: { id: Tab; label: string; icon: string; to: string }[] = [
   { id: 'feed', label: 'Feed', icon: 'home', to: '/' },
   { id: 'movies', label: 'Movies', icon: 'movie', to: '/search' },
-  { id: 'friends', label: 'Friends', icon: 'group', to: '/review' },
+  // Friends pointed at `/review` while a single review screen was the only place
+  // another person appeared. `/people` is the actual directory now.
+  { id: 'friends', label: 'Friends', icon: 'group', to: '/people' },
   { id: 'profile', label: 'Profile', icon: 'person', to: '/profile' },
 ]
 
@@ -133,12 +135,27 @@ export function TopAppBar({ active }: { active: Tab }) {
             <span className="material-symbols-outlined">search</span>
           </Link>
           <SearchBox />
-          <button className="text-on-surface-variant hover:text-primary transition-colors p-sm cursor-pointer active:opacity-70">
-            <span className="material-symbols-outlined">notifications</span>
-          </button>
-          <button className="text-on-surface-variant hover:text-primary transition-colors p-sm cursor-pointer active:opacity-70">
-            <span className="material-symbols-outlined">cast</span>
-          </button>
+          {/* Was a bell and a cast icon: two `<button>`s with no `onClick`, no
+              notifications behind them and nothing to cast to. One link to your own
+              page instead — the Profile tab goes to the same place, but this corner
+              of a masthead is where "you" belongs, and it is reachable below `lg`
+              where the nav collapses. */}
+          <Link
+            to="/profile"
+            aria-label="Your profile"
+            className={
+              active === 'profile'
+                ? 'text-primary dark:text-primary-fixed p-sm active:opacity-70'
+                : 'text-on-surface-variant hover:text-primary transition-colors p-sm active:opacity-70'
+            }
+          >
+            <span
+              className="material-symbols-outlined block"
+              style={active === 'profile' ? { fontVariationSettings: "'FILL' 1" } : undefined}
+            >
+              account_circle
+            </span>
+          </Link>
         </div>
       </div>
     </header>

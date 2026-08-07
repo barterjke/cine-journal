@@ -1,0 +1,29 @@
+<!--
+  The stand-in for a film with no poster, on screens whose card is nothing but its
+  image — the mobile feed's grid, where a missing poster would collapse the tile.
+  The search grid draws its own "Poster Missing" state in markup instead, because it
+  has a caption underneath to sit against; this is the same idea as a file, since a
+  `Movie.poster` is a required `Image` and a card cannot opt out of having one.
+
+  2:3, matching every poster in the app, and drawn in the theme's own
+  `surface-container-high` / `outline` so it reads as a frame rather than a broken
+  image. `viewBox` with no width or height so it scales to whatever tile holds it.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300" role="img"
+     aria-label="No poster available for this film.">
+  <rect width="200" height="300" fill="#eae7e7"/>
+  <!-- The film-reel glyph, centred a little above the middle so the label below
+       balances it. Stroked rather than filled, to match the outlined icon set the
+       rest of the app draws. -->
+  <g transform="translate(100 128)" fill="none" stroke="#737688" stroke-width="4"
+     opacity="0.5">
+    <rect x="-34" y="-26" width="68" height="52" rx="4"/>
+    <path d="M-34 -12h68M-34 12h68M-16 -26v52M16 -26v52"/>
+  </g>
+  <text x="100" y="188" text-anchor="middle" fill="#737688"
+        font-family="Inter, system-ui, sans-serif" font-size="13"
+        font-weight="500" letter-spacing="1.2">POSTER</text>
+  <text x="100" y="206" text-anchor="middle" fill="#737688"
+        font-family="Inter, system-ui, sans-serif" font-size="13"
+        font-weight="500" letter-spacing="1.2">MISSING</text>
+</svg>

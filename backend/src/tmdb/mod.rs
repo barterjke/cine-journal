@@ -29,7 +29,29 @@ const TTL_SEARCH: Duration = Duration::from_secs(5 * 60);
 /// Upstream wouldn't answer. The message is safe to show a user and never
 /// contains the token — see `Tmdb::fetch`.
 #[derive(Debug, Clone)]
-pub struct Error(pub String);
+pub struct Error(pub String, pub Kind);
+
+/// Whether the request was wrong or upstream was.
+///
+/// The distinction matters because the fallbacks differ: an unreachable TMDB should
+/// serve the demo dataset, whereas a 404 for a hand-typed id has no fallback worth
+/// offering — the honest answer is that there's no such thing, and pretending
+/// otherwise would show invented films under someone's name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// TMDB says no such record: a 404, and nothing a retry or a cache would fix.
+    Missing,
+    /// Anything else — unreachable, rejected, unparseable, rate-limited.
+    Upstream,
+}
+
+impl Error {
+    /// Whether this is TMDB's "no such record", rather than a failure of ours or
+    /// theirs.
+    pub fn is_missing(&self) -> bool {
+        self.1 == Kind::Missing
+    }
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -78,7 +100,7 @@ impl Tmdb {
             .timeout(Duration::from_secs(10))
             .user_agent("cine-journal/0.1 (+https://github.com/barterjke/cine-journal)")
             .build()
-            .map_err(|e| Error(format!("could not build an HTTP client: {e}")))?;
+            .map_err(|e| Error(format!("could not build an HTTP client: {e}"), Kind::Upstream))?;
 
         Ok(Self {
             http,
@@ -113,14 +135,14 @@ impl Tmdb {
             .map_err(|e| {
                 // `reqwest`'s Display includes the URL but never the headers, so
                 // this is safe to log and to show a user.
-                Error(format!("TMDB request to {path} failed: {e}"))
+                Error(format!("TMDB request to {path} failed: {e}"), Kind::Upstream)
             })?;
 
         let status = response.status();
         let body = response
             .text()
             .await
-            .map_err(|e| Error(format!("could not read the TMDB response for {path}: {e}")))?;
+            .map_err(|e| Error(format!("could not read the TMDB response for {path}: {e}"), Kind::Upstream))?;
 
         if !status.is_success() {
             // TMDB explains failures in a `status_message`, which is worth
@@ -130,7 +152,15 @@ impl Tmdb {
                 .ok()
                 .and_then(|v| v.get("status_message")?.as_str().map(str::to_string))
                 .unwrap_or_else(|| status.to_string());
-            return Err(Error(format!("TMDB returned {} for {path}: {detail}", status.as_u16())));
+            let kind = if status == reqwest::StatusCode::NOT_FOUND {
+                Kind::Missing
+            } else {
+                Kind::Upstream
+            };
+            return Err(Error(
+                format!("TMDB returned {} for {path}: {detail}", status.as_u16()),
+                kind,
+            ));
         }
 
         let parsed = parse(path, &body)?;
@@ -153,7 +183,7 @@ impl Tmdb {
         if auth.success {
             Ok(())
         } else {
-            Err(Error("TMDB rejected the token".into()))
+            Err(Error("TMDB rejected the token".into(), Kind::Upstream))
         }
     }
 
@@ -201,6 +231,43 @@ impl Tmdb {
         let path =
             format!("/movie/{id}?append_to_response=credits,images,videos,release_dates,watch/providers");
         self.fetch(&path, TTL_DETAIL).await
+    }
+
+    /// One person and everything they were credited on.
+    ///
+    /// `movie_credits` appended rather than `discover?with_people=`, because the
+    /// filmography arrives *complete* in one response — 63 films for Nolan, 342 for
+    /// Spielberg, each carrying the same `title`/`release_date`/`poster_path`/
+    /// `vote_average`/`genre_ids` a search card needs (verified across four people).
+    /// A paginated `discover` would be one request per page of results and could
+    /// only ever be filtered by what `discover` accepts; with the whole list in
+    /// hand, the decade and rating chips get exact counts and a text query can be
+    /// applied over it — which `discover` has no parameter for at all.
+    ///
+    /// A day's TTL, like the film details: a filmography changes about as often as
+    /// a runtime, and the search screen would otherwise re-fetch it per page.
+    pub async fn person(&self, id: u32) -> Result<dto::Person> {
+        self.fetch(&format!("/person/{id}?append_to_response=movie_credits"), TTL_DETAIL).await
+    }
+
+    /// Films TMDB recommends alongside this one — one seed, twenty suggestions.
+    ///
+    /// The feed's recommendation rail is built from several of these, one per film
+    /// the visitor favourited or watchlisted, because a single seed's twenty are all
+    /// neighbours of one film: seeding from three gave 54 distinct titles with six
+    /// recommended by more than one, and that overlap is what ranks them.
+    ///
+    /// `/recommendations` rather than `/similar`: the former is TMDB's own
+    /// collaborative signal (what people who liked this also liked), the latter is
+    /// keyword-and-genre overlap, which for a favourite already picked *by* genre
+    /// returns more of the same genre and says nothing new.
+    ///
+    /// Returns the same `MovieSummary` a search result is, so no new mapping. A
+    /// day's TTL, as with the details: recommendations move about as slowly.
+    pub async fn recommendations(&self, id: u32) -> Result<Vec<dto::MovieSummary>> {
+        let page: dto::Page<dto::MovieSummary> =
+            self.fetch(&format!("/movie/{id}/recommendations"), TTL_DETAIL).await?;
+        Ok(page.results)
     }
 
     /// A film's reviews. Empty rather than an error for a film with none.
@@ -283,7 +350,7 @@ pub struct DiscoverFilters {
 
 fn parse<T: DeserializeOwned>(path: &str, body: &str) -> Result<T> {
     serde_json::from_str(body)
-        .map_err(|e| Error(format!("could not parse the TMDB response for {path}: {e}")))
+        .map_err(|e| Error(format!("could not parse the TMDB response for {path}: {e}"), Kind::Upstream))
 }
 
 /// Percent-encode a query value.

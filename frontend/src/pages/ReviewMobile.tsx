@@ -1,9 +1,9 @@
 /**
  * Friend Review — Mobile. Ported from `reference/cine-journal/review-mobile.html`.
  *
- * Full-bleed poster and a sticky comment composer. The export served
- * `architecture-of-silence`; the screen now shows whichever review the API lists
- * second, since in TMDB mode the ids depend on what's trending.
+ * Full-bleed poster and a sticky comment composer. The export served one invented
+ * review; this screen shows any of our users' reviews, by id, exactly as the
+ * desktop one does — `/review-mobile/:id`, or the newest with no id.
  *
  * NB: the export put `md:hidden` on <body>, so the original screen rendered
  * blank at >=768px. That quirk is NOT reproduced here — a blank route in an SPA
@@ -14,26 +14,19 @@
  * that swallows what you typed is worse than a slightly extended layout.
  */
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 
 import { api } from '../api'
 import { useApi } from '../useApi'
 import { useAction } from '../useAction'
 import { ActionError, DemoBanner, ErrorNote, Loading } from '../components/Chrome'
+import { personPath } from '../components/People'
 import { StarRating } from '../components/StarRating'
 
 export function ReviewMobile() {
-  // The second review rather than a fixed id: which reviews exist depends on
-  // what's trending, so `architecture-of-silence` only resolves in demo mode.
-  // Taking [1] keeps this screen showing something other than the desktop one,
-  // as the export's two mocks did; [0] when there's only one to show.
-  const { data, error, loading, replace } = useApi(async () => {
-    const reviews = await api.reviews()
-    // Reported as an error rather than returned as null: a blank screen with no
-    // loader and no message reads as a bug, and this one has a cause worth naming.
-    if (reviews.length === 0) throw new Error('No reviews to show yet.')
-    return reviews[1] ?? reviews[0]
-  })
+  // Same two routes as the desktop screen — an id, or the newest review.
+  const { id } = useParams<{ id: string }>()
+  const { data, error, loading, replace } = useApi(() => api.reviewOrNewest(id), [id])
   const [draft, setDraft] = useState('')
 
   const postComment = useAction(async () => {
@@ -67,24 +60,24 @@ export function ReviewMobile() {
 
       {data && (
         <main className="flex-grow flex flex-col items-center pt-lg px-margin-mobile w-full max-w-md mx-auto">
-          {/* Friend context */}
-          <div className="flex items-center w-full mb-lg">
-            <div className="w-12 h-12 rounded-full overflow-hidden bg-surface-variant mr-md border border-surface-variant">
+          {/* Friend context. Tapping it opens their page, as on the desktop screen. */}
+          <Link to={personPath(data.author_handle)} className="flex items-center w-full mb-lg active:opacity-70">
+            <div className="w-12 h-12 rounded-full overflow-hidden bg-surface-variant mr-md border border-surface-variant shrink-0">
               <img
                 className="w-full h-full object-cover"
                 alt={data.author_avatar.alt}
                 src={data.author_avatar.src}
               />
             </div>
-            <div>
-              <h2 className="font-headline-md text-headline-md text-on-surface">
+            <div className="min-w-0">
+              <h2 className="font-headline-md text-headline-md text-on-surface truncate">
                 {data.author_name}
               </h2>
-              <p className="font-label-sm text-label-sm text-on-surface-variant">
-                {data.watched_on}
+              <p className="font-label-sm text-label-sm text-on-surface-variant truncate">
+                {data.author_handle} · {data.watched_on}
               </p>
             </div>
-          </div>
+          </Link>
 
           <Link
             to={`/movie/${data.movie.id}`}
@@ -115,9 +108,13 @@ export function ReviewMobile() {
                     {genre}
                   </Link>
                 ))}
-                <span className="bg-surface-container-low text-on-surface font-label-sm text-label-sm px-2 py-1 rounded">
-                  {data.movie.year}
-                </span>
+                {/* Badge and all, since an empty one would read as a chip with
+                    nothing in it. */}
+                {data.movie.year !== null && (
+                  <span className="bg-surface-container-low text-on-surface font-label-sm text-label-sm px-2 py-1 rounded">
+                    {data.movie.year}
+                  </span>
+                )}
               </div>
             </div>
             <div className="flex flex-col items-end">
@@ -141,11 +138,6 @@ export function ReviewMobile() {
                 {para}
               </p>
             ))}
-            {data.hashtags.length > 0 && (
-              <p className="mt-md font-label-sm text-label-sm text-primary uppercase tracking-widest">
-                {data.hashtags.join(' ')}
-              </p>
-            )}
           </article>
 
           {/* Comments. Not in the export — see the file header. */}

@@ -26,9 +26,14 @@ use crate::{content, db, hydrate};
 /// Ratings are half-stars out of five, so ten is the ceiling.
 const MAX_HALF_STARS: u8 = 10;
 
-/// Longest accepted comment or reply. The composer is a 3-row textarea; this is
-/// generous for that and stops one client filling the database.
+/// Longest accepted comment, reply or review. The composer is a 3-row textarea;
+/// this is generous for that and stops one client filling the database.
 const MAX_BODY_LEN: usize = 2_000;
+
+/// Longest accepted bio. Much shorter than a review because the profile header
+/// clamps it to one or two lines — anything past this would be stored and never
+/// read.
+const MAX_BIO_LEN: usize = 280;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -44,10 +49,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/reviews/{id}/comments/{comment_id}/replies", post(post_reply))
         .route("/api/movies", get(movies))
         .route("/api/movies/{id}", get(movie))
+        .route("/api/movies/{id}/reviews", get(movie_reviews))
         .route("/api/movies/{id}/watchlist", post(watchlist))
+        .route("/api/movies/{id}/favorite", post(favorite))
         .route("/api/movies/{id}/rating", put(rate))
+        .route("/api/movies/{id}/review", put(write_review))
         .route("/api/watchlist", get(watchlist_ids))
-        .route("/api/profile", get(profile))
+        .route("/api/profile", get(profile).put(edit_bio))
+        .route("/api/people", get(people))
+        .route("/api/people/{handle}", get(person))
+        .route("/api/people/{id}/follow", post(follow))
         .route("/api/search", get(search))
         .with_state(state)
 }
@@ -103,7 +114,7 @@ async fn mobile_feed(State(state): State<AppState>) -> Json<MobileFeed> {
 }
 
 async fn reviews(State(state): State<AppState>) -> Json<Vec<Review>> {
-    let reviews = content::reviews(&state.source).await;
+    let reviews = content::reviews(&state.source, &state.db).await;
     let store = state.store();
     Json(reviews.into_iter().map(|r| hydrate::review(r, &store)).collect())
 }
@@ -127,6 +138,59 @@ async fn movie(State(state): State<AppState>, Path(id): Path<String>) -> Respons
     match content::movie_detail_by_id(&state.source, &id).await {
         Some(detail) => Json(hydrate::movie_detail(detail, &state.store())).into_response(),
         None => not_found(format!("no movie with id '{id}'")),
+    }
+}
+
+/// The reviews of one film, the people the visitor follows first.
+///
+/// A separate request from the detail payload rather than a field on it: the film's
+/// facts are cached upstream for a day, and the reviews change the moment you
+/// follow someone. Folding them together would mean either caching a follow state
+/// or not caching the film.
+///
+/// No 404 for an unknown film — an empty list is the honest answer for "which of
+/// your friends reviewed this", and every id in demo mode resolves anyway.
+async fn movie_reviews(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Json<Vec<UserReview>> {
+    Json(content::reviews_of_movie(&state.source, &state.db, &id).await)
+}
+
+/// The friend directory: nickname search, plus who the visitor follows and who
+/// follows them. All three in one response so the screen's lists can't disagree
+/// about whether a follow landed.
+async fn people(
+    State(state): State<AppState>,
+    Query(query): Query<PeopleQuery>,
+) -> Json<PeopleResponse> {
+    Json(content::people(&state.db, query.q.as_deref().unwrap_or_default()))
+}
+
+/// One person's page, by nickname. The `@` is optional in the path, so both
+/// `/api/people/elenarostova` and `/api/people/@elenarostova` resolve.
+async fn person(State(state): State<AppState>, Path(handle): Path<String>) -> Response {
+    match content::person(&state.source, &state.db, &handle).await {
+        Some(profile) => Json(profile).into_response(),
+        None => not_found(format!("no person with nickname '{handle}'")),
+    }
+}
+
+/// Follow or unfollow, by id. Idempotent when the body states the target, so a
+/// double-click can't leave the button disagreeing with the graph.
+///
+/// Ids rather than nicknames here, unlike the read above: this writes a row keyed
+/// on `people.id`, and resolving a nickname first would let a rename orphan it.
+async fn follow(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Option<Json<FollowRequest>>,
+) -> Response {
+    let requested = body.and_then(|Json(body)| body.following);
+    match content::set_follow(&state.db, &id, requested) {
+        Ok(Some(state)) => Json(state).into_response(),
+        Ok(None) => not_found(format!("no person with id '{id}'")),
+        Err(error) => write_failed(error),
     }
 }
 
@@ -173,6 +237,27 @@ async fn watchlist(
     }
 }
 
+/// Favourite, un-favourite, or toggle. Same shape as the watchlist above, and
+/// deliberately a sibling of it rather than something derived from the ratings:
+/// a favourite is a thing you say, not the top of a sorted list.
+async fn favorite(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Option<Json<FavoriteRequest>>,
+) -> Response {
+    let requested = body.and_then(|Json(body)| body.is_favorite);
+
+    let result = {
+        let conn = state.db.lock().unwrap_or_else(|p| p.into_inner());
+        db::set_favorite(&conn, &id, requested)
+    };
+
+    match result {
+        Ok(is_favorite) => Json(FavoriteState { movie_id: id, is_favorite }).into_response(),
+        Err(error) => write_failed(error),
+    }
+}
+
 /// Set the visitor's rating. `0` clears it, which is how the UI un-rates a film
 /// by clicking the star it is already on.
 async fn rate(
@@ -201,10 +286,12 @@ async fn rate(
 }
 
 async fn like_review(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    if !content::review_exists(&state.source, &id).await {
+    if !content::review_exists(&state.db, &id) {
         return not_found(format!("no review with id '{id}'"));
     }
-    let base_count = content::review_like_base(&state.source, &id).await;
+    // No stored count to add to: reviews arrive with none, so the button reads
+    // nothing until this click and 1 after.
+    let base_count = None;
 
     let result = {
         let conn = state.db.lock().unwrap_or_else(|p| p.into_inner());
@@ -224,14 +311,15 @@ async fn like_comment(
     State(state): State<AppState>,
     Path((review_id, comment_id)): Path<(String, String)>,
 ) -> Response {
-    if !content::review_exists(&state.source, &review_id).await {
+    if !content::review_exists(&state.db, &review_id) {
         return not_found(format!("no review with id '{review_id}'"));
     }
-    // A comment the visitor posted isn't in the content, so check both.
-    if !content::comment_exists(&state.source, &state.db, &review_id, &comment_id).await {
+    if !content::comment_exists(&state.db, &review_id, &comment_id) {
         return not_found(format!("no comment with id '{comment_id}' on '{review_id}'"));
     }
-    let base_count = content::comment_like_base(&state.source, &review_id, &comment_id).await;
+    // As in `like_review`: every comment is one the visitor posted, so there is no
+    // count behind it.
+    let base_count = None;
 
     let result = {
         let conn = state.db.lock().unwrap_or_else(|p| p.into_inner());
@@ -247,19 +335,70 @@ async fn like_comment(
     }
 }
 
-/// Reject blank and oversized bodies, and hand back the trimmed text.
+/// Trim and cap a field, allowing blank. Counts characters, not bytes, so an
+/// accented or non-Latin review isn't rejected earlier than an ASCII one.
 ///
 /// Returns the error *message* rather than a built `Response` — a `Response` in
 /// an `Err` variant makes the whole `Result` as large as the success path.
+fn validate_capped(field: &str, text: &str, max: usize) -> Result<String, String> {
+    let trimmed = text.trim();
+    if trimmed.chars().count() > max {
+        return Err(format!("{field} must be at most {max} characters"));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// The same, for the fields where blank is a mistake rather than an instruction.
+///
+/// A comment or reply has nowhere to go if it's empty; a review or a bio uses the
+/// empty string to mean "delete this", so those two call `validate_capped` direct.
 fn validate_body(body: &str) -> Result<String, String> {
-    let trimmed = body.trim();
+    let trimmed = validate_capped("body", body, MAX_BODY_LEN)?;
     if trimmed.is_empty() {
         return Err("body must not be empty".into());
     }
-    if trimmed.chars().count() > MAX_BODY_LEN {
-        return Err(format!("body must be at most {MAX_BODY_LEN} characters"));
+    Ok(trimmed)
+}
+
+/// Write, rewrite, or clear the visitor's own review of a film.
+///
+/// A PUT rather than a POST because there is only ever one: the composer is
+/// prefilled with `your_review` and saving replaces it. Blank deletes, which is
+/// how the composer's "Remove" gets back to no review at all.
+async fn write_review(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<ReviewRequest>,
+) -> Response {
+    let body = match validate_capped("body", &body.body, MAX_BODY_LEN) {
+        Ok(body) => body,
+        Err(message) => return bad_request(message),
+    };
+
+    let result = {
+        let conn = state.db.lock().unwrap_or_else(|p| p.into_inner());
+        db::set_visitor_review(&conn, &id, &body)
+    };
+
+    match result {
+        Ok(your_review) => Json(ReviewState { movie_id: id, your_review }).into_response(),
+        Err(error) => write_failed(error),
     }
-    Ok(trimmed.to_string())
+}
+
+/// Edit the profile bio. Blank restores the export's line rather than leaving the
+/// header empty, and the response carries whichever of the two is now stored so
+/// the field can't sit showing something the profile doesn't.
+async fn edit_bio(State(state): State<AppState>, Json(body): Json<BioRequest>) -> Response {
+    let bio = match validate_capped("bio", &body.bio, MAX_BIO_LEN) {
+        Ok(bio) => bio,
+        Err(message) => return bad_request(message),
+    };
+
+    match content::set_bio(&state.db, &bio) {
+        Ok(bio) => Json(BioState { bio }).into_response(),
+        Err(error) => write_failed(error),
+    }
 }
 
 /// Post a top-level comment. Returns the whole review so the thread, the
@@ -273,7 +412,7 @@ async fn post_comment(
         Ok(body) => body,
         Err(message) => return bad_request(message),
     };
-    if !content::review_exists(&state.source, &id).await {
+    if !content::review_exists(&state.db, &id) {
         return not_found(format!("no review with id '{id}'"));
     }
 
@@ -301,12 +440,12 @@ async fn post_reply(
         Ok(body) => body,
         Err(message) => return bad_request(message),
     };
-    if !content::review_exists(&state.source, &review_id).await {
+    if !content::review_exists(&state.db, &review_id) {
         return not_found(format!("no review with id '{review_id}'"));
     }
     // Only replies to comments that exist — otherwise the reply would be stored
     // under a key nothing renders and vanish silently.
-    if !content::comment_exists(&state.source, &state.db, &review_id, &comment_id).await {
+    if !content::comment_exists(&state.db, &review_id, &comment_id) {
         return not_found(format!("no comment with id '{comment_id}' on '{review_id}'"));
     }
 

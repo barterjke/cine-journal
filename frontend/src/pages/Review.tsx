@@ -2,8 +2,9 @@
  * Friend Review — Desktop. Ported from `reference/cine-journal/review.html`.
  *
  * Faded backdrop, sticky poster column, and the comment thread with one nested
- * reply. The export served `dune-part-two`; the screen now shows whichever review
- * the API lists first, since in TMDB mode the ids depend on what's trending.
+ * reply. The export served a single invented review; this screen shows any of our
+ * users' reviews, addressed by `/review/:id` — which is what a review card on a
+ * film's page or a person's page links to. Bare `/review` opens the newest one.
  *
  * All four actions the export drew as buttons now work — LIKE REVIEW, REPLY,
  * POST, and the per-comment heart. Posting returns the whole review, so the
@@ -13,7 +14,7 @@
  * focuses the composer, and each comment gets its own inline Reply.
  */
 import { useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 
 import type { Comment, Review as ReviewData } from '../api'
 import { api } from '../api'
@@ -27,6 +28,7 @@ import {
   Loading,
   TopAppBar,
 } from '../components/Chrome'
+import { FollowButton, personPath } from '../components/People'
 import { StarRating } from '../components/StarRating'
 
 function CommentBlock({
@@ -145,15 +147,14 @@ function CommentBlock({
 }
 
 export function Review() {
-  // The first review the API lists rather than a fixed id: which reviews exist
-  // depends on what's trending, so `dune-part-two` only resolves in demo mode. An
-  // empty list is thrown rather than returned as null — a screen with no loader,
-  // no error and no content reads as a bug.
-  const { data, error, loading, update, replace } = useApi(async () => {
-    const reviews = await api.reviews()
-    if (reviews.length === 0) throw new Error('No reviews to show yet.')
-    return reviews[0]
-  })
+  // Two routes, one screen: `/review/:id` names a review, bare `/review` means
+  // "the newest one" — see `api.reviewOrNewest`. The id is a dependency, so
+  // clicking through from one review to another refetches.
+  const { id } = useParams<{ id: string }>()
+  const { data, error, loading, update, replace } = useApi(
+    () => api.reviewOrNewest(id),
+    [id],
+  )
 
   const [draft, setDraft] = useState('')
   const composer = useRef<HTMLTextAreaElement>(null)
@@ -299,8 +300,11 @@ export function Review() {
                   </h3>
                 </Link>
                 <p className="font-body-md text-body-md text-on-surface-variant mb-md">
-                  {data.director && `Directed by ${data.director} · `}
-                  {data.movie.year}
+                  {/* Same reason as below: with the year absent, the old form left
+                      the director's line ending in a dangling separator. */}
+                  {[data.director && `Directed by ${data.director}`, data.movie.year]
+                    .filter((part) => part != null && part !== '')
+                    .join(' · ')}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   {data.genres.map((genre) => (
@@ -333,34 +337,58 @@ export function Review() {
                     {data.movie.title}
                   </h3>
                   <p className="font-label-sm text-label-sm text-on-surface-variant">
-                    {data.movie.year} · {data.genres[0]}
+                    {/* Joined rather than templated: an unreleased film has no
+                        year and a sparse record no genres, and "· Drama" or
+                        "2014 ·" would each show a separator with one side
+                        missing. */}
+                    {[data.movie.year, data.genres[0]].filter((part) => part != null).join(' · ')}
                   </p>
                 </div>
               </Link>
 
-              {/* Reviewer header */}
-              <div className="flex items-center justify-between mb-xl border-b border-[#F2F2F7] pb-lg">
-                <div className="flex items-center space-x-4">
-                  <img
-                    className="w-12 h-12 rounded-full object-cover shadow-sm border border-[#F2F2F7]"
-                    alt={data.author_avatar.alt}
-                    src={data.author_avatar.src}
-                  />
-                  <div>
-                    <h2 className="font-headline-md text-headline-md text-on-background">
-                      {data.author_name}
-                    </h2>
-                    <p className="font-label-sm text-label-sm text-on-surface-variant">
-                      {data.watched_on}
+              {/* Reviewer header. The author is a real person with a page now, so
+                  their face and their name both lead to it. */}
+              <div className="flex items-center justify-between gap-md mb-xl border-b border-[#F2F2F7] pb-lg">
+                <div className="flex items-center space-x-4 min-w-0">
+                  <Link
+                    to={personPath(data.author_handle)}
+                    className="shrink-0 hover:opacity-80 transition-opacity"
+                  >
+                    <img
+                      className="w-12 h-12 rounded-full object-cover shadow-sm border border-[#F2F2F7]"
+                      alt={data.author_avatar.alt}
+                      src={data.author_avatar.src}
+                    />
+                  </Link>
+                  <div className="min-w-0">
+                    <Link to={personPath(data.author_handle)}>
+                      <h2 className="font-headline-md text-headline-md text-on-background truncate hover:text-primary transition-colors">
+                        {data.author_name}
+                      </h2>
+                    </Link>
+                    <p className="font-label-sm text-label-sm text-on-surface-variant truncate">
+                      {data.author_handle} · {data.watched_on}
                     </p>
                   </div>
                 </div>
-                <StarRating
-                  halfStars={data.rating_half_stars}
-                  color="text-primary"
-                  showEmpty={false}
-                  className="gap-0"
-                />
+                <div className="flex items-center gap-md shrink-0">
+                  <StarRating
+                    halfStars={data.rating_half_stars}
+                    color="text-primary"
+                    showEmpty={false}
+                    className="gap-0"
+                  />
+                  {/* The same button their page draws — following someone whose
+                      review you just read shouldn't require going there first. */}
+                  <FollowButton
+                    personId={data.author_id}
+                    following={data.author_followed}
+                    onChange={(following) =>
+                      update((current) => ({ ...current, author_followed: following }))
+                    }
+                    size="sm"
+                  />
+                </div>
               </div>
 
               <article className="font-body-lg text-body-lg text-on-background space-y-6 mb-xl leading-relaxed">

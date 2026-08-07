@@ -19,22 +19,30 @@ import { useAction } from '../useAction'
 import { ActionError, BottomNavBar, DemoBanner, ErrorNote, Loading } from '../components/Chrome'
 import { StarRating } from '../components/StarRating'
 
+/**
+ * One circle in the stories rail: somebody you follow, tapping through to their
+ * newest review.
+ *
+ * The export's rail was five fixed avatars with an invented read/unread state and no
+ * destination — the ring meant nothing and the tap did nothing. Here the ring means
+ * "has a review to show" (the only such state anything can answer) and the tap opens
+ * it. Someone you follow who hasn't written anything is still drawn, dimmed and as a
+ * plain `div`: who you follow is a fact whether or not they've posted, but there is
+ * nothing to link to, and a link that goes nowhere is what this replaced.
+ */
 function StoryCircle({ story }: { story: Story }) {
-  return (
-    <div className="flex flex-col items-center gap-xs flex-shrink-0 cursor-pointer group">
+  const ring = story.unseen
+    ? 'bg-gradient-to-tr from-primary to-inverse-primary'
+    : 'bg-surface-variant'
+  const avatar = (
+    <>
       <div
-        className={
-          story.unseen
-            ? 'w-16 h-16 rounded-full p-[2px] bg-gradient-to-tr from-primary to-inverse-primary group-active:scale-95 transition-transform'
-            : 'w-16 h-16 rounded-full p-[2px] bg-surface-variant group-active:scale-95 transition-transform'
-        }
+        className={`w-16 h-16 rounded-full p-[2px] group-active:scale-95 transition-transform ${ring}`}
       >
         <img
-          className={
-            story.unseen
-              ? 'w-full h-full rounded-full object-cover border-2 border-surface'
-              : 'w-full h-full rounded-full object-cover border-2 border-surface opacity-80'
-          }
+          className={`w-full h-full rounded-full object-cover border-2 border-surface ${
+            story.unseen ? '' : 'opacity-80'
+          }`}
           alt={story.avatar.alt}
           src={story.avatar.src}
         />
@@ -46,7 +54,27 @@ function StoryCircle({ story }: { story: Story }) {
       >
         {story.name}
       </span>
-    </div>
+    </>
+  )
+
+  const shell = 'flex flex-col items-center gap-xs flex-shrink-0 group'
+
+  if (!story.review_id) {
+    return (
+      <div className={shell} title={`${story.name} hasn't written a review yet`}>
+        {avatar}
+      </div>
+    )
+  }
+
+  return (
+    <Link
+      to={`/review-mobile/${story.review_id}`}
+      className={`${shell} cursor-pointer`}
+      aria-label={`Read ${story.name}'s newest review`}
+    >
+      {avatar}
+    </Link>
   )
 }
 
@@ -104,7 +132,19 @@ function FeedCard({
             {item.movie.title}
           </h3>
         </Link>
-        <p className="font-label-sm text-label-sm text-outline mt-1">{item.subtitle}</p>
+        {/* The subtitle is the card's one difference in kind: "Elena rated it" opens
+            what Elena wrote, "Because you liked X" explains itself and stays text.
+            The poster goes to the film either way. */}
+        {item.review_id ? (
+          <Link
+            to={`/review-mobile/${item.review_id}`}
+            className="font-label-sm text-label-sm text-primary mt-1 block truncate hover:opacity-70 transition-opacity"
+          >
+            {item.subtitle}
+          </Link>
+        ) : (
+          <p className="font-label-sm text-label-sm text-outline mt-1 truncate">{item.subtitle}</p>
+        )}
         {item.rating_half_stars !== null && (
           <StarRating
             halfStars={item.rating_half_stars}
@@ -150,14 +190,17 @@ export function FeedMobile() {
               CinéJournal
             </h1>
           </Link>
-          <div className="flex gap-4">
-            <span className="material-symbols-outlined text-on-surface-variant dark:text-outline cursor-pointer active:opacity-70">
-              notifications
-            </span>
-            <span className="material-symbols-outlined text-on-surface-variant dark:text-outline cursor-pointer active:opacity-70">
-              cast
-            </span>
-          </div>
+          {/* Was a bell and a cast icon: bare `<span>`s with `cursor-pointer`, no
+              handler and nothing behind them — there are no notifications and nothing
+              to cast to. One link to your own profile instead, which is the only thing
+              this corner of a masthead can actually do here. */}
+          <Link
+            to="/profile"
+            aria-label="Your profile"
+            className="text-on-surface-variant dark:text-outline hover:text-primary transition-colors active:opacity-70"
+          >
+            <span className="material-symbols-outlined block">account_circle</span>
+          </Link>
         </div>
       </header>
       <DemoBanner />
@@ -167,31 +210,55 @@ export function FeedMobile() {
 
       {data && (
         <main className="flex-grow w-full max-w-7xl mx-auto px-margin-mobile md:px-margin-desktop pt-lg md:pt-xl space-y-xl md:space-y-xxl">
-          <section className="w-full">
-            <h2 className="font-headline-md text-headline-md mb-sm text-on-surface-variant px-1">
-              Recent Activity
-            </h2>
-            <div className="flex overflow-x-auto hide-scrollbar gap-sm md:gap-md py-sm px-1">
-              {data.stories.map((story) => (
-                <StoryCircle key={story.id} story={story} />
-              ))}
-            </div>
-          </section>
+          {/* "Recent Activity" was the export's heading over five avatars that stood
+              for nothing. These are the people you follow, so the heading says so.
+              The rail is hidden outright when you follow nobody — an empty scroller
+              with a title above it looks like content that failed to load. */}
+          {data.stories.length > 0 && (
+            <section className="w-full">
+              <h2 className="font-headline-md text-headline-md mb-sm text-on-surface-variant px-1">
+                People you follow
+              </h2>
+              <div className="flex overflow-x-auto hide-scrollbar gap-sm md:gap-md py-sm px-1">
+                {data.stories.map((story) => (
+                  <StoryCircle key={story.id} story={story} />
+                ))}
+              </div>
+            </section>
+          )}
 
           {watchlist.error && (
             <ActionError message={watchlist.error} onDismiss={watchlist.clearError} />
           )}
 
-          <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-md md:gap-lg">
-            {data.items.map((item) => (
-              <FeedCard
-                key={item.id}
-                item={item}
-                onToggleWatchlist={watchlist.run}
-                busy={watchlist.busy}
-              />
-            ))}
-          </section>
+          {data.items.length > 0 ? (
+            <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-md md:gap-lg">
+              {data.items.map((item) => (
+                <FeedCard
+                  key={item.id}
+                  item={item}
+                  onToggleWatchlist={watchlist.run}
+                  busy={watchlist.busy}
+                />
+              ))}
+            </section>
+          ) : (
+            /* Both halves of the grid are empty: nobody you follow has written
+               anything, and you have no favourites to suggest from. Saying which is
+               beside the point — following someone or favouriting a film fixes both. */
+            <section className="flex flex-col gap-sm items-start border border-dashed border-surface-variant rounded-lg p-lg">
+              <p className="font-body-md text-body-md text-on-surface-variant">
+                Nothing here yet. Follow a few people, or favourite a film to get
+                suggestions based on it.
+              </p>
+              <Link
+                to="/people"
+                className="font-label-sm text-label-sm text-primary uppercase tracking-widest hover:opacity-70 transition-opacity"
+              >
+                Find people to follow →
+              </Link>
+            </section>
+          )}
 
           <div className="flex justify-center w-full py-lg">
             <Link

@@ -37,8 +37,15 @@ pub struct PostedReply {
 pub struct Store {
     /// Movie ids on the watchlist.
     pub watchlist: BTreeSet<String>,
+    /// Movie ids the visitor marked as favourites. Stored rather than derived from
+    /// `ratings`: a favourite is a separate statement from a high score, and the
+    /// heart on a film's page is what writes it.
+    pub favorites: BTreeSet<String>,
     /// Movie id -> the visitor's own rating, in half-stars (1..=10).
     pub ratings: BTreeMap<String, u8>,
+    /// Movie id -> what the visitor wrote about it. Independent of `ratings`, so
+    /// un-rating a film leaves the prose alone and vice versa.
+    pub written_reviews: BTreeMap<String, String>,
     /// Review ids the visitor liked.
     pub liked_reviews: BTreeSet<String>,
     /// Comment ids the visitor liked.
