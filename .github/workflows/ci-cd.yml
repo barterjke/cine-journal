@@ -324,7 +324,7 @@ jobs:
             echo
             echo "- image: \`${IMAGE}:${{ steps.build.outputs.tag }}\`"
             echo "- commit: ${{ github.sha }}"
-            echo "- roll back with: \`API_TAG=<previous-tag> docker compose --env-file .env.deploy up -d\` on the VM"
+            echo "- roll back with: \`API_TAG=<previous-tag> docker compose up -d\` on the VM"
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy-frontend:
