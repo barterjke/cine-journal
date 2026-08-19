@@ -39,7 +39,7 @@ jobs:
     name: Backend tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -71,9 +71,9 @@ jobs:
     name: Frontend tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # Oldest LTS satisfying the lockfile (vite wants ^20.19 || >=22.12).
           node-version: '22'
@@ -127,7 +127,7 @@ jobs:
       # Lets the run's own GITHUB_TOKEN push to GHCR. No PAT needed.
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # `latest` moves, so it can only say what is newest. The sha tag is what rollback
       # needs.
@@ -137,7 +137,7 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -149,7 +149,7 @@ jobs:
       # The gha layer cache only helps if backend/Dockerfile builds dependencies in a
       # layer the source doesn't invalidate (it does — see its dummy-main.rs step).
       - name: Build and push the arm64 image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: backend/Dockerfile
@@ -340,9 +340,9 @@ jobs:
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
