@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 #
-# Start both dev servers with one command, and stop both with one Ctrl-C.
+# Start the dev stack with one command, and stop it with one Ctrl-C.
 #
-#   ./dev                 # API on 3001, UI on 5173
-#   PORT=4000 ./dev       # both ports moved together — see API_URL below
+#   ./dev                 # API on 3001, UI on 5173, Redis on 6379
+#   PORT=4000 ./dev       # both app ports moved together — see API_URL below
 #   UI_PORT=5199 ./dev
+#   REDIS_PORT=6380 ./dev # for a machine whose 6379 belongs to something else
+#   NO_REDIS=1 ./dev      # no cache at all; the feed is built from source
 #
-# The README's two-terminal recipe still works and is what this wraps. The three
+# The README's two-terminal recipe still works and is what this wraps. The four
 # things it adds are the ones that bit somebody:
 #
 #   - `PORT` and Vite's proxy target have to agree. Moving the API alone leaves the
@@ -14,20 +16,31 @@
 #     load rather than as a misconfiguration. Here one variable sets both.
 #   - `cargo run` compiles, then *spawns* `target/debug/cine-journal-api`. Killing
 #     cargo leaves that child holding the port, so the next run dies with "Address
-#     already in use" pointing at a server nobody remembers starting. Both servers
-#     run in their own process group and are stopped by group, not by pid.
+#     already in use" pointing at a server nobody remembers starting. Every server
+#     runs in its own process group and is stopped by group, not by pid.
 #   - A port that's already taken is reported with what's holding it, before
 #     anything starts. Nothing is killed automatically: on a shared machine the
 #     process on that port may be somebody's actual work.
+#   - Redis, which the feed's cache wants and which nothing else in the repo starts.
+#     Optional in both directions, and that is the whole character of it: a server
+#     already on the port is *used* rather than treated as a collision, and no server
+#     at all is a warning rather than a failure — the backend turns a missing cache
+#     into a slower feed, never a broken one.
 #
 # Not `set -e`: every failure below wants its own sentence, and a bare exit code
-# part-way through starting two servers is the least useful thing this can print.
+# part-way through starting three servers is the least useful thing this can print.
 set -u -o pipefail
 set -m   # one process group per server — the whole point of stop()
 
 ROOT=$(cd "$(dirname "$0")" && pwd)
 PORT=${PORT:-3001}
 UI_PORT=${UI_PORT:-5173}
+
+# Redis's own default, so a server somebody already has running is found without
+# being told about. `NO_REDIS` is for when you want the uncached path on purpose —
+# reproducing a slow first paint, or checking the degraded path still works.
+REDIS_PORT=${REDIS_PORT:-6379}
+NO_REDIS=${NO_REDIS:-}
 
 # How long to wait for `GET /api/health`. Generous because the first run compiles
 # rusqlite and reqwest from source, which is minutes on a cold cache, and a script
@@ -36,9 +49,9 @@ API_TIMEOUT=${API_TIMEOUT:-600}
 
 if [ -t 1 ]; then
   DIM=$'\033[2m'; BOLD=$'\033[1m'; RED=$'\033[31m'; YELLOW=$'\033[33m'
-  CYAN=$'\033[36m'; MAGENTA=$'\033[35m'; OFF=$'\033[0m'
+  CYAN=$'\033[36m'; MAGENTA=$'\033[35m'; GREEN=$'\033[32m'; OFF=$'\033[0m'
 else
-  DIM=''; BOLD=''; RED=''; YELLOW=''; CYAN=''; MAGENTA=''; OFF=''
+  DIM=''; BOLD=''; RED=''; YELLOW=''; CYAN=''; MAGENTA=''; GREEN=''; OFF=''
 fi
 
 say()  { printf '%s\n' "${DIM}dev:${OFF} $*"; }
@@ -96,8 +109,34 @@ else
   warn "no TMDB_TOKEN in .env — demo mode, with a banner saying the films are invented"
 fi
 
+# Which Redis the API talks to, if any. Decided here and acted on further down, so
+# this reads next to the TMDB line above: both are "what is configured", and both
+# have a legitimate answer of "nothing".
+#
+# Deliberately not `check_port`. For the API and the UI a busy port is fatal because
+# we have to *be* on it; a Redis already on 6379 is the opposite — it is the thing we
+# wanted. Sharing one is safe: this cache holds only derived feed pages, under a
+# `cinejournal:v1:` prefix, rebuilt from SQLite and TMDB on any miss.
+redis_url=''    # what to hand the API. Empty means "say nothing and let .env decide"
+redis_start=''  # whether the server is ours to start, and so ours to stop
+
 if grep -Eq '^[[:space:]]*REDIS_URL=.+' "$ROOT/.env" 2>/dev/null; then
-  say "REDIS_URL set — feed pages will be cached if the server answers"
+  # Somebody chose a server, possibly not one on this machine. Leave both the
+  # variable and the port alone: `dotenvy` does not override the environment, so
+  # exporting our own URL would silently outrank the file that asked for theirs.
+  say "REDIS_URL set in .env — using that, and not starting a Redis here"
+elif [ -n "$NO_REDIS" ]; then
+  warn "NO_REDIS set — the feed will be built from source on every request"
+elif [ -n "$(port_pid "$REDIS_PORT")" ]; then
+  redis_url="redis://127.0.0.1:$REDIS_PORT"
+  say "Redis already up on $REDIS_PORT — using it, and leaving it running on exit"
+elif command -v redis-server >/dev/null 2>&1; then
+  redis_url="redis://127.0.0.1:$REDIS_PORT"
+  redis_start=yes
+else
+  warn "no redis-server on PATH — the feed will be built from source on every request"
+  printf '%s\n' "     Install it with ${BOLD}brew install redis${OFF}, or set" \
+                "     ${BOLD}NO_REDIS=1${OFF} to say you meant it and silence this."
 fi
 
 # A partial install is worse than none: `vite` missing from .bin looks like a
@@ -118,6 +157,9 @@ fi
 
 api_pg=''
 ui_pg=''
+# Stays empty when we are borrowing somebody else's Redis, which is what keeps `stop`
+# from killing a server this script didn't start.
+redis_pg=''
 stopping=''
 
 # The process group of a job, which is the pid of the *first* command in its
@@ -133,26 +175,75 @@ stop() {
   trap - EXIT INT TERM   # a second Ctrl-C during cleanup shouldn't re-enter this
   stopping=yes           # so the watch loop doesn't report the deaths it caused
   local pg
-  for pg in "$api_pg" "$ui_pg"; do
+  # The API before Redis, so it isn't still serving requests into a cache that is
+  # already going down and logging a timeout for each one.
+  for pg in "$api_pg" "$ui_pg" "$redis_pg"; do
     alive "$pg" && kill -TERM -- "-$pg" 2>/dev/null
   done
   # Give them a moment to close their listeners, then insist. Without the second
   # pass a stuck server survives as the "already in use" of the next run.
   local waited=0
   while [ "$waited" -lt 20 ]; do
-    alive "$api_pg" || alive "$ui_pg" || break
+    alive "$api_pg" || alive "$ui_pg" || alive "$redis_pg" || break
     sleep 0.25
     waited=$((waited + 1))
   done
-  for pg in "$api_pg" "$ui_pg"; do
+  for pg in "$api_pg" "$ui_pg" "$redis_pg"; do
     alive "$pg" && kill -KILL -- "-$pg" 2>/dev/null
   done
   printf '\n%s\n' "${DIM}dev:${OFF} stopped"
 }
 trap stop EXIT INT TERM
 
+# Redis first, so the API's own `redis: enabled` line is true when it prints it. The
+# connection is lazy either way, so this is about the log reading honestly rather than
+# about the order mattering.
+if [ -n "$redis_start" ]; then
+  say "starting Redis on 127.0.0.1:$REDIS_PORT"
+  # `--save ''` disables snapshotting. Nothing here is a source of truth — the cache
+  # holds rendered feed pages, rebuilt from SQLite and TMDB on every miss — so an RDB
+  # of it buys nothing and would leave a dump.rdb in whatever directory this ran from.
+  # `--bind 127.0.0.1` because an unauthenticated cache has no business on a LAN.
+  (exec redis-server --port "$REDIS_PORT" --bind 127.0.0.1 --save '') 2>&1 |
+    awk -v p="${GREEN}[redis]${OFF} " '{ print p $0; fflush() }' &
+  redis_pg=$(pgid_of $!)
+
+  # Five seconds, unlike the API's ten minutes: Redis binds in milliseconds and has
+  # nothing to compile, so anything slower than this is broken rather than busy.
+  redis_ready=''
+  waited=0
+  while [ "$waited" -lt 20 ]; do
+    alive "$redis_pg" || break
+    if command -v redis-cli >/dev/null 2>&1; then
+      [ "$(redis-cli -p "$REDIS_PORT" ping 2>/dev/null)" = 'PONG' ] && { redis_ready=yes; break; }
+    elif [ -n "$(port_pid "$REDIS_PORT")" ]; then
+      redis_ready=yes; break
+    fi
+    sleep 0.25
+    waited=$((waited + 1))
+  done
+
+  # A warning and not a `die`, because a missing cache is a supported way to run.
+  #
+  # The URL is withdrawn rather than passed anyway: the backend gives an unreachable
+  # Redis 300ms per operation before giving up, and the feed path does a read and a
+  # write, so telling the API about a server that isn't there would make every request
+  # slower than telling it nothing.
+  if [ -z "$redis_ready" ]; then
+    warn 'Redis never came up — carrying on with the cache disabled, its output is above.'
+    alive "$redis_pg" && kill -TERM -- "-$redis_pg" 2>/dev/null
+    redis_pg=''
+    redis_url=''
+  fi
+fi
+
 say "starting the API on http://127.0.0.1:$PORT"
-(cd "$ROOT/backend" && exec env PORT="$PORT" cargo run) 2>&1 |
+# `REDIS_URL` is only mentioned when there is one, so that an empty value can't shadow
+# a real one in `.env` — `dotenvy` leaves variables that are already set alone, empty
+# or not.
+api_env=(PORT="$PORT")
+[ -n "$redis_url" ] && api_env+=(REDIS_URL="$redis_url")
+(cd "$ROOT/backend" && exec env "${api_env[@]}" cargo run) 2>&1 |
   awk -v p="${CYAN}[api]${OFF} " '{ print p $0; fflush() }' &
 api_pg=$(pgid_of $!)
 
@@ -193,10 +284,17 @@ printf '\n%s\n\n' "${BOLD}CinéJournal is on http://localhost:$UI_PORT${OFF}  ${
 # bash 3.2 ships on macOS and has no `wait -n`, so poll. Either server going down
 # takes the other with it — the EXIT trap stops the survivor — because half a stack
 # looks like a bug in whichever half is left rather than like a crash in the other.
+#
+# Redis is not in this condition, and that asymmetry is the point: it is a cache, so
+# losing it costs latency and nothing else. Tearing down a working app because an
+# optional accelerator died would be the script contradicting the backend, which
+# treats exactly that case as a miss and carries on.
 while alive "$api_pg" && alive "$ui_pg"; do
   sleep 1
 done
 if [ -z "$stopping" ]; then
   alive "$api_pg" || warn 'the API stopped — its last output is above.'
   alive "$ui_pg" || warn 'the UI stopped — its last output is above.'
+  [ -n "$redis_start" ] && ! alive "$redis_pg" &&
+    warn 'Redis also stopped at some point — the feed was uncached from then on.'
 fi
