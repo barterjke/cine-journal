@@ -1,0 +1,209 @@
+# CI/CD
+
+One workflow, `.github/workflows/ci-cd.yml`. It tests every change, and on `main` it
+deploys the frontend to Vercel and the API to an Oracle Cloud ARM VM.
+
+First-time VM and DNS setup is in [DEPLOY.md](../DEPLOY.md). This file covers what happens
+on each push after that.
+
+## Triggers
+
+| Event | Tests | Deploys |
+| --- | --- | --- |
+| Pull request | yes | no |
+| Push to `main` | yes | yes, if tests pass |
+| Push to other branch | no | no |
+| Manual **Run workflow** on `main` | yes | yes, if tests pass |
+
+Jobs: `test-backend`, `test-frontend`, `deploy-api`, `deploy-frontend`.
+
+Both deploy jobs declare `needs: [test-backend, test-frontend]`, so a failing test stops
+both. They also check the branch and event — `needs:` alone is satisfied by a pull request
+run, which would then deploy it.
+
+## What the gates run
+
+```
+# test-backend (134 tests, ~0.1s, no network or Redis)
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-features --locked
+
+# test-frontend
+npm ci && npm run typecheck && npm run test && npm run build
+```
+
+- No `cargo fmt --check` gate: default rustfmt disagrees with this crate in ~3,600 lines. To
+  add it, run `cargo fmt`, commit that alone, then add the step.
+- `npm run build` is included because `tsc --noEmit` does not resolve asset imports, so a
+  broken bundle can typecheck clean.
+- `npm run test` is `vitest run`. It is a hard gate, not `--if-present`: if the script goes
+  missing the job fails with a message saying so, rather than passing with no tests.
+
+## How the API deploy works
+
+1. Build `backend/Dockerfile` for `linux/arm64` (context = repo root). Push to GHCR as
+   `sha-<short>` and `latest`.
+2. Write the SSH key and known_hosts from secrets.
+3. On the VM: `git fetch origin main && git reset --hard <sha>`, updating
+   `docker-compose.yml` and `Caddyfile`. Cannot touch `.env` (gitignored) or the database
+   (Docker volume). Does discard hand-edits to tracked files.
+4. Log the VM in to GHCR with the run's `GITHUB_TOKEN`, piped over stdin. Nothing
+   long-lived is stored on the VM; the SSH key is the only standing credential.
+5. `docker compose pull`, then `up -d --remove-orphans --wait --wait-timeout 330`, with
+   `API_TAG` set to the sha tag. `--wait` blocks until the compose healthcheck passes.
+6. Curl `API_HEALTH_URL`, then log the VM out of GHCR.
+
+Compose comes from the VM's git clone, not `scp`, so the clone stays clean and `git pull`
+keeps working. The VM needs `git` and repo read access.
+
+## Secrets
+
+Settings → Secrets and variables → Actions → Secrets.
+
+| Name | Value | Where to get it |
+| --- | --- | --- |
+| `OCI_HOST` | VM public IP or hostname | OCI console → Instances |
+| `OCI_USER` | SSH login | `ubuntu` (Canonical) or `opc` (Oracle Linux) |
+| `OCI_SSH_KEY` | Private key, whole PEM including `BEGIN`/`END` | `ssh-keygen -t ed25519 -f deploy_key`, put the `.pub` in the VM's `authorized_keys` |
+| `OCI_SSH_KNOWN_HOSTS` | VM host key | `ssh-keyscan -p 22 <ip>` |
+| `VERCEL_TOKEN` | API token | Vercel → Account Settings → Tokens |
+| `VERCEL_ORG_ID` | Account/team id | `.vercel/project.json` after `vercel link`, or Settings → General |
+| `VERCEL_PROJECT_ID` | Project id | Same file, or Project → Settings → General |
+
+`GITHUB_TOKEN` is automatic. The job requests `packages: write` and uses it to push to
+GHCR and to let the VM pull. It expires when the job ends.
+
+## Variables
+
+Settings → Secrets and variables → Actions → Variables. All optional.
+
+| Name | Default | Purpose |
+| --- | --- | --- |
+| `API_HEALTH_URL` | none | Public URL of `GET /api/health`. Set it — it is the only check on Caddy, DNS, the certificate and the firewalls. Unset means a warning and a pass. |
+| `DEPLOY_PATH` | `cine-journal` | The VM's git clone, relative to the deploy user's home. Matches DEPLOY.md. |
+| `SSH_PORT` | `22` | Only if you moved sshd. |
+
+## Setup checklist
+
+1. Run through DEPLOY.md: VM, Docker, clone, `cp .env.deploy.example .env`, DNS.
+2. Set the seven secrets above.
+3. Set `API_HEALTH_URL`.
+4. Put your real API domain in `frontend/vercel.json` (see limitations below).
+5. Push to `main` once so the check names exist.
+6. Add branch protection.
+
+## Branch protection
+
+Until you do this, a red pull request can still be merged.
+
+Settings → Branches → Add branch ruleset:
+
+1. Target `main`.
+2. Enable **Require status checks to pass**.
+3. Add **`Backend tests`** and **`Frontend tests`**. These names only appear after the
+   workflow has run once.
+4. Optionally enable **Require branches to be up to date before merging**.
+5. Do **not** add the deploy jobs. They never run on a pull request, so requiring them
+   blocks every merge permanently.
+
+## Rolling back
+
+### API — revert (preferred)
+
+```bash
+git revert <bad-sha>
+git push
+```
+
+Slower, but git stays the record of what is deployed.
+
+### API — retag on the VM (fast)
+
+```bash
+ssh <user>@<host>
+cd cine-journal
+API_TAG=sha-abc1234 docker compose up -d
+```
+
+Get the tag from the run summary of the last good `deploy-api`, or from the package's
+version list on GitHub. `docker-compose.yml` reads
+`image: ghcr.io/barterjke/cine-journal-api:${API_TAG:-latest}`.
+
+The variable is **`API_TAG`**. An unrecognised name does not error — compose falls back to
+`:latest`, the image you were trying to get away from. If a rollback seems to do nothing,
+check the variable name.
+
+This leaves the VM running something `main` does not describe. The next push to `main`
+undoes it, so land the revert too.
+
+### Frontend
+
+Vercel keeps every deployment. Deployments list → **Promote to Production**, or
+`vercel rollback <url> --token=...`. Instant, no build.
+
+## Failure modes
+
+| Message | Cause and fix |
+| --- | --- |
+| `frontend/package.json` has no `"test"` script | The `test` script was removed or renamed. Restore it — the job will not silently skip tests. |
+| `the lock file needs to be updated but --locked was passed` | `backend/Cargo.toml` changed without committing `Cargo.lock`. Run `cargo check` and commit it. |
+| `denied: permission_denied` on push | GHCR package not linked to this repo. Package settings → Manage Actions access → add `cine-journal` with **Write**. Happens once. |
+| `Host key verification failed` | `OCI_SSH_KNOWN_HOSTS` missing, wrong, or captured for a different port. Re-run `ssh-keyscan`. Also fires if you rebuilt the VM. |
+| `Load key ".../deploy_key": invalid format` | `OCI_SSH_KEY` was pasted truncated, or is missing the `BEGIN`/`END` lines. |
+| `permission denied ... Docker daemon socket` | `OCI_USER` is not in the `docker` group. `sudo usermod -aG docker $USER`, then reconnect. |
+| `... is not a git checkout` | No clone at `$HOME/cine-journal`. Run DEPLOY.md Part 3, or set `DEPLOY_PATH`. |
+| `neither .env.deploy nor .env exists` | VM never configured. `cp .env.deploy.example .env` and fill in `API_DOMAIN` and `TMDB_TOKEN`. |
+| `container ... is unhealthy` after ~5 min | `--wait` gave up. Run `docker compose logs api` on the VM. Usually a startup panic or a `/data` volume the container's uid cannot write. |
+| ssh step fails at 15s | VM down, IP changed, or port 22 closed. |
+| Smoke test fails but containers are healthy | Firewall. Oracle images have iptables rules plus the OCI security list, and both must allow 80 and 443. See DEPLOY.md. |
+
+## Half-failed deploys
+
+The two deploy jobs are independent, so there are four outcomes.
+
+| Outcome | What to do |
+| --- | --- |
+| Both pass | Nothing. |
+| Both fail | Usually a missing secret. Nothing shipped. |
+| Frontend passed, API failed | New UI against old API. Fix forward if the cause was infrastructure; otherwise roll the frontend back from Vercel. Risk depends on whether the commit changed `models.rs` and `api.ts` together. |
+| API passed, frontend failed | Safer case. Old UI against new API. Re-run the failed job. |
+
+They are not chained on purpose: chaining would let a Vercel outage block an API fix and
+would not remove the mixed state anyway. To remove it for good, serve the frontend from
+Caddy on the same VM.
+
+## Two choices
+
+**arm64 runner vs QEMU.** `deploy-api` uses `ubuntu-24.04-arm` — free for public repos, and
+native. The alternative is `ubuntu-latest` plus `docker/setup-qemu-action@v3`, which
+emulates rustc and turns a ~6 minute build into most of an hour. Switch `runs-on` and add
+that step if arm64 minutes are not on your plan. Layer caching (`type=gha`) only helps
+because `backend/Dockerfile` builds dependencies in a separate layer; keep it that way.
+
+**Vercel CLI vs git integration.** The CLI is used so the frontend is gated on the same
+tests as the API, and so the bundle CI verified is the one that ships. The git integration
+needs no workflow and gives free previews, but deploys whether or not tests passed. Do not
+enable both — two deploys race for the production alias; if you switch, delete
+`deploy-frontend`. Root Directory in the dashboard must be **empty** for the CLI (it already
+runs in `frontend/`, so `frontend` makes it look for `frontend/frontend`) and `frontend` for
+the git integration.
+
+## Dependabot
+
+`.github/dependabot.yml` opens weekly grouped pull requests for Cargo, npm and actions. They
+run the same test jobs, so a breaking bump shows up before you merge it.
+
+Actions are pinned to major tags, so minor and patch updates are accepted automatically. Pin
+full SHAs to lock that down.
+
+## Limitations
+
+- **`frontend/vercel.json` ships pointing at `https://api.example.com`.** CI cannot catch
+  this: both jobs pass, then every screen loads and fails to fetch. Replace both
+  `destination` values with your API domain.
+- **The API has no authentication.** Write endpoints take no credentials, by design — one
+  shared visitor. `README.md` says not to expose it publicly; this workflow does. Decide
+  deliberately before pointing a domain at it.
+- **A green deploy does not mean the TMDB token works.** An invalid token is a supported
+  state: the API serves the demo dataset with a banner. Check `GET /api/status` after the
+  first deploy and after any token rotation.

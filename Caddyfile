@@ -1,0 +1,30 @@
+# TLS termination and the only public entry point.
+#
+# Caddy gets a Let's Encrypt certificate on first boot, renews it, and redirects
+# :80 to :443. The API's writes are unauthenticated (one shared visitor), so they
+# should not travel in the clear.
+#
+# api and redis have no host ports. That's what makes it safe for the API to bind
+# 0.0.0.0 and for Redis to run without a password.
+
+{
+	# Expiry warnings from Let's Encrypt.
+	#
+	# docker-compose.yml makes this required. The Caddyfile has no conditionals, so
+	# an empty value leaves a bare `email` with no argument and Caddy exits with
+	# "wrong argument count" before it listens.
+	email {$ACME_EMAIL}
+}
+
+# The hostname the DNS A record points at — not the Vercel domain. Substituted at
+# parse time; docker-compose.yml refuses to start without it.
+{$API_DOMAIN} {
+	encode zstd gzip
+
+	# One upstream for everything: /api/* and /img/* both come from here. 3001 is
+	# the API's default port.
+	#
+	# On first boot the API seeds from TMDB before binding, so this is 502 for a
+	# minute or two.
+	reverse_proxy api:3001
+}

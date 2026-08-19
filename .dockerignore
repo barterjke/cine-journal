@@ -1,0 +1,25 @@
+# What `docker build -f backend/Dockerfile .` can see.
+#
+# An allow-list. The context has to be the repo root (the API serves /img from
+# reference/), and the root also holds .env with a real TMDB token, so nothing is
+# sent unless it is named below. It also keeps the context around 1.6 MB instead of
+# including backend/target and frontend/node_modules.
+#
+# A new build input has to be added here. That fails loudly at build time.
+*
+
+# Manifests, copied separately so the dependency layer keys on them alone.
+!backend/Cargo.toml
+!backend/Cargo.lock
+
+!backend/src
+
+# The export's posters and avatars. Only img/ — the rest of reference/ is mockups.
+!reference/cine-journal/img
+
+# Already excluded by `*`. Listed so a future `!` line doesn't undo it by accident.
+.env
+.env.*
+**/*.db
+**/*.db-wal
+**/*.db-shm

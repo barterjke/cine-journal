@@ -1,0 +1,115 @@
+# The server half of CinéJournal, for one Oracle Cloud A1.Flex VM.
+#
+#     cp .env.deploy.example .env      # fill in API_DOMAIN, ACME_EMAIL, TMDB_TOKEN
+#     docker compose pull
+#     docker compose up -d
+#
+# The frontend is a static bundle on Vercel. It rewrites /api/* and /img/* to this
+# host — see frontend/vercel.json.
+#
+# Two hops for config: compose interpolates ${...} from the shell or from the .env
+# file next to this one, then `environment:` puts it in the container. dotenvy in
+# main.rs doesn't override variables already set, so that always wins. No secret is
+# in the image.
+
+name: cine-journal
+
+services:
+  # TLS, and the only service with host ports. See Caddyfile.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      # 80 answers the ACME challenge and redirects to 443. Closing it means no
+      # certificate.
+      - "80:80"
+      - "443:443"
+      # HTTP/3. Harmless if UDP 443 is closed in the OCI security list.
+      - "443:443/udp"
+    environment:
+      # Required, not defaulted: a guessed name means a failed ACME challenge,
+      # retried until Let's Encrypt rate-limits the VM.
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN to the hostname whose DNS A record points at this VM}
+      # Also required, for a dull reason: the Caddyfile has no conditionals, so an
+      # empty value is a `email` directive with no argument, which is a parse error
+      # and a restart loop.
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL to an address that can be mailed about expiring certificates}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificate and ACME account key. Losing this re-issues from scratch, and
+      # Let's Encrypt allows five duplicate certificates per name per week.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      # service_started, not service_healthy: on first boot the API seeds from TMDB
+      # before it binds, and Caddy needs :80 up in that window to get a
+      # certificate. A short 502 is the better trade.
+      api:
+        condition: service_started
+
+  api:
+    # Pulled from GHCR so the VM doesn't compile Rust on two shared ARM cores.
+    # `build:` is for local reproduction; `docker compose up` only builds when the
+    # tag is missing, so a deploy must `docker compose pull` first.
+    image: ghcr.io/barterjke/cine-journal-api:${API_TAG:-latest}
+    build:
+      # Root context — the /img files live outside the crate. See backend/Dockerfile.
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      # The binary defaults to loopback, which nothing outside the container can
+      # reach. Safe to open here: this service publishes no ports.
+      BIND_ADDR: 0.0.0.0
+      PORT: 3001
+      # On the volume below. The default is a file in the working directory, i.e.
+      # in the container layer, which `compose down` deletes.
+      DATABASE_PATH: /data/cine-journal.db
+      # Service name. Pure cache — backend/src/cache.rs turns a missing or slow
+      # Redis into a cache miss, so this failing only costs latency.
+      REDIS_URL: redis://redis:6379
+      # Empty is supported: the app serves the demo dataset with a banner.
+      TMDB_TOKEN: ${TMDB_TOKEN:-}
+      RUST_LOG: ${RUST_LOG:-cine_journal_api=info,tower_http=info}
+    volumes:
+      # The visitor's data plus the seeded social graph.
+      #
+      # The container runs as uid 10001. A new named volume inherits /data's
+      # ownership from the image; one created earlier by a root-running image does
+      # not, and the symptom is "could not open /data/cine-journal.db". Fix:
+      #   docker run --rm -v cine-journal_api_data:/d alpine chown -R 10001:10001 /d
+      - api_data:/data
+    depends_on:
+      # Not service_healthy: the cache is optional and the connection is lazy.
+      redis:
+        condition: service_started
+    healthcheck:
+      # $$PORT so the container's shell expands it, not compose at parse time.
+      # 127.0.0.1 because this runs inside the container.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:$${PORT:-3001}/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      # Generous on purpose. main.rs runs seed_graph, one TMDB call per film,
+      # before it binds. Failures inside start_period don't count against retries.
+      start_period: 300s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # --save '' disables snapshotting, same as the dev script. The cache holds
+    # rendered feed pages, rebuilt from SQLite and TMDB on any miss, so there is
+    # nothing worth persisting — hence no volume on this service either.
+    command: ["redis-server", "--save", ""]
+    # No ports. An unauthenticated cache shouldn't be on a public interface, and
+    # only api needs it.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  api_data:
+  caddy_data:
+  caddy_config:

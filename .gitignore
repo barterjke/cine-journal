@@ -7,7 +7,9 @@
 # Secrets — the TMDB read access token lives here
 .env
 .env.*
+# The templates. Each needs its own negation against `.env.*` above.
 !.env.example
+!.env.deploy.example
 
 # The visitor's own likes, ratings, watchlist and comments, plus the seeded
 # social layer. Local state, not source — recreated on first run.
@@ -21,3 +23,6 @@ deno.lock
 target/
 dist/
 *.tsbuildinfo
+
+# Vitest coverage reports, written by `npm run test:coverage`
+coverage/

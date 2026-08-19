@@ -1,0 +1,57 @@
+# Weekly dependency pull requests, grouped so they arrive as three reviewable changes
+# rather than thirty.
+#
+# The point of having this at all is that these pull requests run the same
+# `test-backend` / `test-frontend` gates as everything else (see docs/ci-cd.md): a bump
+# that breaks the build says so before you merge it, and a bump that doesn't is a
+# one-click merge. Without CI on pull requests, Dependabot is just noise.
+version: 2
+
+updates:
+  # The actions pinned in ci-cd.yml. Kept first because a broken action breaks the
+  # pipeline that reviews the other two.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+
+  # `directory` is where Cargo.toml lives, not the repo root — Dependabot does not go
+  # looking, and pointed at `/` it reports "no dependency files found" and stays silent
+  # forever, which is indistinguishable from having no updates.
+  - package-ecosystem: cargo
+    directory: /backend
+    schedule:
+      interval: weekly
+    groups:
+      # One pull request for the lot. This crate's dependencies are interlocked —
+      # axum, tower-http and reqwest all share a hyper/http generation — so bumping
+      # them one at a time produces pull requests that each fail to compile until the
+      # last of them lands.
+      cargo:
+        patterns: ['*']
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    groups:
+      # Split by role, because the failure modes are different: a react or
+      # react-router bump can change what renders, while a types/build-tooling bump
+      # either typechecks or doesn't. Worth being able to merge the second without
+      # reading the first closely.
+      runtime:
+        dependency-type: production
+        patterns: ['*']
+      tooling:
+        dependency-type: development
+        patterns: ['*']
+    ignore:
+      # Pinned exactly in package.json (`"tailwindcss": "3.4.17"`), and v4 is a rewrite
+      # with a different config format and no `tailwind.config.js`. Upgrading is a
+      # deliberate piece of work, not a dependency bump; the pull request would only
+      # ever be closed unmerged.
+      - dependency-name: tailwindcss
+        versions: ['4.x']

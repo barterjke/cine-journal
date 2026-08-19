@@ -1,0 +1,385 @@
+# Test both halves of CinéJournal, then deploy them.
+#
+#   pull request     ->  test-backend, test-frontend
+#   push to main     ->  tests, then deploy-api + deploy-frontend
+#   manual dispatch  ->  same as push to main
+#
+# One workflow, not two chained by `workflow_run`. A `workflow_run` status is reported
+# against the workflow, not the commit, so branch protection cannot gate on it.
+# Full docs: docs/ci-cd.md
+name: CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Redeploy main without pushing a commit. The deploy jobs still check the branch.
+  workflow_dispatch:
+
+# No `paths:` filters. A path-filtered job that is a required status check reports
+# nothing rather than "skipped", and the pull request can then never be merged.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  # Cancel superseded PR runs. Never cancel main: cancelling mid-deploy leaves the VM
+  # with a pulled image it isn't running.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Lowercase: registries reject uppercase path components.
+  IMAGE: ghcr.io/barterjke/cine-journal-api
+
+jobs:
+  # ---------------------------------------------------------------- the gates
+
+  test-backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # Big win here: rusqlite is built with `bundled`, so a cold cache compiles SQLite
+      # from C source.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      # `--all-targets` also lints the `#[cfg(test)]` modules, where most of this crate
+      # lives. `-D warnings` is safe: the crate is clippy-clean today.
+      - name: Clippy
+        working-directory: backend
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      # `--locked` fails instead of silently rewriting Cargo.lock.
+      - name: Tests
+        working-directory: backend
+        run: cargo test --all-features --locked
+
+      # No `cargo fmt --check` gate: default rustfmt disagrees with this crate in ~3,600
+      # lines, so adding it now means a red main or a mass reformat. To add it, run
+      # `cargo fmt`, commit that alone, then add the step.
+
+  test-frontend:
+    name: Frontend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Oldest LTS satisfying the lockfile (vite wants ^20.19 || >=22.12).
+          node-version: '22'
+          cache: npm
+          # There is no lockfile at the repo root; without this the cache never hits.
+          cache-dependency-path: frontend/package-lock.json
+
+      # `ci` not `install`: installs the lockfile exactly and fails if it has drifted.
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      # The suite is behind `npm run test`. The check below turns npm's "Missing script"
+      # into a message that says whose job it is. Not `--if-present`: a test gate that
+      # passes with no tests is not a gate.
+      - name: Tests
+        working-directory: frontend
+        run: |
+          if ! node -e 'process.exit(require("./package.json").scripts?.test ? 0 : 1)'; then
+            echo "::error::frontend/package.json has no \"test\" script. The Vitest suite is expected to provide it; see docs/ci-cd.md."
+            exit 1
+          fi
+          npm run test
+
+      # Typechecking is not building: `tsc --noEmit` never resolves asset imports, so a
+      # broken bundle can typecheck clean and fail on Vercel after the API has shipped.
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  # ---------------------------------------------------------------- the deploys
+  #
+  # `needs:` alone is not enough — a PR run satisfies it. Hence the `if:` on both.
+
+  deploy-api:
+    name: Deploy API to Oracle Cloud
+    needs: [test-backend, test-frontend]
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    # Native arm64, free for public repos. The alternative is `ubuntu-latest` plus
+    # docker/setup-qemu-action@v3, which emulates rustc and turns a ~6 min build into
+    # most of an hour. See docs/ci-cd.md.
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      # Lets the run's own GITHUB_TOKEN push to GHCR. No PAT needed.
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # `latest` moves, so it can only say what is newest. The sha tag is what rollback
+      # needs.
+      - name: Name this build
+        id: build
+        run: echo "tag=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Context is the repo root, not backend/: the API serves /img from
+      # ../reference/cine-journal/img, which a backend/ context cannot COPY.
+      #
+      # The gha layer cache only helps if backend/Dockerfile builds dependencies in a
+      # layer the source doesn't invalidate (it does — see its dummy-main.rs step).
+      - name: Build and push the arm64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.build.outputs.tag }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Set up the SSH key
+        env:
+          SSH_KEY: ${{ secrets.OCI_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.OCI_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          # Named checks: OpenSSH's own errors don't say which secret is missing.
+          [ -n "$SSH_KEY" ] || { echo "::error::secret OCI_SSH_KEY is not set — see docs/ci-cd.md"; exit 1; }
+          [ -n "$SSH_KNOWN_HOSTS" ] || { echo "::error::secret OCI_SSH_KNOWN_HOSTS is not set — see docs/ci-cd.md"; exit 1; }
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          # `printf '%s\n'` adds the trailing newline an OpenSSH key needs; pasting into
+          # the secrets box often loses it.
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      # docker-compose.yml and Caddyfile come from the VM's own clone (DEPLOY.md Part 3),
+      # not scp. scp would leave that clone dirty and break its `git pull`; resetting to
+      # the built commit keeps compose and the running image in step.
+      #
+      # `reset --hard` cannot touch .env.deploy (gitignored) or the SQLite database
+      # (Docker volume). It does discard hand-edits to tracked files.
+      - name: Sync the VM's checkout to this commit
+        env:
+          HOST: ${{ secrets.OCI_HOST }}
+          USER_NAME: ${{ secrets.OCI_USER }}
+          PORT: ${{ vars.SSH_PORT || '22' }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || 'cine-journal' }}
+        run: |
+          set -euo pipefail
+          [ -n "$HOST" ] || { echo "::error::secret OCI_HOST is not set — see docs/ci-cd.md"; exit 1; }
+          [ -n "$USER_NAME" ] || { echo "::error::secret OCI_USER is not set — see docs/ci-cd.md"; exit 1; }
+
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o ConnectTimeout=15 -p "$PORT" "$USER_NAME@$HOST" \
+              "DEPLOY_PATH='$DEPLOY_PATH' COMMIT='${{ github.sha }}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          if [ ! -d "$DEPLOY_PATH/.git" ]; then
+            echo "::error::$DEPLOY_PATH on the VM is not a git checkout. Run DEPLOY.md Part 3 first, or point the DEPLOY_PATH variable at the clone."
+            exit 1
+          fi
+          cd "$DEPLOY_PATH"
+          # Fetch the branch, then reset to the sha: fetch-by-sha needs a server option,
+          # but the commit is reachable from main anyway.
+          git fetch --quiet origin main
+          git reset --hard --quiet "$COMMIT"
+          echo "checkout now at $(git rev-parse --short HEAD)"
+          REMOTE
+
+      # The token goes over stdin, so it never appears in the VM's process list, and it
+      # expires when this job ends. Nothing long-lived is stored on the box.
+      - name: Log the VM in to GHCR
+        env:
+          HOST: ${{ secrets.OCI_HOST }}
+          USER_NAME: ${{ secrets.OCI_USER }}
+          PORT: ${{ vars.SSH_PORT || '22' }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -p "$PORT" \
+            "$USER_NAME@$HOST" \
+            "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
+
+      - name: Pull and restart the stack
+        env:
+          HOST: ${{ secrets.OCI_HOST }}
+          USER_NAME: ${{ secrets.OCI_USER }}
+          PORT: ${{ vars.SSH_PORT || '22' }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || 'cine-journal' }}
+          TAG: ${{ steps.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Script on stdin via `bash -s`, so quoting is handled once.
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o ConnectTimeout=15 -p "$PORT" "$USER_NAME@$HOST" \
+              "API_TAG='$TAG' DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+
+          # docker-compose.yml reads `${API_TAG:-latest}`. Exported because compose reads
+          # the environment. (DEPLOY.md calls it API_IMAGE_TAG; compose decides, and it
+          # says API_TAG.)
+          export API_TAG
+
+          # DEPLOY.md keeps the variables in .env.deploy, which compose does not
+          # auto-load — only .env. Both layouts are in circulation, so handle either.
+          compose=(docker compose)
+          if [ -f .env.deploy ]; then
+            compose=(docker compose --env-file .env.deploy)
+            echo "--- using .env.deploy"
+          elif [ -f .env ]; then
+            echo "--- using .env"
+          else
+            echo "::error::neither .env.deploy nor .env exists in $PWD, so API_DOMAIN and TMDB_TOKEN are unset and compose will refuse to start. See DEPLOY.md Part 3."
+            exit 1
+          fi
+
+          echo "--- deploying $API_TAG"
+          "${compose[@]}" pull
+          # `--remove-orphans`: a service dropped from compose would otherwise keep
+          # running and holding its port.
+          #
+          # `--wait` makes the compose healthchecks the deploy's gate, so this step is
+          # green only once the API answers /api/health. 330s against the healthcheck's
+          # 300s start_period, which covers a first boot re-seeding from TMDB.
+          "${compose[@]}" up -d --remove-orphans --wait --wait-timeout 330
+          "${compose[@]}" ps
+
+          # Every deploy leaves the old image behind, and the Always Free boot volume is
+          # small. Untagged parents only, so a rollback target survives.
+          docker image prune -f
+          REMOTE
+
+      # Checks the public path — Caddy, DNS, certificate, firewalls — which the
+      # in-container healthcheck cannot see.
+      - name: Smoke-test the public API
+        env:
+          HEALTH_URL: ${{ vars.API_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "$HEALTH_URL" ]; then
+            echo "::warning::repository variable API_HEALTH_URL is not set, so nothing checked that the API actually answers. See docs/ci-cd.md."
+            exit 0
+          fi
+          for attempt in $(seq 1 10); do
+            if curl -fsS --max-time 10 "$HEALTH_URL" > /dev/null; then
+              echo "healthy after ${attempt} attempt(s)"
+              exit 0
+            fi
+            echo "not answering yet (attempt ${attempt}/10)"
+            sleep 6
+          done
+          echo "::error::$HEALTH_URL never answered. The new image is running but unhealthy — see the rollback section of docs/ci-cd.md."
+          exit 1
+
+      # `always()`: a failure above should not leave a credential file on the VM.
+      - name: Log the VM out of GHCR
+        if: always()
+        env:
+          HOST: ${{ secrets.OCI_HOST }}
+          USER_NAME: ${{ secrets.OCI_USER }}
+          PORT: ${{ vars.SSH_PORT || '22' }}
+        run: |
+          if [ -n "${HOST:-}" ] && [ -f ~/.ssh/deploy_key ]; then
+            ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                -o ConnectTimeout=15 -p "$PORT" "$USER_NAME@$HOST" \
+                'docker logout ghcr.io' || true
+          fi
+
+      # In the run summary so the tag is findable later, when you need it to roll back.
+      - name: Record what shipped
+        if: always()
+        run: |
+          {
+            echo "### API"
+            echo
+            echo "- image: \`${IMAGE}:${{ steps.build.outputs.tag }}\`"
+            echo "- commit: ${{ github.sha }}"
+            echo "- roll back with: \`API_TAG=<previous-tag> docker compose --env-file .env.deploy up -d\` on the VM"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-frontend:
+    name: Deploy frontend to Vercel
+    needs: [test-backend, test-frontend]
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    # Every vercel command reads these from the environment.
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install the Vercel CLI
+        run: |
+          set -euo pipefail
+          [ -n "${VERCEL_TOKEN:-}" ] || { echo "::error::secret VERCEL_TOKEN is not set — see docs/ci-cd.md"; exit 1; }
+          [ -n "${VERCEL_ORG_ID:-}" ] || { echo "::error::secret VERCEL_ORG_ID is not set — see docs/ci-cd.md"; exit 1; }
+          [ -n "${VERCEL_PROJECT_ID:-}" ] || { echo "::error::secret VERCEL_PROJECT_ID is not set — see docs/ci-cd.md"; exit 1; }
+          # Unpinned: the CLI talks to a hosted API, so an old CLI breaks more often than
+          # a new one. Pin a major here if that changes.
+          npm install --global vercel@latest
+
+      # Runs in frontend/, so the project's Root Directory in the Vercel dashboard must
+      # be empty. Set it to `frontend` too and the CLI looks for frontend/frontend.
+      - name: Pull the project settings
+        working-directory: frontend
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+      # Build on the runner so the deployed bundle is the one CI verified, and a build
+      # failure lands in this log. `deploy --prebuilt` then only uploads.
+      - name: Build
+        working-directory: frontend
+        run: vercel build --prod --token="$VERCEL_TOKEN"
+
+      - name: Deploy
+        id: deploy
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          url=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Frontend"
+            echo
+            echo "- deployment: $url"
+            echo "- commit: ${{ github.sha }}"
+          } >> "$GITHUB_STEP_SUMMARY"

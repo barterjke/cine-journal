@@ -30,7 +30,7 @@ mod state;
 mod tmdb;
 
 use std::{
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -47,6 +47,15 @@ const IMG_DIR: &str = "../reference/cine-journal/img";
 /// Not 3000 — that port is commonly taken by a Next.js dev server. Override
 /// with `PORT=... cargo run`; keep `frontend/vite.config.ts` in sync.
 const DEFAULT_PORT: u16 = 3001;
+
+/// Which interface to listen on. Loopback by default: the writes here are
+/// unauthenticated (see the CORS note below), so `0.0.0.0` would expose them on
+/// every network the machine is on. Override with `BIND_ADDR`.
+///
+/// A container has to override it — loopback there is reachable only from inside
+/// the container. `docker-compose.yml` sets `BIND_ADDR=0.0.0.0`, and that is safe
+/// because the container publishes no ports.
+const DEFAULT_BIND_ADDR: &str = "127.0.0.1";
 
 #[tokio::main]
 async fn main() {
@@ -104,7 +113,15 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(DEFAULT_PORT);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    // Parsed, so `::` and a specific interface both work. A value that isn't an IP
+    // panics rather than falling back to loopback: falling back would bind
+    // somewhere unreachable while still logging "listening".
+    let ip: IpAddr = std::env::var("BIND_ADDR")
+        .unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string())
+        .parse()
+        .unwrap_or_else(|e| panic!("BIND_ADDR is not an IP address: {e}"));
+
+    let addr = SocketAddr::from((ip, port));
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .unwrap_or_else(|e| panic!("failed to bind {addr}: {e}"));
