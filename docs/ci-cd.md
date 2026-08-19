@@ -64,7 +64,7 @@ Settings → Secrets and variables → Actions → Secrets.
 | --- | --- | --- |
 | `OCI_HOST` | VM public IP or hostname | OCI console → Instances |
 | `OCI_USER` | SSH login | `ubuntu` (Canonical) or `opc` (Oracle Linux) |
-| `OCI_SSH_KEY` | Private key, whole PEM including `BEGIN`/`END` | `ssh-keygen -t ed25519 -f deploy_key`, put the `.pub` in the VM's `authorized_keys` |
+| `OCI_SSH_KEY` | Private key, whole PEM including `BEGIN`/`END` | The `.key` file the OCI console gave you when you created the instance. Its `.pub` is already in the VM's `authorized_keys`. Or make a new pair with `ssh-keygen -t ed25519 -f deploy_key` and append the `.pub` yourself. |
 | `OCI_SSH_KNOWN_HOSTS` | VM host key | `ssh-keyscan -p 22 <ip>` |
 | `VERCEL_TOKEN` | API token | Vercel → Account Settings → Tokens |
 | `VERCEL_ORG_ID` | Account/team id | `.vercel/project.json` after `vercel link`, or Settings → General |
@@ -72,6 +72,30 @@ Settings → Secrets and variables → Actions → Secrets.
 
 `GITHUB_TOKEN` is automatic. The job requests `packages: write` and uses it to push to
 GHCR and to let the VM pull. It expires when the job ends.
+
+### Setting them from the CLI
+
+Same result as the web UI. Run from the repo root:
+
+```bash
+gh secret set OCI_HOST --body <VM_PUBLIC_IP>
+gh secret set OCI_USER --body ubuntu
+gh secret set OCI_SSH_KEY < ~/.ssh/oci-cine-journal      # path to your private key
+ssh-keyscan <VM_PUBLIC_IP> | gh secret set OCI_SSH_KNOWN_HOSTS
+
+gh secret set VERCEL_TOKEN        # prompts, so the token stays out of your shell history
+gh secret set VERCEL_ORG_ID
+gh secret set VERCEL_PROJECT_ID
+```
+
+The three Vercel ones are only needed if you keep the `deploy-frontend` job — see
+*Vercel CLI vs git integration* below.
+
+Check what's set with `gh secret list`. You can't read a secret back, only overwrite it.
+
+Make sure `gh` is acting as the account that owns the repo — `gh auth status`, and
+`gh auth switch -u <user>` if not. Secrets set on the wrong repo fail silently as far as
+the workflow is concerned: it just reports the secret as missing.
 
 ## Variables
 
@@ -82,6 +106,13 @@ Settings → Secrets and variables → Actions → Variables. All optional.
 | `API_HEALTH_URL` | none | Public URL of `GET /api/health`. Set it — it is the only check on Caddy, DNS, the certificate and the firewalls. Unset means a warning and a pass. |
 | `DEPLOY_PATH` | `cine-journal` | The VM's git clone, relative to the deploy user's home. Matches DEPLOY.md. |
 | `SSH_PORT` | `22` | Only if you moved sshd. |
+
+Variables are a separate tab from secrets, and a separate command:
+
+```bash
+gh variable set API_HEALTH_URL --body https://api.yourdomain.com/api/health
+gh variable list
+```
 
 ## Setup checklist
 
