@@ -14,8 +14,9 @@ is kept under `reference/` as the source of truth for the markup, and for the de
 that stands in when TMDB isn't configured.
 
 ```
+dev          Starts both servers and stops both on one Ctrl-C. See "Run it".
 backend/     Rust + Axum API. Films from TMDB, social layer in SQLite, plus the images.
-frontend/    React + Vite + TypeScript. Renders the nine screens from the API.
+frontend/    React + Vite + TypeScript. Renders the ten screens from the API.
 reference/   The original static HTML re-creation and the Stitch exports it came from.
 ```
 
@@ -102,22 +103,42 @@ Copy `.env.example` to `.env` and paste in a TMDB **API Read Access Token** (the
 JWT), free from [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api). Skip
 this to run in demo mode.
 
-Two terminals:
+```bash
+./dev
+```
+
+That starts both servers, waits for the API's health check before bringing up Vite, prefixes
+each one's output with `[api]` or `[ui]`, and stops both on one Ctrl-C. Then open
+<http://localhost:5173>. Vite proxies `/api` and `/img` to the backend, so the browser only
+ever talks to one origin.
+
+`PORT` and `UI_PORT` move the two ports, and moving the API's takes the proxy with it:
+`PORT=4000 ./dev`. A port that's already in use is reported with the pid holding it and the
+script stops — nothing is killed for you, since on a shared machine that process may be
+someone's actual work.
+
+Or run them yourself, in two terminals:
 
 ```bash
 cd backend && cargo run          # API on http://127.0.0.1:3001
 cd frontend && npm install && npm run dev   # UI on http://localhost:5173
 ```
 
-Then open http://localhost:5173. Vite proxies `/api` and `/img` to the backend, so the
-browser only ever talks to one origin.
+Done this way the two ports are yours to keep in sync — `PORT=4000 cargo run` needs
+`API_URL=http://127.0.0.1:4000 npm run dev` beside it, or the UI proxies to a port nothing
+is listening on and every screen fails to load.
 
 The SQLite file is created on first run at `backend/cine-journal.db` (gitignored;
 `DATABASE_PATH` overrides it) and seeded only when it's empty, so a restart neither
 duplicates the follow graph nor clobbers anything you changed. Delete the file to start over.
 
-Override the API port with `PORT=4000 cargo run` (and `API_URL=http://127.0.0.1:4000
-npm run dev` to match).
+`REDIS_URL` is optional and caches built feed pages. **Nothing here asks you to install
+Redis**, and with it unset — or with a server that's down, or one that dies mid-session —
+every feed page is built from source: slower on the first paint, never broken. Connecting is
+lazy, so a dead server can't delay startup; every operation has a 300ms timeout, and each
+failure mode (no URL, refused connection, a value that no longer parses after a payload
+change) produces the same answer, "nothing cached". The URL can carry a password, so like the
+TMDB token it is never logged — only whether it parsed.
 
 The token is read once at startup and never logged — the log line is `tmdb: enabled` or
 `tmdb: disabled` and nothing more. It travels in an `Authorization: Bearer` header rather
@@ -134,7 +155,8 @@ than as TMDB's `?api_key=` query parameter, which the request-tracing layer woul
 | Friend Review — Mobile | `/review-mobile` | `reference/cine-journal/review-mobile.html` |
 | Movie Detail | `/movie/:id` | `reference/movie page/` |
 | Search & Filter | `/search` | `reference/stitch_lumi_cinema_social 2/movie_search_desktop/` |
-| Profile | `/profile` | `reference/profile/` |
+| Profile | `/profile` | `reference/profile 2/` |
+| A collection | `/collections/:slug` | no mock — the search screen's poster grid |
 | Friends | `/people` | no mock — borrows the profile's panels |
 | One person | `/people/:handle` | no mock — the profile's own layout, minus what only you have |
 
@@ -152,6 +174,12 @@ person's page isn't merely *like* your own — it's the same components in the s
 shows their favourites and their watchlist alongside their reviews. `/people/:handle` is keyed
 on the nickname rather than the id, so the URL is the thing you'd have searched for.
 
+The collection page has no mock either, and borrows for the same reason: it is the search
+screen's poster grid, "+" button and all, under the profile's heading treatment. The profile's
+tiles cap what they show at four posters and a handful of rows, so the thing behind a tile has
+to be *that list without the cap* — a second visual idea for the same films would read as a
+different list.
+
 The detail screen has been through two designs. The first (`reference/stitch_lumi_cinema_social 2/movie_detail_desktop/`)
 led with a full-bleed 70vh backdrop and a four-tile bento gallery of stills; the current one
 is editorial — three columns, no hero image, no stills — and the backdrop survives only
@@ -163,17 +191,20 @@ what the search and feed screens were drawn against.
 Every poster and film name links to `/movie/:id`, from the feed, search, a person's page and a
 review.
 
-- **The feed** — three sections, none of which shows you anything nobody did. *From people you
-  follow* is a strict `JOIN` on the follow graph rather than a friends-first *ordering*, so a
-  stranger can't appear under a heading that says "people you follow"; *Recent Entries* is your
-  own journal; *Recommended for you* is TMDB's `/movie/{id}/recommendations` asked about your
-  three most recent favourites and watchlist entries. Each suggestion names the film it came
-  from and links to it — "because you liked Obsession" for a favourite, "because you want to
-  watch X" for a watchlist entry, since bookmarking a film isn't the same as having liked it.
-  Ranked by how many of your films point at the same suggestion, then by vote count. On mobile
-  the same three become a stories rail (tap a circle to read that person's newest review) and
-  a grid of poster cards. All five sections can legitimately be empty, so each says why and
-  where to go rather than filling itself with whatever is popular.
+- **The feed** — one infinitely-scrolling column of three interleaved kinds, none of which
+  shows you anything nobody did. *Reviews from people you follow* come from a strict `JOIN` on
+  the follow graph rather than a friends-first *ordering*, so a stranger can't appear under a
+  card that says "from someone you follow"; *entries* are your own journal; *recommendations*
+  are TMDB's `/movie/{id}/recommendations` asked about your three most recent favourites and
+  watchlist entries. Each suggestion names the film it came from and links to it — "because you
+  liked Obsession" for a favourite, "because you want to watch X" for a watchlist entry, since
+  bookmarking a film isn't the same as having liked it. Ranked by how many of your films point
+  at the same suggestion, then by vote count. Pages of 12 arrive as you scroll, mixed
+  `review, review, entry, recommendation`, and the column says so when it genuinely ends — the
+  graph is finite, and spinning forever on an empty page would be a lie. It can legitimately be
+  empty on a new account, so it says why and where to go rather than filling itself with
+  whatever is popular. On mobile the same three become a stories rail (tap a circle to read that
+  person's newest review) and a grid of poster cards, which is still a single fixed page.
 - **Watchlist** — the "+" over any poster, and the button on the detail page. One shared
   list, so a film logged on the mobile feed shows as watchlisted on its detail page.
 - **Favourite** — the heart beside it. A separate list from the watchlist and from your
@@ -199,25 +230,35 @@ review.
   selection but respects the query and the other filters, so a chip never reads "4" and
   then yields nothing when you click it.
 - **Likes, comments, replies** on the review screens.
-- **Follow people** — the Friends tab (`/people`) lists everyone, who you follow, and who
-  follows you. Search matches nickname *or* display name (`serf` finds `@Geronimo1967`,
-  "CinemaSerf"). Every row and avatar opens that person's page, where the same button and a
-  "Follows you" badge answer whether the follow is mutual. The button states its target rather
-  than saying "flip it", so a double-click can't leave it and the database on opposite answers.
+- **Follow people** — the Friends tab (`/people`) is who you follow, who follows you, and a
+  search box for reaching anybody else. Search matches nickname *or* display name (`serf` finds
+  `@Geronimo1967`, "CinemaSerf"), and an empty query deliberately matches nobody: a listing of
+  every account is a user directory, not friends, and it grows without bound as the graph does.
+  Every row and avatar opens that person's page, where the follow button and a "Follows you"
+  badge answer whether the follow is mutual. The button states its target rather than saying
+  "flip it", so a double-click can't leave it and the database on opposite answers.
 - **Read a film's reviews** — a film's page shows real users' prose, **the people you follow
   first, then the strangers who rated it highest**. One SQL `ORDER BY followed DESC,
   half_stars DESC, created_at DESC` does both, so the fallback isn't a second code path that
   could disagree. A "4 from people you follow, then the best rated" caption says so out loud:
   a friend's 3½ stars above a stranger's 5 would otherwise read as a sorting bug.
-- **Profile** — `/profile` is where all of that becomes visible: the Favorite Films strip is
-  what you hearted, the Watchlist grid is the list itself, and Recent Reviews is one journal
-  ordered by whichever of the rating or the review happened later — an entry shows its stars,
-  or the word "Written" when there's prose but no score. So it starts out empty and fills in as
-  you use the app; each tile says what to do rather than showing borrowed posters. "Following"
-  is the real graph, and its count comes from the graph rather than the list's length — the
-  profile and the friend directory printing different numbers for the same fact is the one
-  thing that must not happen. (It briefly did: the list also counted the export's two rails, so
-  the profile said 12 while `/people` said 5.)
+- **Profile** — `/profile` is where all of that becomes visible, as one bento grid of four
+  tiles: Favorite Films is what you hearted, Watchlist is the list itself, and Recent Reviews is
+  one journal ordered by whichever of the rating or the review happened later — an entry shows
+  its stars, or the word "Written" when there's prose but no score. So it starts out empty and
+  fills in as you use the app; each tile says what to do rather than showing borrowed posters.
+  "Following" is the real graph, and its count comes from the graph rather than the list's
+  length — the profile and the friend directory printing different numbers for the same fact is
+  the one thing that must not happen. (It briefly did: the list also counted the export's two
+  rails, so the profile said 12 while `/people` said 5.)
+- **Open a collection** — each tile is a link *in its entirety*, not just its chevron, and goes
+  to `/collections/:slug` — the same films uncapped, in a poster grid with the watchlist "+" on
+  each. The tiles are summaries of four and six posters, which is what makes them worth
+  clicking. `?person=` gives somebody else's, so a friend's favourites are a page too;
+  `journal` is yours alone, since the equivalent for them is their reviews, which their own page
+  already lists in full. (The tiles used to scroll to full-width copies of themselves further
+  down the same page, so every film on the profile appeared twice — once as a thumbnail and
+  again as a poster, under the same heading.)
 - **Edit your bio** — "Edit" beside it on your own profile; saving an empty one restores the
   default line rather than leaving a blank gap under your name.
 - **See anyone's profile the way you see your own** — a person's page carries their favourites
@@ -278,8 +319,9 @@ subsequent read, including after a restart.
 | --- | --- |
 | `GET /api/health` | `{"status":"ok"}` |
 | `GET /api/status` | `{data_source: "tmdb"｜"demo", message, docs_url}` — drives the demo banner |
-| `GET /api/feed` | Reviews by people you follow, your own journal, films suggested from your favourites and watchlist |
-| `GET /api/feed/mobile` | The same three, as a stories rail of the people you follow plus poster cards |
+| `GET /api/feed?cursor=&refresh=` | One page of 12 interleaved cards — reviews by people you follow, your own journal, films suggested from your favourites and watchlist. `cursor` is the previous page's `next_cursor`, opaque, and a junk one restarts the feed rather than erroring; `refresh=true` skips the Redis cache and rebuilds. `next_cursor: null` is the end |
+| `GET /api/feed/mobile` | The same three, as a stories rail of the people you follow plus poster cards. One fixed page, not paginated |
+| `GET /api/collections/{slug}?person=` | One collection in full: `favorites`, `watchlist` or `journal`, with the title and description in the right person's voice. `person` is a nickname and gives theirs; `journal` is the visitor's alone, so it `404`s with one. An unknown slug or nickname is a `404`, not an empty grid |
 | `GET /api/reviews` | The long-form reviews of one trending film |
 | `GET /api/reviews/{id}` | One review; `404` with `{"error":…}` if unknown |
 | `GET /api/movies` | Detail pages for the current trending films |
@@ -288,7 +330,7 @@ subsequent read, including after a restart.
 | `GET /api/search?q=&genre=&year=&min_rating=&page=&person=` | Results, facet counts, page count. `person` is a TMDB person id and narrows to their filmography; the response names them so the heading can say who |
 | `GET /api/watchlist` | The visitor's watchlist as movie ids |
 | `GET /api/profile` | The whole profile screen: identity, bio, favourites, watchlist, journal, following |
-| `GET /api/people?q=` | The friend directory: results, following, followers, in one response. Omit `q` for everyone |
+| `GET /api/people?q=` | The friend directory: results, following, followers, in one response. An empty `q` searches for nobody — following and followers still come back |
 | `GET /api/people/{handle}` | One person by nickname (with or without `@`) and their favourites, watchlist and reviews; `404` if no such nickname |
 | `POST /api/people/{id}/follow` | `{person_id, following, following_count}` — body `{"following":bool}`, or omit it to toggle. Keyed on the **id**, not the handle |
 | `POST /api/movies/{id}/watchlist` | `{on_watchlist}` — body `{"on_watchlist":bool}`, or omit it to toggle |
@@ -412,6 +454,7 @@ db.rs         SQLite: schema, seed, and the read/write helpers
 content.rs    the seam — every screen, backed by TMDB or by `data`
 data.rs       the demo dataset, as it was when it was the only dataset
 hydrate.rs    folds the visitor's deltas into the content, unchanged
+cache.rs      the feed's optional Redis cache; every operation degrades to a miss
 routes.rs     handlers; they call `content::` and never touch either source
 ```
 
@@ -445,6 +488,36 @@ Users' favourites and watchlists come from `db::derive_taste`, which deals each 
 reviewer four favourites from the films they rated 7+ half-stars and six watchlist films from
 the trending pool, offset by their seat so neighbours don't get the same strip. TMDB publishes
 neither list, and a page with two empty strips wouldn't have shown that the feature works.
+
+### The feed's cache
+
+Building a feed page costs a second or two on a cold TMDB cache: three sources are read and
+then one upstream call per film. Redis turns that into the *next* visitor's problem, in the
+shape every social feed uses — **stale-while-revalidate**, driven by the client. The screen asks
+once without `refresh` and gets whatever the cache has, flagged `from_cache`, which paints
+immediately; seeing that flag it asks again with `refresh=true`, which skips the cache, rebuilds
+the page and stores it. So you read last visit's feed while this visit's is being made. The
+revalidation lives on the client rather than in a spawned task because a background rebuild
+would have nowhere to deliver to — there is no push channel.
+
+Three decisions in there are worth keeping straight, because getting any of them wrong is a
+bug that only shows later:
+
+- **The page is cached before hydration.** `hydrate::feed_page` runs on both paths, *after* the
+  cache, so what Redis holds is the content and not one visitor's watchlist stamped onto it —
+  and a stale page's "+" buttons still show current state. With per-user identity this is the
+  one that would leak one person's state to another.
+- **The cursor is normalised before it becomes a key.** `content::feed_cursor` parses it first,
+  so a client sending junk restarts the feed instead of filling Redis with entries nothing can
+  ever read back.
+- **A write forgets only the head key.** Deeper pages are addressed by cursor and ride out their
+  TTL rather than being walked, which would mean a `SCAN` across the namespace on every click.
+  The client de-duplicates by card identity, so a stale deep page overlapping a rebuilt head
+  shows its cards once rather than twice. That de-duplication is load-bearing, not defensive.
+
+A card's identity is its kind plus its own id, deliberately not the film: the same film
+legitimately appears twice in one feed — a friend reviewed it *and* you logged it — and those
+are two cards saying different things.
 
 ### Schema changes
 
@@ -514,9 +587,10 @@ end is a still image, but in an SPA it reads as a bug:
 - the inert `CinéJournal` wordmark, now the home button on every bar
 - the detail page's `more_horiz` overflow button and its "Full Cast & Crew" link, both of
   which opened nothing, and its static "In Theaters" row, now real streaming availability
-- the profile's `share` button (nothing to share to) and its four `chevron_right` links; the two
-  with a real destination — Watchlist and Following — are headings further down the same page,
-  so those two scroll to them instead. The mock's header "Edit" was dropped for the same reason
+- the profile's `share` button (nothing to share to) and its four `chevron_right` links, which
+  each opened nothing. Every tile is now a link in its entirety — three to `/collections/:slug`
+  and Following to `/people` — because a 24px chevron on a card the size of a hand makes the
+  rest of the card read as decoration. The mock's header "Edit" was dropped for the same reason
   and has since come back as a real one, scoped to the bio — the only part of the identity block
   there is anything to edit, since the name and avatar have nothing to sign in to
 - the profile's `Following (124)` beside a list of three. The count is the graph's own, and the
@@ -531,7 +605,8 @@ end is a still image, but in an SPA it reads as a bug:
 - the feed's "Live Now" rail of discussion rooms with member counts, and its "Friends Activity"
   sidebar of verbs and timestamps. There are no rooms, and nothing records when anyone watched
   anything. In their place: what the people you follow have written, and films suggested from
-  your own favourites and watchlist, each card naming the film of yours it came from
+  your own favourites and watchlist, each card naming the film of yours it came from — and it
+  scrolls rather than stopping after six, since a feed that ends at a fixed count is a summary
 - the mobile feed's stories rail as five fixed avatars with an invented read/unread state and
   no destination. It is the people you follow now, the ring means "has a review to show", and
   tapping a circle opens it
@@ -586,17 +661,23 @@ monogram rather than a stock photograph. Putting one of the export's faces on a 
 real reviews would attribute them to someone who didn't write them.
 
 `components/ProfileParts.tsx` exists for the same reason one layer up: your profile and someone
-else's are the same page, so the tile, the poster strip, the watchlist card, the section heading
-and the header all live in one file and both screens import them. `ProfileHeader` takes `bio` and
-`action` as slots — that pair *is* the difference between the two screens, and expressing it as
-two props keeps every other pixel impossible to diverge. Before this, a person's page had only
-their reviews, and drifted from the profile it was supposedly modelled on.
+else's are the same page, so the tile, the poster strip, the section heading and the header all
+live in one file and both screens import them. `ProfileHeader` takes `bio` and `action` as slots
+— that pair *is* the difference between the two screens, and expressing it as two props keeps
+every other pixel impossible to diverge. Before this, a person's page had only their reviews,
+and drifted from the profile it was supposedly modelled on.
+
+`PosterStrip` takes `linked` because the profile's tiles are links now: an `<a>` inside an `<a>`
+is invalid HTML that the browser silently un-nests, which breaks the *outer* one — so the strip's
+posters, the journal rows' titles and the Following faces are all inert inside their tile, and
+the collection page behind it is where a poster goes to its film. A component that always linked
+would have made the tiles look clickable and not be.
 
 `components/People.tsx` holds the follow button, the person row and the review card because
-four screens draw them — the directory, one person's page, the profile's Following list and a
-film's reviews — and a follow button that looked or behaved differently on one of them would
-read as a different button. `ReviewCard`'s `showFilm` swaps which end is the subject (the film
-leads on a person's page, the author on a film's) rather than forking into two components that
+several screens draw them — Friends, one person's page, a film's reviews and the feed — and a
+follow button that looked or behaved differently on one of them would read as a different
+button. `ReviewCard`'s `showFilm` swaps which end is the subject (the film leads on a person's
+page and in the feed, the author on a film's) rather than forking into two components that
 would drift. The follow button doubles as its own error surface, turning into **Retry**: a
 failed write reverts it, which leaves the label truthful but makes it look like a bug unless it
 says why it sprang back.
@@ -622,12 +703,28 @@ reloads, because a reload passes either way.
 The feed's own sweep asks where things *go*, since that is what separates it from the rails it
 replaced: a review card has to open the review it named, a story circle has to open that
 person's newest one, and a suggestion's "because you liked X" has to land on X. The watchlist
-button there is checked against `GET /api/watchlist` rather than the reloaded rail, because a
-watchlisted film is dropped from the rail — so its absence can't tell a stored flip from an
-unstored one. Layout is swept at thirteen widths from 1440 down to 390, asserting nothing's box
-crosses the viewport's right edge; the run that mattered was 945px, between the desktop grid and
-the mobile one, where the export's three columns used to be squeezed. And the empty case is
-tested by unfollowing everyone on a throwaway database, since a new account sees exactly that.
+button there is checked against `GET /api/watchlist` rather than the reloaded feed, because a
+watchlisted film is dropped from the recommendations — so its absence can't tell a stored flip
+from an unstored one. Layout is swept at thirteen widths from 1440 down to 390, asserting
+nothing's box crosses the viewport's right edge; the run that mattered was 945px, between the
+desktop grid and the mobile one, where the export's three columns used to be squeezed. And the
+empty case is tested by unfollowing everyone on a throwaway database, since a new account sees
+exactly that.
+
+Since the desktop feed became an infinite one, that sweep also scrolls it: the assertion is that
+the card count *grows* to the end of the graph and that no two cards share a key, because the
+two ways this breaks — a cursor that never advances and a revalidation that re-appends the head
+page — both look like a working feed in a screenshot. The "Refreshing your feed…" line is
+observed against a warm cache, where it appears in tens of milliseconds and the network shows
+exactly two feed requests. Watch for two hazards if you touch `useFeed`:
+
+- **Nested anchors.** An `<a>` inside an `<a>` is un-nested by the browser and the *outer* link
+  stops working, so the sweep counts `main a a` and expects zero. It is why `PosterStrip` has
+  `linked` and why the feed's review cards don't link their own author.
+- **StrictMode's double effect.** The first load runs once behind a ref guard, and that guard is
+  incompatible with a cleanup that cancels the in-flight request: the cleanup kills run 1 and the
+  guard skips run 2, so the screen loads forever. It reproduces only in dev, which is the mode
+  you'd be looking at. The comment in `Feed.tsx` says not to add the flag back; believe it.
 
 See [`reference/cine-journal/README.md`](reference/cine-journal/README.md) for the full
 design system and the rest of the export quirks.

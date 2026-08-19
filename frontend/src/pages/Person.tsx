@@ -30,13 +30,8 @@ import {
   TopAppBar,
 } from '../components/Chrome'
 import { FollowButton, FollowsYouBadge, ReviewCard } from '../components/People'
-import {
-  PosterStrip,
-  ProfileHeader,
-  SectionHeading,
-  Tile,
-  WatchlistCard,
-} from '../components/ProfileParts'
+import { PosterStrip, ProfileHeader, SectionHeading, Tile } from '../components/ProfileParts'
+import { collectionPath } from './Collection'
 import { Link, useParams } from 'react-router-dom'
 
 function Body({
@@ -68,45 +63,29 @@ function Body({
         }
       />
 
-      {/* The same two tiles your own profile opens with, in the same order. The
-          headings name whose they are, since on this page that isn't a given. */}
+      {/* The same two tiles your own profile opens with, linking to the same collection
+          page with their nickname on it. They used to scroll to full copies of
+          themselves further down, so every film on this page appeared twice. */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
-        <Tile label="Favorite Films" to={data.favorites.length ? '#favorites' : undefined}>
+        <Tile label="Favorite Films" to={collectionPath('favorites', data.handle)}>
           <PosterStrip
             films={data.favorites}
+            linked={false}
             empty={`${first} hasn’t raved about anything yet.`}
           />
         </Tile>
 
-        <Tile label="Watchlist" to={data.watchlist.length ? '#watchlist' : undefined}>
-          <PosterStrip films={data.watchlist} empty={`${first}’s watchlist is empty.`} />
+        <Tile label="Watchlist" to={collectionPath('watchlist', data.handle)}>
+          <PosterStrip
+            films={data.watchlist}
+            linked={false}
+            empty={`${first}’s watchlist is empty.`}
+          />
         </Tile>
       </div>
 
-      {/* Both strips in full below, on the same grid the profile's watchlist uses.
-          No empty states — the tiles above already said it. */}
-      {data.favorites.length > 0 && (
-        <section className="flex flex-col gap-md" id="favorites">
-          <SectionHeading title="Favorite Films" count={data.favorites.length} />
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-md">
-            {data.favorites.map((film) => (
-              <WatchlistCard key={film.id} film={film} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {data.watchlist.length > 0 && (
-        <section className="flex flex-col gap-md" id="watchlist">
-          <SectionHeading title="Watchlist" count={data.watchlist.length} />
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-md">
-            {data.watchlist.map((film) => (
-              <WatchlistCard key={film.id} film={film} />
-            ))}
-          </div>
-        </section>
-      )}
-
+      {/* Their reviews stay on this page rather than moving to a collection: prose is
+          what they wrote, and this is where you read it. */}
       <section className="flex flex-col gap-md">
         {/* `review_count` rather than `reviews.length`: the count is the true total,
             so it stays honest if the list is ever clamped. */}
@@ -148,7 +127,7 @@ function NotFound({ handle }: { handle: string }) {
         to="/people"
         className="font-label-sm text-label-sm uppercase tracking-wider px-4 py-2 bg-primary text-on-primary rounded-full hover:opacity-90 transition-opacity mt-sm"
       >
-        Browse everyone
+        Search for someone
       </Link>
     </div>
   )

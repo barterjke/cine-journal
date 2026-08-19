@@ -39,13 +39,10 @@ const PAGE_SIZE: usize = 8;
 /// How many trending films the search screen's empty state draws from.
 const TRENDING_NEEDED: usize = 8;
 
-/// How many of the visitor's logged films the "Recent Entries" grid shows. Eight
-/// fills the export's four-column grid exactly twice, as the search grid does.
-const RECENT_ENTRIES_SHOWN: usize = 8;
-
-/// How many films each profile strip resolves. The mock drew four favourites, three
-/// watchlist thumbnails and one review; the watchlist *grid* below shows more, and
-/// six fills its two rows of three at every breakpoint the design has.
+/// How many films each profile tile resolves. Each tile is a summary that links to
+/// `/collections/:slug` for the same list uncapped, so these are the counts that *fit*
+/// rather than a limit on what the visitor has: four posters fill the favourites strip
+/// and six the watchlist's at every breakpoint the design has.
 const FAVORITES_SHOWN: usize = 4;
 const WATCHLIST_SHOWN: usize = 6;
 const REVIEWS_SHOWN: usize = 3;
@@ -170,32 +167,207 @@ const FRIEND_REVIEWS_SHOWN: u32 = 6;
 /// How many circles the mobile stories rail holds.
 const STORIES_SHOWN: usize = 8;
 
-/// The desktop feed: what the people you follow have written, what you've logged,
-/// and what your own taste suggests.
+/// How many cards one page of the infinite feed holds.
 ///
-/// Every section is derived from something the visitor or their friends actually
-/// did. There is no `data::feed()` fallback any more and that is deliberate: the
-/// reviews and the journal are SQLite rows, which exist in both modes, so a missing
-/// token can't empty this screen. Only the *recommendations* need TMDB, and they
-/// degrade to none rather than to invented films.
-pub async fn feed(source: &Source, db: &Db) -> Feed {
+/// Twelve: enough to overflow a tall viewport, so the scroll observer at the bottom
+/// isn't already visible when the page lands (which would fetch page two before the
+/// user did anything), and few enough that a page is a handful of upstream calls
+/// rather than a stall.
+const FEED_PAGE_SIZE: usize = 12;
+
+/// How the three sources are interleaved within a page, cycled over.
+///
+/// Two reviews, then one of the visitor's own entries, then one suggestion. Reviews
+/// dominate because they're the only cards with something written on them — a feed
+/// that alternated one-for-one read as a list of posters with occasional prose. The
+/// ratio is only a preference: `feed_page` takes from whichever sources still have
+/// something, so a visitor who follows nobody gets a feed of their own films and
+/// suggestions rather than a third of a page.
+const FEED_MIX: [FeedSource; 4] =
+    [FeedSource::Review, FeedSource::Review, FeedSource::Entry, FeedSource::Recommendation];
+
+/// Which of the three underlying lists a card comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FeedSource {
+    Review,
+    Entry,
+    Recommendation,
+}
+
+/// How far into each source the feed has already been read.
+///
+/// Three offsets rather than one, because the sources are independent lists consumed
+/// at different rates — the mix takes two reviews per suggestion, so a single "page
+/// number" could not say where to resume. Serialized as `r.e.c` and handed to the
+/// client as an opaque string; `parse` rejects anything else, and the caller treats a
+/// rejection as "start from the beginning".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct FeedCursor {
+    reviews: usize,
+    entries: usize,
+    recommendations: usize,
+}
+
+impl FeedCursor {
+    /// Round-trips through `Display`. `None` for anything that doesn't parse, which
+    /// the handler turns into a first page rather than an error — see `models::FeedQuery`.
+    fn parse(raw: &str) -> Option<Self> {
+        let mut parts = raw.split('.');
+        let mut next = || parts.next()?.parse::<usize>().ok();
+        let cursor = Self { reviews: next()?, entries: next()?, recommendations: next()? };
+        // A trailing segment means this isn't our cursor at all.
+        parts.next().is_none().then_some(cursor)
+    }
+
+    /// How many cards were consumed in total — what decides whether the feed is done.
+    fn consumed(&self) -> usize {
+        self.reviews + self.entries + self.recommendations
+    }
+}
+
+impl std::fmt::Display for FeedCursor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.reviews, self.entries, self.recommendations)
+    }
+}
+
+/// The cursor a client should be given for the page *after* this one.
+///
+/// Exposed as a string rather than the struct, so nothing outside this module can
+/// construct one by arithmetic.
+pub fn feed_cursor(raw: Option<&str>) -> Option<String> {
+    raw.and_then(FeedCursor::parse).map(|cursor| cursor.to_string())
+}
+
+/// How deep the infinite feed goes before it admits it has nothing left.
+///
+/// The three sources are finite — a graph of two dozen people, the visitor's own
+/// journal, eight suggestions — so the feed *does* end, and this is the ceiling on how
+/// much of it a client can pull. Not endless-by-repetition: a feed that started
+/// looping would be lying about having more.
+const FEED_MAX_ITEMS: usize = 120;
+
+/// How many reviews the paginated feed reads out of SQLite per request.
+///
+/// The whole window is read and then sliced, rather than issuing a `LIMIT/OFFSET`
+/// query per page, because `db` has no offset-taking reads and the graph is dozens of
+/// rows: the query is cheap and the slice is exact. The expensive part is resolving
+/// each film upstream, which only happens for the cards a page actually emits.
+const FEED_REVIEW_WINDOW: u32 = 60;
+
+/// One page of the infinite feed, and the cursor for the next.
+///
+/// The three sources are read once, sliced at the cursor, then interleaved by
+/// `FEED_MIX` — so a page is a fixed number of cards regardless of which sources still
+/// have something. Films are resolved lazily, only for the cards this page emits,
+/// which is what keeps a page's cost proportional to a page rather than to the graph.
+///
+/// Every card is derived from something the visitor or the people they follow did.
+/// There is no filler when a source runs dry; the feed simply ends, and the screen says
+/// so.
+pub async fn feed_page(source: &Source, db: &Db, cursor: Option<&str>) -> FeedPage {
+    let cursor = cursor.and_then(FeedCursor::parse).unwrap_or_default();
+
     // One lock, one scope, no `.await` inside it.
     let (reviews, journal, favorite_ids, watchlist_ids) = {
         let conn = lock(db);
         (
-            db::reviews_from_followed(&conn, FRIEND_REVIEWS_SHOWN).unwrap_or_default(),
+            db::reviews_from_followed(&conn, FEED_REVIEW_WINDOW).unwrap_or_default(),
             db::journal_recent_first(&conn).unwrap_or_default(),
             db::favorites_recent_first(&conn).unwrap_or_default(),
             db::watchlist_recent_first(&conn).unwrap_or_default(),
         )
     };
 
+    // Recommendations are one upstream call per seed and don't paginate at the source,
+    // so the whole rail is built once and then sliced. Skipped entirely once the cursor
+    // is past its end, which is where the calls would otherwise be wasted.
     let seeds = seeds(&favorite_ids, &watchlist_ids);
+    let recommendations = if cursor.recommendations < RECOMMENDED_SHOWN {
+        recommended(source, &seeds, &watchlist_ids).await
+    } else {
+        Vec::new()
+    };
 
-    Feed {
-        friend_reviews: user_reviews(source, &reviews).await,
-        recent: journal_entries(source, &journal).await,
-        recommended: recommended(source, &seeds, &watchlist_ids).await,
+    let mut next = cursor;
+    let mut items: Vec<FeedItem> = Vec::new();
+    // Which kinds still have rows behind them. A source drops out when its slice is
+    // exhausted, and the loop ends when all three have.
+    let available = |cursor: &FeedCursor, kind: FeedSource| match kind {
+        FeedSource::Review => cursor.reviews < reviews.len(),
+        FeedSource::Entry => cursor.entries < journal.len(),
+        FeedSource::Recommendation => cursor.recommendations < recommendations.len(),
+    };
+
+    // Start the mix where the previous page left off, so page two doesn't open with the
+    // same two-reviews-then-an-entry shape page one did — the seam would be visible as
+    // a repeating rhythm.
+    let mut turn = cursor.consumed() % FEED_MIX.len();
+
+    while items.len() < FEED_PAGE_SIZE && next.consumed() < FEED_MAX_ITEMS {
+        // Whichever of the next few slots has something. Rotating rather than falling
+        // back to a fixed order keeps the ratio when every source is full and degrades
+        // to "anything left" when they aren't.
+        let Some(kind) = (0..FEED_MIX.len())
+            .map(|offset| FEED_MIX[(turn + offset) % FEED_MIX.len()])
+            .find(|kind| available(&next, *kind))
+        else {
+            break;
+        };
+        turn = (turn + 1) % FEED_MIX.len();
+
+        match kind {
+            FeedSource::Review => {
+                let row = &reviews[next.reviews];
+                next.reviews += 1;
+                // One row at a time rather than `user_reviews` over the slice: a page
+                // emits a handful of reviews out of a window of sixty, and resolving the
+                // films for rows this page won't reach would be the whole graph's worth
+                // of upstream calls per scroll.
+                if let Some(review) = user_reviews(source, std::slice::from_ref(row)).await.pop() {
+                    items.push(FeedItem::Review(review));
+                }
+            }
+            FeedSource::Entry => {
+                let row = &journal[next.entries];
+                next.entries += 1;
+                if let Some(detail) = movie_detail_by_id(source, &row.movie_id).await {
+                    items.push(FeedItem::Entry(FeedEntry {
+                        id: format!("entry-{}", detail.id),
+                        // A film written about but never scored shows no stars rather
+                        // than a zero, as `journal_entries` does.
+                        rating_half_stars: row.half_stars.unwrap_or(0),
+                        movie: Movie {
+                            id: detail.id,
+                            title: detail.title,
+                            year: detail.year,
+                            poster: detail.poster,
+                        },
+                        on_watchlist: false,
+                    }));
+                }
+            }
+            FeedSource::Recommendation => {
+                let rec = recommendations[next.recommendations].clone();
+                next.recommendations += 1;
+                items.push(FeedItem::Recommendation(rec));
+            }
+        }
+    }
+
+    // Exhausted when nothing is left in any source, or when the ceiling is reached.
+    // `None` rather than a cursor that would answer with an empty page: the client
+    // stops observing on `None`, and one that had to discover the end by fetching
+    // nothing would fire a request per scroll forever.
+    let more = next.consumed() < FEED_MAX_ITEMS
+        && FEED_MIX.iter().any(|kind| available(&next, *kind));
+
+    FeedPage {
+        items,
+        next_cursor: more.then(|| next.to_string()),
+        // Set by the caching layer in `routes`, which is the only thing that knows
+        // whether this was built or read.
+        from_cache: false,
     }
 }
 
@@ -318,36 +490,6 @@ fn first_name(name: &str) -> &str {
 /// than collapsing the grid. The path is the export's own placeholder art.
 fn missing_poster() -> Image {
     Image::new("img/poster-missing.svg", "No poster available for this film.")
-}
-
-/// The visitor's own logged films, as the "Recent Entries" grid draws them.
-///
-/// Their journal — what they rated or wrote about — rather than the export's four
-/// arbitrary posters. "Recent Entries" on a journalling app means the entries you
-/// made, and a rating is the entry.
-async fn journal_entries(source: &Source, journal: &[db::JournalRow]) -> Vec<FeedEntry> {
-    let mut out = Vec::new();
-    for row in journal {
-        if out.len() == RECENT_ENTRIES_SHOWN {
-            break;
-        }
-        if let Some(detail) = movie_detail_by_id(source, &row.movie_id).await {
-            out.push(FeedEntry {
-                id: format!("entry-{}", detail.id),
-                // A film they wrote about without scoring shows no stars rather than
-                // a zero — the same call `MobileFeedItem` makes.
-                rating_half_stars: row.half_stars.unwrap_or(0),
-                movie: Movie {
-                    id: detail.id,
-                    title: detail.title,
-                    year: detail.year,
-                    poster: detail.poster,
-                },
-                on_watchlist: false,
-            });
-        }
-    }
-    out
 }
 
 /// Films recommended from the visitor's own, each carrying the seed it came from.
@@ -504,6 +646,177 @@ pub async fn profile(source: &Source, db: &Db) -> Profile {
     }
 }
 
+/// How many films a collection page resolves.
+///
+/// Far above `FAVORITES_SHOWN` and `WATCHLIST_SHOWN` — the point of the page is that
+/// it isn't a summary — but still a ceiling, because each film is an upstream call in
+/// TMDB mode. Nobody in this app has a hundred favourites, so in practice this binds
+/// on nothing and exists so a pathological watchlist can't make one request take a
+/// minute.
+const COLLECTION_MAX: usize = 100;
+
+/// The collections a slug can name. Rejecting anything else is what makes the URL a
+/// closed set rather than a place to guess.
+const COLLECTION_SLUGS: [&str; 3] = ["favorites", "watchlist", "journal"];
+
+/// Whether a slug names a collection at all — the handler's 404 check.
+pub fn is_collection(slug: &str) -> bool {
+    COLLECTION_SLUGS.contains(&slug)
+}
+
+/// One collection in full: the page the profile's tiles link to.
+///
+/// `None` — a real 404 — for an unknown slug, or a nickname nobody has. The two are
+/// deliberately the same answer: both mean the URL names nothing, and distinguishing
+/// them would tell a client which half it got wrong about a page that doesn't exist
+/// either way.
+///
+/// `person` selects whose collection: absent is the visitor's own, a nickname is
+/// somebody else's. The visitor's journal is the one collection with ratings behind it,
+/// so it's the only one whose grid draws stars.
+pub async fn collection(
+    source: &Source,
+    db: &Db,
+    slug: &str,
+    person: Option<&str>,
+) -> Option<Collection> {
+    if !is_collection(slug) {
+        return None;
+    }
+
+    match person {
+        Some(handle) => person_collection(source, db, slug, handle).await,
+        None => Some(visitor_collection(source, db, slug).await),
+    }
+}
+
+/// The visitor's own favourites, watchlist or journal.
+async fn visitor_collection(source: &Source, db: &Db, slug: &str) -> Collection {
+    // One lock, one scope, no `.await` inside it — and all three lists are read
+    // whichever slug was asked for, because the read is one cheap query each and
+    // branching inside the guard would put a `match` between the lock and its drop.
+    let (favorite_ids, watchlist_ids, journal) = {
+        let conn = lock(db);
+        (
+            db::favorites_recent_first(&conn).unwrap_or_default(),
+            db::watchlist_recent_first(&conn).unwrap_or_default(),
+            db::journal_recent_first(&conn).unwrap_or_default(),
+        )
+    };
+
+    let (title, description, movies) = match slug {
+        "favorites" => (
+            "Favorite Films",
+            "Every film you've pressed the heart on, most recent first.",
+            rated_collection(source, favorite_ids.iter().map(|id| (id.as_str(), None))).await,
+        ),
+        "watchlist" => (
+            "Watchlist",
+            "Films you mean to watch, most recently added first.",
+            rated_collection(source, watchlist_ids.iter().map(|id| (id.as_str(), None))).await,
+        ),
+        // The only collection with ratings behind it, so the only one whose grid can
+        // draw stars.
+        _ => (
+            "Your Journal",
+            "Every film you've rated or written about, newest first.",
+            rated_collection(source, journal.iter().map(|row| (row.movie_id.as_str(), row.half_stars)))
+                .await,
+        ),
+    };
+
+    Collection {
+        slug: slug.to_string(),
+        title: title.to_string(),
+        description: description.to_string(),
+        owner: None,
+        movies,
+    }
+}
+
+/// Somebody else's favourites or watchlist.
+///
+/// No journal: the visitor's journal is their own ratings and prose, and the
+/// equivalent for another person is their *reviews*, which their page already lists in
+/// full. A "journal" page for them would be a second, worse copy of that.
+async fn person_collection(
+    source: &Source,
+    db: &Db,
+    slug: &str,
+    handle: &str,
+) -> Option<Collection> {
+    let (row, favorite_ids, watchlist_ids) = {
+        let conn = lock(db);
+        let row = db::person_by_handle(&conn, handle).ok().flatten()?;
+        let favorites = db::favorites_by_person(&conn, &row.id).unwrap_or_default();
+        let watchlist = db::watchlist_by_person(&conn, &row.id).unwrap_or_default();
+        (row, favorites, watchlist)
+    };
+
+    let first = first_name(&row.name);
+    let (title, description, ids) = match slug {
+        "favorites" => (
+            "Favorite Films",
+            format!("The films {first} raves about, derived from their own reviews."),
+            favorite_ids,
+        ),
+        "watchlist" => (
+            "Watchlist",
+            format!("What {first} means to watch next."),
+            watchlist_ids,
+        ),
+        // "journal" reaches here only because `is_collection` allows it for the
+        // visitor. Their reviews are on their own page, so this is a 404 rather than an
+        // empty grid pretending the collection exists but is empty.
+        _ => return None,
+    };
+
+    Some(Collection {
+        slug: slug.to_string(),
+        title: title.to_string(),
+        description,
+        owner: Some(CollectionOwner {
+            name: row.name.clone(),
+            handle: row.handle.clone(),
+            avatar: row.avatar.clone(),
+        }),
+        movies: rated_collection(source, ids.iter().map(|id| (id.as_str(), None))).await,
+    })
+}
+
+/// Resolve `(film id, rating)` pairs into grid cards, dropping the ids that no longer
+/// resolve.
+///
+/// `movies_for`'s counterpart for a collection: the same "drop what TMDB has forgotten
+/// rather than blank the grid" rule, but carrying the rating through, which a bare
+/// `Movie` has no room for.
+async fn rated_collection<'a>(
+    source: &Source,
+    ids: impl Iterator<Item = (&'a str, Option<u8>)>,
+) -> Vec<CollectionMovie> {
+    let mut out = Vec::new();
+    for (id, rating_half_stars) in ids {
+        if out.len() == COLLECTION_MAX {
+            break;
+        }
+        if let Some(detail) = movie_detail_by_id(source, id).await {
+            out.push(CollectionMovie {
+                movie: Movie {
+                    id: detail.id,
+                    title: detail.title,
+                    year: detail.year,
+                    poster: detail.poster,
+                },
+                rating_half_stars,
+                // `hydrate::collection` fills this in — it's the visitor's flag, not the
+                // owner's, even on somebody else's page.
+                on_watchlist: false,
+            });
+        }
+    }
+    out
+}
+
 // --- The social graph ---------------------------------------------------------
 
 /// How many trending films the graph harvest reads reviews from. Twelve yielded 52
@@ -653,12 +966,24 @@ fn review_bio(reviews: &[(String, u8, String, String)]) -> String {
     format!("{count} {films} reviewed · {leaning}")
 }
 
-/// The friend-search screen: matching users, plus both sides of the visitor's graph.
+/// The friend screen: whoever the search term matches, plus both sides of the
+/// visitor's graph.
+///
+/// An empty query returns **no results**, rather than the whole directory it used to.
+/// The screen's two standing lists are Following and Followers — who you know — and a
+/// third panel listing every account on the server was neither of those: it made the
+/// page a user directory that happened to have your friends in a sidebar. Search is
+/// how you find somebody you don't already follow, so it answers only when asked.
 pub fn people(db: &Db, query: &str) -> PeopleResponse {
     let conn = lock(db);
+    let results = if query.trim().is_empty() {
+        Vec::new()
+    } else {
+        db::search_people(&conn, query).unwrap_or_default().iter().map(card).collect()
+    };
     PeopleResponse {
         query: query.to_string(),
-        results: db::search_people(&conn, query).unwrap_or_default().iter().map(card).collect(),
+        results,
         following: db::followed_users(&conn).unwrap_or_default().iter().map(card).collect(),
         followers: db::followers(&conn).unwrap_or_default().iter().map(card).collect(),
     }
@@ -1457,10 +1782,11 @@ mod tests {
         // nothing, in either mode. This used to be the export's two "Live Now" rooms,
         // four "Recent Entries" and three activity lines — every one of them invented,
         // which is the point: an empty feed is the true answer here.
-        let feed = feed(&source, &db).await;
-        assert!(feed.friend_reviews.is_empty());
-        assert!(feed.recent.is_empty());
-        assert!(feed.recommended.is_empty());
+        let page = feed_page(&source, &db, None).await;
+        assert!(page.items.is_empty());
+        // And it says so rather than offering a cursor: a client handed one would ask
+        // for a second empty page, and go on asking.
+        assert!(page.next_cursor.is_none());
 
         let mobile = mobile_feed(&source, &db).await;
         assert!(mobile.stories.is_empty());
@@ -1490,18 +1816,42 @@ mod tests {
             db::following(&conn).unwrap().into_iter().map(|row| row.id).collect()
         };
 
-        let feed = feed(&source, &db).await;
-        assert!(!feed.friend_reviews.is_empty());
-        // Every review is by somebody the visitor follows. The heading says so.
-        for review in &feed.friend_reviews {
+        let page = feed_page(&source, &db, None).await;
+        assert!(!page.items.is_empty());
+
+        let reviews: Vec<&UserReview> = page
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                FeedItem::Review(review) => Some(review),
+                _ => None,
+            })
+            .collect();
+        assert!(!reviews.is_empty());
+        // Every review card is by somebody the visitor follows. A feed of strangers is
+        // not a feed.
+        for review in &reviews {
             assert!(followed.contains(&review.author_id), "{} is not followed", review.author_id);
             assert!(review.author_followed);
         }
-        // "Recent Entries" is the visitor's journal: the film they just rated.
-        assert_eq!(feed.recent.len(), 1);
-        assert_eq!(feed.recent[0].movie.id, "neon-reverie");
-        assert_eq!(feed.recent[0].rating_half_stars, 8);
-        assert!(feed.recommended.is_empty(), "no token, so nothing to recommend from");
+
+        // The entry cards are the visitor's journal: the film they just rated, once.
+        let entries: Vec<&FeedEntry> = page
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                FeedItem::Entry(entry) => Some(entry),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].movie.id, "neon-reverie");
+        assert_eq!(entries[0].rating_half_stars, 8);
+
+        assert!(
+            !page.items.iter().any(|item| matches!(item, FeedItem::Recommendation(_))),
+            "no token, so nothing to recommend from"
+        );
 
         // The mobile rail is the same graph, one circle per followed person, each
         // opening a review that really exists.
@@ -1517,12 +1867,134 @@ mod tests {
         }
 
         // And the cards are those reviews, subtitled with their author's first name.
-        assert_eq!(mobile.items.len(), feed.friend_reviews.len());
+        // Not the same count as the page above: this screen draws one fixed grid, while
+        // the desktop feed pages through the whole window.
+        assert!(!mobile.items.is_empty());
         assert!(mobile.items.iter().all(|item| item.review_id.is_some()));
         // "Elena rated it" — one word for the author, since the card has room for one.
         let subtitle = &mobile.items[0].subtitle;
         assert!(subtitle.ends_with(" rated it"), "{subtitle}");
         assert_eq!(subtitle.split_whitespace().count(), 3, "{subtitle}");
+    }
+
+    /// The cursor survives a round trip and refuses everything else.
+    ///
+    /// It goes out to a client and comes back as a URL parameter, so anything at all can
+    /// arrive here. A rejection is not an error: `feed_page` starts over, which is what a
+    /// stale cursor in a tab left open across a deploy should do.
+    #[test]
+    fn a_cursor_round_trips_and_rejects_junk() {
+        let cursor = FeedCursor { reviews: 8, entries: 4, recommendations: 2 };
+        assert_eq!(cursor.to_string(), "8.4.2");
+        assert_eq!(FeedCursor::parse("8.4.2"), Some(cursor));
+        assert_eq!(cursor.consumed(), 14);
+
+        for junk in ["", "8", "8.4", "8.4.2.1", "a.b.c", "-1.0.0", "8.4.2 ", "8..2"] {
+            assert_eq!(FeedCursor::parse(junk), None, "{junk:?} must not parse");
+        }
+
+        // And the public wrapper normalises rather than trusting the string: what comes
+        // back is what this module would have written, or nothing.
+        assert_eq!(feed_cursor(Some("8.4.2")).as_deref(), Some("8.4.2"));
+        assert_eq!(feed_cursor(Some("8.4.2.1")), None);
+        assert_eq!(feed_cursor(None), None);
+    }
+
+    /// The feed pages through the graph and then stops.
+    ///
+    /// The two things a client depends on: pages don't repeat cards, and the last one says
+    /// it's the last. A feed that kept handing out cursors would be fetched forever.
+    #[tokio::test]
+    async fn the_feed_pages_without_repeating_and_then_ends() {
+        let (source, db) = graph().await;
+        {
+            let conn = lock(&db);
+            db::set_rating(&conn, "neon-reverie", 8).unwrap();
+        }
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut pages = 0;
+
+        loop {
+            let page = feed_page(&source, &db, cursor.as_deref()).await;
+            pages += 1;
+            assert!(page.items.len() <= FEED_PAGE_SIZE);
+            assert!(!page.from_cache, "content never claims to have come from the cache");
+            for item in &page.items {
+                let id = match item {
+                    FeedItem::Review(review) => format!("review-{}", review.id),
+                    FeedItem::Entry(entry) => format!("entry-{}", entry.movie.id),
+                    FeedItem::Recommendation(rec) => format!("rec-{}", rec.movie.id),
+                };
+                assert!(!seen.contains(&id), "{id} appeared twice");
+                seen.push(id);
+            }
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+            assert!(pages < 40, "the feed should have ended by now");
+        }
+
+        assert!(pages > 1, "a seeded graph fills more than one page");
+        assert!(seen.len() <= FEED_MAX_ITEMS);
+        // The visitor's one rated film is in there, and only once — the journal is a
+        // source like the others, not a rail bolted on the side.
+        assert_eq!(seen.iter().filter(|id| *id == "entry-neon-reverie").count(), 1);
+    }
+
+    /// A collection is the tile's page: the same films, uncapped.
+    #[tokio::test]
+    async fn a_collection_is_the_uncapped_version_of_its_tile() {
+        let (source, db) = graph().await;
+        {
+            let conn = lock(&db);
+            for id in ["neon-reverie", "le-souffle", "the-drop"] {
+                db::set_favorite(&conn, id, Some(true)).unwrap();
+            }
+            db::set_rating(&conn, "red-shift", 7).unwrap();
+        }
+
+        let favorites = collection(&source, &db, "favorites", None).await.expect("the visitor's");
+        assert_eq!(favorites.slug, "favorites");
+        assert_eq!(favorites.title, "Favorite Films");
+        assert!(favorites.owner.is_none(), "the visitor's own has no owner header");
+        // Three, where the profile tile shows at most `FAVORITES_SHOWN` — that gap is the
+        // whole reason this page exists.
+        assert_eq!(favorites.movies.len(), 3);
+        assert!(favorites.movies.iter().all(|m| m.rating_half_stars.is_none()));
+
+        // The journal is the one collection with stars behind it.
+        let journal = collection(&source, &db, "journal", None).await.expect("the visitor's");
+        assert_eq!(journal.movies.len(), 1);
+        assert_eq!(journal.movies[0].movie.id, "red-shift");
+        assert_eq!(journal.movies[0].rating_half_stars, Some(7));
+
+        // Somebody else's carries a header saying whose it is.
+        let theirs = collection(&source, &db, "favorites", Some("elenarostova"))
+            .await
+            .expect("a seeded user");
+        let owner = theirs.owner.expect("somebody else's names them");
+        assert_eq!(owner.handle, "@elenarostova");
+        assert!(theirs.description.contains("Elena"), "{}", theirs.description);
+    }
+
+    /// Every way of naming nothing is a 404, not an empty grid.
+    ///
+    /// An empty grid would say "this collection exists and has no films in it", which is a
+    /// different and false claim about a URL that names nothing.
+    #[tokio::test]
+    async fn an_unknown_collection_is_a_404() {
+        let (source, db) = graph().await;
+
+        assert!(collection(&source, &db, "everything", None).await.is_none());
+        assert!(collection(&source, &db, "favorites", Some("nobody-at-all")).await.is_none());
+        // Somebody else has no journal: their reviews are already their page.
+        assert!(collection(&source, &db, "journal", Some("elenarostova")).await.is_none());
+
+        assert!(is_collection("watchlist"));
+        assert!(!is_collection("Watchlist"), "slugs are the URL's, and the URL is lowercase");
     }
 
     /// A suggestion may not claim the visitor liked a film they only bookmarked.
@@ -1796,17 +2268,34 @@ mod tests {
         assert!(users.iter().all(|u| !u.handle.starts_with('@')));
     }
 
+    /// An empty query draws the visitor's two lists and no results.
+    ///
+    /// It used to list every account, which is what the removed "Everyone" panel showed.
+    /// A friends screen that opens on a directory of strangers buries the people you
+    /// actually know, so search is now something you ask for.
+    #[tokio::test]
+    async fn an_empty_query_searches_for_nobody() {
+        let (_, db) = graph().await;
+        let idle = people(&db, "");
+
+        assert_eq!(idle.query, "");
+        assert!(idle.results.is_empty(), "no search, no results");
+        // Both sides of the graph are still there — they are the screen, not the search.
+        assert!(!idle.following.is_empty() && !idle.followers.is_empty());
+        // Whitespace is the same as nothing: a stray space in the box isn't a query.
+        assert!(people(&db, "   ").results.is_empty());
+    }
+
     #[tokio::test]
     async fn the_directory_carries_both_sides_of_the_graph() {
         let (_, db) = graph().await;
-        let all = people(&db, "");
+        let idle = people(&db, "");
 
-        assert_eq!(all.query, "");
-        assert!(!all.results.is_empty());
-        assert!(!all.following.is_empty() && !all.followers.is_empty());
+        let elena = people(&db, "elenarostova");
+        assert_eq!(elena.query, "elenarostova");
         // A card knows both relationship bits, so the button and the badge on one
         // row can't disagree.
-        let elena = all.results.iter().find(|p| p.handle == "@elenarostova").unwrap();
+        let elena = elena.results.iter().find(|p| p.handle == "@elenarostova").unwrap();
         assert!(elena.following && elena.follows_you);
         assert_eq!(elena.review_count, 5);
 
@@ -1815,7 +2304,7 @@ mod tests {
         assert_eq!(found.results.len(), 1);
         // The visitor's own lists don't shrink to the search term — they're beside
         // the results, not inside them.
-        assert_eq!(found.following.len(), all.following.len());
+        assert_eq!(found.following.len(), idle.following.len());
     }
 
     #[tokio::test]

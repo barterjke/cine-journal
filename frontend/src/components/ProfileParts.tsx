@@ -14,7 +14,30 @@
 import type { Movie } from '../api'
 import { Link } from 'react-router-dom'
 
-/** A bento tile: an uppercase label, an optional link out, and its content. */
+/** Shared by both tile variants, so the linked one can't drift from the plain one. */
+const TILE_SHELL =
+  'bg-surface-container-low rounded-xl p-md border border-surface-variant flex flex-col gap-sm'
+
+const TILE_LABEL =
+  'font-label-sm text-label-sm font-bold uppercase tracking-wider text-outline'
+
+/**
+ * A bento tile: an uppercase label, an optional link out, and its content.
+ *
+ * When `to` is set the *whole tile* is the link, not just the chevron. The chevron was
+ * a 24px target on a card the size of a hand, and clicking anywhere else — the label,
+ * the posters, the gap — did nothing, which read as the tile being decorative.
+ *
+ * A `<Link>` rather than an `<a href="#...">`: these go to a collection page now instead
+ * of scrolling to a duplicate of themselves further down. Note that react-router
+ * resolves a bare `#` against the *current* path, so `to="#"` on `/profile` would be a
+ * live-looking link back to the page you're on.
+ *
+ * The posters inside are links too. Nesting an `<a>` inside an `<a>` is invalid HTML and
+ * the browser un-nests it, so the linked variant draws its films as plain images — see
+ * `PosterStrip`'s `linked` prop. The tile goes to the collection; the collection page is
+ * where a poster goes to its film.
+ */
 export function Tile({
   label,
   to,
@@ -24,24 +47,33 @@ export function Tile({
   to?: string
   children: React.ReactNode
 }) {
+  if (!to) {
+    return (
+      <div className={TILE_SHELL}>
+        <h2 className={TILE_LABEL}>{label}</h2>
+        {children}
+      </div>
+    )
+  }
+
   return (
-    <div className="bg-surface-container-low rounded-xl p-md border border-surface-variant flex flex-col gap-sm">
-      <div className="flex items-center justify-between">
-        <h2 className="font-label-sm text-label-sm font-bold uppercase tracking-wider text-outline">
-          {label}
-        </h2>
-        {to && (
-          <a
-            className="material-symbols-outlined text-primary text-md hover:opacity-70 transition-opacity"
-            href={to}
-            aria-label={`Jump to ${label}`}
-          >
-            chevron_right
-          </a>
-        )}
+    <Link
+      to={to}
+      // `group` so the chevron responds to a hover anywhere on the tile — otherwise the
+      // arrow looks like the only live part of a card that is now entirely live.
+      className={`${TILE_SHELL} group hover:border-outline-variant transition-colors`}
+    >
+      <div className="flex items-center justify-between gap-sm">
+        <h2 className={TILE_LABEL}>{label}</h2>
+        <span
+          className="material-symbols-outlined text-primary group-hover:translate-x-0.5 transition-transform"
+          aria-hidden="true"
+        >
+          chevron_right
+        </span>
       </div>
       {children}
-    </div>
+    </Link>
   )
 }
 
@@ -50,13 +82,17 @@ export function Empty({ children }: { children: React.ReactNode }) {
   return <p className="font-body-md text-body-md text-on-surface-variant">{children}</p>
 }
 
-/** The strips' 64px thumbnails. */
+/** One 64px poster. The same frame either way, so a strip's rows line up. */
+const THUMBNAIL =
+  'w-16 aspect-[2/3] rounded bg-surface-container overflow-hidden shrink-0 inner-stroke'
+
+/** The strips' 64px thumbnails, linked to the film. */
 export function Thumbnail({ film }: { film: Movie }) {
   return (
     <Link
       to={`/movie/${film.id}`}
       title={film.title}
-      className="w-16 aspect-[2/3] rounded bg-surface-container overflow-hidden shrink-0 inner-stroke hover:opacity-80 transition-opacity"
+      className={`${THUMBNAIL} hover:opacity-80 transition-opacity`}
     >
       <img className="w-full h-full object-cover" alt={film.poster.alt} src={film.poster.src} />
     </Link>
@@ -66,37 +102,40 @@ export function Thumbnail({ film }: { film: Movie }) {
 /**
  * A row of thumbnails inside a tile, or the empty copy in its place.
  *
- * `overflow-hidden` rather than a scroller: the tile is a summary that links to the
- * full grid below, and a second scrollable region inside a bento cell is a lot of
- * affordance for four posters.
+ * `overflow-hidden` rather than a scroller: the tile is a summary of a collection page,
+ * and a second scrollable region inside a bento cell is a lot of affordance for four
+ * posters.
+ *
+ * `linked` is false inside a linked `Tile`, where the whole card is already an `<a>` and
+ * nesting another is invalid HTML the browser silently un-nests — leaving the tile's own
+ * link broken wherever a poster covered it.
  */
-export function PosterStrip({ films, empty }: { films: Movie[]; empty: React.ReactNode }) {
+export function PosterStrip({
+  films,
+  empty,
+  linked = true,
+}: {
+  films: Movie[]
+  empty: React.ReactNode
+  linked?: boolean
+}) {
   if (films.length === 0) return <Empty>{empty}</Empty>
   return (
     <div className="flex gap-sm overflow-hidden">
-      {films.map((film) => (
-        <Thumbnail key={film.id} film={film} />
-      ))}
+      {films.map((film) =>
+        linked ? (
+          <Thumbnail key={film.id} film={film} />
+        ) : (
+          <div key={film.id} className={THUMBNAIL} title={film.title}>
+            <img
+              className="w-full h-full object-cover"
+              alt={film.poster.alt}
+              src={film.poster.src}
+            />
+          </div>
+        ),
+      )}
     </div>
-  )
-}
-
-/** A poster in the watchlist grid, with its title over a gradient. */
-export function WatchlistCard({ film }: { film: Movie }) {
-  return (
-    <Link
-      to={`/movie/${film.id}`}
-      className="relative group rounded-lg overflow-hidden inner-stroke aspect-[2/3] bg-surface-container"
-    >
-      <img
-        className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
-        alt={film.poster.alt}
-        src={film.poster.src}
-      />
-      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex flex-col justify-end p-md text-white">
-        <span className="font-body-md text-body-md font-bold truncate">{film.title}</span>
-      </div>
-    </Link>
   )
 }
 

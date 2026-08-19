@@ -63,19 +63,44 @@ pub fn like_count(base: Option<u32>, liked: bool) -> Option<u32> {
     }
 }
 
-pub fn feed(mut feed: Feed, store: &Store) -> Feed {
-    for entry in &mut feed.recent {
-        entry.on_watchlist = store.watchlist.contains(&entry.movie.id);
+/// One page of the infinite feed.
+///
+/// Applied **after** the cache, not before it: a cached page carries whatever the
+/// watchlist looked like when it was built, and the visitor may have added something
+/// since. Running this on the way out of the cache is what keeps every "+" on a stale
+/// page honest — the alternative is a cached feed whose buttons lie until it expires.
+///
+/// The recommendation cards need this as much as the entries do. `content::recommended`
+/// leaves the flag false and already drops anything on the watchlist, but it can only
+/// drop what was on the list when the page was built.
+///
+/// Review cards carry no watchlist flag: a review is somebody's prose about a film,
+/// and the card's action is "read it", not "add it".
+pub fn feed_page(mut page: FeedPage, store: &Store) -> FeedPage {
+    for item in &mut page.items {
+        match item {
+            FeedItem::Entry(entry) => {
+                entry.on_watchlist = store.watchlist.contains(&entry.movie.id);
+            }
+            FeedItem::Recommendation(rec) => {
+                rec.on_watchlist = store.watchlist.contains(&rec.movie.id);
+            }
+            FeedItem::Review(_) => {}
+        }
     }
-    // The recommendation rail's posters carry the same "+" as every other poster in
-    // the app, so they need the same flag. `content::recommended` leaves it false
-    // and already drops anything on the watchlist, but it can only drop what was on
-    // the list when the rail was built — this is the pass that keeps the button
-    // honest for a film watchlisted since.
-    for rec in &mut feed.recommended {
-        rec.on_watchlist = store.watchlist.contains(&rec.movie.id);
+    page
+}
+
+/// The collection grid's "+" buttons.
+///
+/// The flag is the *visitor's*, even on somebody else's collection: the poster is about
+/// them, the button is about you. A person's favourites page showing their watchlist
+/// state would offer you a button that changed nothing you could see.
+pub fn collection(mut collection: Collection, store: &Store) -> Collection {
+    for item in &mut collection.movies {
+        item.on_watchlist = store.watchlist.contains(&item.movie.id);
     }
-    feed
+    collection
 }
 
 pub fn mobile_feed(mut feed: MobileFeed, store: &Store) -> MobileFeed {
@@ -175,38 +200,78 @@ mod tests {
         let mut store = store();
         store.watchlist.insert("le-souffle".into());
 
-        let built = Feed {
-            friend_reviews: Vec::new(),
-            recent: ["le-souffle", "the-drop"]
-                .map(|id| FeedEntry {
-                    id: format!("entry-{id}"),
-                    movie: movie(id),
+        let built = FeedPage {
+            items: vec![
+                FeedItem::Entry(FeedEntry {
+                    id: "entry-le-souffle".into(),
+                    movie: movie("le-souffle"),
                     rating_half_stars: 8,
                     on_watchlist: false,
-                })
-                .into(),
-            recommended: vec![Recommendation {
-                movie: movie("le-souffle"),
-                star_rating: Some(4.5),
-                because: "Neon Reverie".into(),
-                because_movie_id: "neon-reverie".into(),
-                because_favorite: true,
-                on_watchlist: false,
-            }],
+                }),
+                FeedItem::Entry(FeedEntry {
+                    id: "entry-the-drop".into(),
+                    movie: movie("the-drop"),
+                    rating_half_stars: 8,
+                    on_watchlist: false,
+                }),
+                FeedItem::Recommendation(Recommendation {
+                    movie: movie("le-souffle"),
+                    star_rating: Some(4.5),
+                    because: "Neon Reverie".into(),
+                    because_movie_id: "neon-reverie".into(),
+                    because_favorite: true,
+                    on_watchlist: false,
+                }),
+            ],
+            next_cursor: None,
+            from_cache: false,
         };
 
-        let hydrated = feed(built, &store);
-        let entry = hydrated.recent.iter().find(|e| e.movie.id == "le-souffle").unwrap();
-        assert!(entry.on_watchlist);
-        assert!(
-            hydrated.recent.iter().filter(|e| e.movie.id != "le-souffle").all(|e| !e.on_watchlist)
-        );
-        // The recommendation rail draws the same "+" button, so it needs the same flag
-        // — a film already on the watchlist showing an empty "+" was the bug here.
-        assert!(hydrated.recommended[0].on_watchlist);
+        let hydrated = feed_page(built, &store);
+        let flagged: Vec<&str> = hydrated
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                FeedItem::Entry(entry) if entry.on_watchlist => Some(entry.movie.id.as_str()),
+                FeedItem::Recommendation(rec) if rec.on_watchlist => Some(rec.movie.id.as_str()),
+                _ => None,
+            })
+            .collect();
+        // Both cards about the watchlisted film, and nothing else. The recommendation
+        // draws the same "+" as the entry does, so a film already on the watchlist
+        // showing an empty one was the bug here.
+        assert_eq!(flagged, ["le-souffle", "le-souffle"]);
 
         assert!(movie_detail(data::movie_detail_by_id("le-souffle"), &store).on_watchlist);
         assert!(!movie_detail(data::movie_detail_by_id("the-drop"), &store).on_watchlist);
+    }
+
+    /// The flag is stamped on the way out of the cache, so a page built before the
+    /// visitor watchlisted something still draws the right button. Same call as above —
+    /// what this pins is that `from_cache` doesn't route around it.
+    #[test]
+    fn a_cached_page_gets_current_watchlist_state() {
+        let mut store = store();
+        store.watchlist.insert("le-souffle".into());
+
+        let stale = FeedPage {
+            items: vec![FeedItem::Entry(FeedEntry {
+                id: "entry-le-souffle".into(),
+                movie: movie("le-souffle"),
+                rating_half_stars: 8,
+                on_watchlist: false,
+            })],
+            next_cursor: Some("1.0.0".into()),
+            from_cache: true,
+        };
+
+        let hydrated = feed_page(stale, &store);
+        assert!(hydrated.from_cache, "the flag survives the pass");
+        assert_eq!(hydrated.next_cursor.as_deref(), Some("1.0.0"));
+        match &hydrated.items[0] {
+            FeedItem::Entry(entry) => assert!(entry.on_watchlist),
+            other => panic!("expected an entry, got {other:?}"),
+        }
     }
 
     #[test]

@@ -7,12 +7,11 @@
  * the screen starts out mostly empty and fills in as you use the app, which is the
  * honest version of a mock whose every tile was pre-populated.
  *
- * The mock's `share` button is dropped (nothing to share to) and so are its four
- * `chevron_right` links, which each opened nothing — the two with a real destination,
- * Watchlist and Following, are headings further down this page, so those strips
- * scroll to them. "Edit" is now real, and edits the one field the visitor owns: the
- * bio. Their name, handle, avatar and joined line are still the export's, held in
- * `hydrate` as constants, because there is no account system behind them.
+ * The mock's `share` button is dropped (nothing to share to). Its four `chevron_right`
+ * links opened nothing; each tile is now a link in its entirety — three to a collection
+ * page and Following to Friends. "Edit" is real too, and edits the one field the visitor
+ * owns: the bio. Their name, handle, avatar and joined line are still the export's, held
+ * in `hydrate` as constants, because there is no account system behind them.
  *
  * The layout pieces are shared with `Person` through `ProfileParts` — someone
  * else's page is supposed to be the same page, and two copies of this drifted.
@@ -30,17 +29,8 @@ import {
   Loading,
   TopAppBar,
 } from '../components/Chrome'
-import { personPath } from '../components/People'
-import {
-  Empty,
-  PosterStrip,
-  ProfileHeader,
-  SectionHeading,
-  Tile,
-  WatchlistCard,
-} from '../components/ProfileParts'
+import { Empty, PosterStrip, ProfileHeader, Tile } from '../components/ProfileParts'
 import { StarRating } from '../components/StarRating'
-import { Link } from 'react-router-dom'
 
 /** How long a bio the server accepts — `routes::MAX_BIO_LEN`. */
 const MAX_BIO = 280
@@ -52,17 +42,17 @@ const MAX_BIO = 280
  * and the row then carries prose where the rating would have been. What you wrote
  * wins over the film's synopsis blurb: a tile headed "Recent Reviews" printing the
  * studio's own copy underneath was the thing that made it not one.
+ *
+ * The title is text rather than a link to the film: this row lives inside a tile that
+ * is itself a link to the journal collection, and an `<a>` inside an `<a>` is invalid
+ * HTML the browser un-nests — which broke the tile wherever a title covered it. The
+ * collection page is where a row goes to its film.
  */
 function ReviewLine({ film }: { film: RatedFilm }) {
   return (
     <div className="flex flex-col gap-xs">
       <div className="flex items-center justify-between gap-sm">
-        <Link
-          to={`/movie/${film.id}`}
-          className="font-body-md text-body-md font-bold truncate hover:text-primary transition-colors"
-        >
-          {film.title}
-        </Link>
+        <span className="font-body-md text-body-md font-bold truncate">{film.title}</span>
         {/* The mock drew only the filled stars, at 75% and right-aligned. */}
         {film.rating_half_stars !== null ? (
           <StarRating
@@ -163,61 +153,52 @@ function BioField({ bio, onSaved }: { bio: string; onSaved: (bio: string) => voi
   )
 }
 
-/** The Following tile's 32px face. Linked on the same terms as `FriendRow`. */
+/**
+ * The Following tile's 32px face.
+ *
+ * Not a link, though every face in this app otherwise is: the tile around it goes to
+ * Friends, where each of these people has a linked row of their own. `title` keeps the
+ * name reachable on hover, which is all the strip was ever saying.
+ */
 function Avatar({ person }: { person: FollowedPerson }) {
-  const face = (
-    <img className="w-full h-full object-cover" alt={person.avatar.alt} src={person.avatar.src} />
-  )
-  const shape = 'w-8 h-8 rounded-full overflow-hidden border border-surface-variant'
-
-  return person.handle ? (
-    <Link
-      to={personPath(person.handle)}
+  return (
+    <div
       title={person.name}
-      className={`${shape} hover:opacity-80 transition-opacity`}
+      className="w-8 h-8 rounded-full overflow-hidden border border-surface-variant shrink-0"
     >
-      {face}
-    </Link>
-  ) : (
-    <div title={person.name} className={shape}>
-      {face}
+      <img className="w-full h-full object-cover" alt={person.avatar.alt} src={person.avatar.src} />
     </div>
   )
 }
 
 /**
- * One "Following" row. A link to their page when they're one of the app's own
- * users; a plain row for the export's decorative cast, who have no `handle` and so
- * no page — a link there would go to a 404 that reads as a bug rather than as "this
- * person was always scenery".
+ * The overflow pill beside the Following faces: "+121".
+ *
+ * The mock drew three avatars and a count of 124, and the count is the real number the
+ * API sends — so the pill says how many aren't pictured rather than repeating the total.
+ * Nothing when the strip already shows everyone.
  */
-function FriendRow({ person }: { person: FollowedPerson }) {
-  const body = (
-    <>
-      <div className="w-12 h-12 rounded-full overflow-hidden bg-surface-container border border-surface-variant shrink-0">
-        <img className="w-full h-full object-cover" alt={person.avatar.alt} src={person.avatar.src} />
-      </div>
-      <div className="flex flex-col flex-grow min-w-0">
-        <span className="font-body-md text-body-md text-on-background">{person.name}</span>
-        <span className="font-label-sm text-label-sm text-outline truncate">
-          {person.subtitle}
-        </span>
-      </div>
-    </>
-  )
-
-  return person.handle ? (
-    <Link
-      to={personPath(person.handle)}
-      className="flex items-center gap-md group hover:opacity-90 transition-opacity"
-    >
-      {body}
-    </Link>
-  ) : (
-    <div className="flex items-center gap-md">{body}</div>
+function MorePill({ count }: { count: number }) {
+  if (count <= 0) return null
+  return (
+    <span className="h-8 px-sm inline-flex items-center rounded-full bg-surface-container font-label-sm text-label-sm text-on-surface-variant">
+      +{count}
+    </span>
   )
 }
 
+/**
+ * Header, then one bento grid. Nothing below it.
+ *
+ * The grid used to be a summary of three full-width sections repeated underneath it, so
+ * every film on this page appeared twice — once as a 64px thumbnail and again as a
+ * poster, under the same heading. Each tile is now a link to its collection page instead,
+ * which is what a summary is for.
+ *
+ * The two-column shape follows `reference/profile 2/`: favourites wide beside a tall
+ * Following cell, then reviews beside the watchlist. `md:col-span-*` rather than four
+ * equal cells, because the strips hold four posters and the avatars hold three.
+ */
 function Body({
   data,
   onBioSaved,
@@ -226,7 +207,7 @@ function Body({
   onBioSaved: (bio: string) => void
 }) {
   return (
-    <main className="max-w-[1440px] mx-auto px-margin-mobile md:px-margin-desktop py-xl md:py-xxl flex flex-col gap-md">
+    <main className="max-w-[1440px] mx-auto px-margin-mobile md:px-margin-desktop py-xl md:py-xxl flex flex-col gap-lg">
       <ProfileHeader
         avatar={data.avatar}
         name={data.name}
@@ -234,93 +215,59 @@ function Body({
         bio={<BioField bio={data.bio} onSaved={onBioSaved} />}
       />
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
-        <Tile label="Favorite Films" to={data.favorites.length ? '#favorites' : undefined}>
-          <PosterStrip
-            films={data.favorites}
-            empty={'Press the heart on any film’s page and it collects here.'}
-          />
-        </Tile>
-
-        <Tile label="Watchlist" to={data.watchlist.length ? '#watchlist' : undefined}>
-          <PosterStrip
-            films={data.watchlist}
-            empty={'Nothing logged yet — the "+" over any poster adds one.'}
-          />
-        </Tile>
-
-        <Tile label={`Following (${data.following_count})`} to="#following">
-          <div className="flex gap-sm">
-            {data.following.map((person) => (
-              <Avatar key={person.id} person={person} />
-            ))}
-          </div>
-        </Tile>
-
-        <Tile label="Recent Reviews">
-          {data.recent_reviews.length ? (
-            <div className="flex flex-col gap-sm">
-              {data.recent_reviews.map((film) => (
-                <ReviewLine key={film.id} film={film} />
-              ))}
-            </div>
-          ) : (
-            <Empty>Rate or review a film and it shows up here, newest first.</Empty>
-          )}
-        </Tile>
-      </div>
-
-      {/* The favourites in full, when there are any. No empty state: the tile above
-          already says how to fill it, and an empty section with its own heading
-          says it twice. */}
-      {data.favorites.length > 0 && (
-        <section className="flex flex-col gap-md" id="favorites">
-          <SectionHeading title="Favorite Films" count={data.favorites.length} />
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-md">
-            {data.favorites.map((film) => (
-              <WatchlistCard key={film.id} film={film} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      <section className="grid grid-cols-1 md:grid-cols-12 gap-gutter">
-        <div className="md:col-span-8 flex flex-col gap-md" id="watchlist">
-          <SectionHeading title="Watchlist" count={data.watchlist.length} />
-          {data.watchlist.length ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-md">
-              {data.watchlist.map((film) => (
-                <WatchlistCard key={film.id} film={film} />
-              ))}
-            </div>
-          ) : (
-            <div className="bg-surface-container-low rounded-xl p-lg border border-surface-variant flex flex-col gap-sm items-start">
-              <Empty>
-                Your watchlist is empty. Add a film from the feed, the search grid, or its own
-                page.
-              </Empty>
-              <Link
-                to="/search"
-                className="font-label-sm text-label-sm uppercase tracking-wider px-4 py-2 bg-primary text-on-primary rounded-full hover:opacity-90 transition-opacity"
-              >
-                Find something
-              </Link>
-            </div>
-          )}
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-md">
+        {/* Linked even when empty, unlike before: the collection page carries the same
+            "how to fill this" copy plus a way to act on it, so an empty tile that
+            couldn't be clicked was the one dead end left on this screen. */}
+        <div className="md:col-span-3">
+          <Tile label="Favorite Films" to="/collections/favorites">
+            <PosterStrip
+              films={data.favorites}
+              linked={false}
+              empty={'Press the heart on any film’s page and it collects here.'}
+            />
+          </Tile>
         </div>
 
-        <div className="md:col-span-4 flex flex-col gap-md" id="following">
-          <SectionHeading title="Following" count={data.following_count} />
-          <div className="bg-surface-container-low rounded-xl p-lg border border-surface-variant flex flex-col gap-md">
-            {data.following.map((person, index) => (
-              <div key={person.id} className="flex flex-col gap-md">
-                {index > 0 && <hr className="border-t border-surface-variant w-full" />}
-                <FriendRow person={person} />
+        <div className="md:col-span-2">
+          <Tile label={`Following (${data.following_count})`} to="/people">
+            {data.following.length ? (
+              <div className="flex items-center gap-sm">
+                {data.following.map((person) => (
+                  <Avatar key={person.id} person={person} />
+                ))}
+                <MorePill count={data.following_count - data.following.length} />
               </div>
-            ))}
-          </div>
+            ) : (
+              <Empty>Nobody yet — find people on Friends and follow them.</Empty>
+            )}
+          </Tile>
         </div>
-      </section>
+
+        <div className="md:col-span-2">
+          <Tile label="Recent Reviews" to="/collections/journal">
+            {data.recent_reviews.length ? (
+              <div className="flex flex-col gap-sm">
+                {data.recent_reviews.map((film) => (
+                  <ReviewLine key={film.id} film={film} />
+                ))}
+              </div>
+            ) : (
+              <Empty>Rate or review a film and it shows up here, newest first.</Empty>
+            )}
+          </Tile>
+        </div>
+
+        <div className="md:col-span-3">
+          <Tile label="Watchlist" to="/collections/watchlist">
+            <PosterStrip
+              films={data.watchlist}
+              linked={false}
+              empty={'Nothing logged yet — the "+" over any poster adds one.'}
+            />
+          </Tile>
+        </div>
+      </div>
     </main>
   )
 }

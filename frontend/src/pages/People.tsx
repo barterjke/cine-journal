@@ -1,9 +1,16 @@
 /**
- * Friends: search by nickname, plus who you follow and who follows you.
+ * Friends: who you follow, who follows you, and a search box for finding anybody else.
  *
  * The Friends tab had no screen — it pointed at `/review`, a single review — and
  * the profile's "Following" list was a set of faces you couldn't click. This is
  * the screen behind that tab.
+ *
+ * Search is how you reach a stranger, not a listing of every account: an "Everyone"
+ * panel used to sit here with the whole seeded graph in it, which is a user directory
+ * rather than friends, and it grows without bound as the graph does. The box is empty
+ * until you type, and the two panels below it — the two lists that are actually *yours* —
+ * are what the screen is. From a result you go to their page, where the follow button and
+ * the "Follows you" badge are.
  *
  * No export mock exists for it, so the layout borrows the profile's: the same
  * bordered `surface-container-low` panels, the same row treatment, the same
@@ -147,18 +154,25 @@ export function People() {
             </span>
             <input
               className="w-full bg-surface-container-low border border-surface-variant rounded-full py-3 pl-xxl pr-md font-body-md text-body-md text-on-surface focus:ring-1 focus:ring-primary focus:outline-none"
-              placeholder="Search by nickname or name…"
+              placeholder="Find someone by nickname or name…"
               type="search"
               value={draft}
               aria-label="Search people by nickname"
               onChange={(event) => {
                 setDraft(event.target.value)
-                // Clearing the box returns to the full directory without a submit,
-                // which is what the little ⓧ in a search input implies it does.
+                // Clearing the box drops the results panel without a submit, which is
+                // what the little ⓧ in a search input implies it does.
                 if (event.target.value === '') setQuery('')
               }}
             />
           </form>
+          {/* Says what the box is for, in place of the results that aren't there yet.
+              The panel below can't say it — it isn't rendered until you search. */}
+          {!query && (
+            <p className="font-body-md text-body-md text-on-surface-variant max-w-xl">
+              Search for someone to open their page, where you can follow them.
+            </p>
+          )}
         </section>
 
         {loading && <Loading />}
@@ -166,28 +180,34 @@ export function People() {
 
         {data && (
           <div className="grid grid-cols-1 md:grid-cols-12 gap-gutter">
-            <div className="md:col-span-7 flex flex-col gap-md">
-              <Panel
-                title={data.query ? `Results for "${data.query}"` : 'Everyone'}
-                count={data.results.length}
-              >
-                <Rows
-                  people={data.results}
-                  empty={
-                    data.query
-                      ? `Nobody matches "${data.query}". Nicknames are the surest way to find someone.`
-                      : 'No people yet. The graph is seeded at startup — check the server log.'
-                  }
-                  onFollowChange={patch}
-                />
-              </Panel>
-            </div>
+            {/* Only once you've searched. An empty query returns no results by design
+                (see `content::people`), so this panel would otherwise be a heading over
+                "nobody matches" on a screen nobody had asked anything of yet. */}
+            {data.query && (
+              <div className="md:col-span-7 flex flex-col gap-md">
+                <Panel title={`Results for "${data.query}"`} count={data.results.length}>
+                  <Rows
+                    people={data.results}
+                    empty={`Nobody matches "${data.query}". Nicknames are the surest way to find someone.`}
+                    onFollowChange={patch}
+                  />
+                </Panel>
+              </div>
+            )}
 
-            <div className="md:col-span-5 flex flex-col gap-xl">
+            {/* Your two lists: stacked beside the results, side by side without them,
+                rather than leaving half the screen empty when nothing is searched. */}
+            <div
+              className={
+                data.query
+                  ? 'md:col-span-5 flex flex-col gap-xl'
+                  : 'md:col-span-12 grid grid-cols-1 md:grid-cols-2 gap-gutter'
+              }
+            >
               <Panel title="Following" count={data.following.length}>
                 <Rows
                   people={data.following}
-                  empty="You don't follow anyone yet. Follow someone and their reviews rise to the top of every film's page."
+                  empty="You don't follow anyone yet. Search above, open someone's page, and their reviews rise to the top of every film's."
                   onFollowChange={patch}
                 />
               </Panel>

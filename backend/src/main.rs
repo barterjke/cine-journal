@@ -19,6 +19,7 @@
 //! are served from `/img`; the social layer's avatars still come from there, while
 //! TMDB posters are absolute CDN URLs.
 
+mod cache;
 mod content;
 mod data;
 mod db;
@@ -87,7 +88,12 @@ async fn main() {
 
     seed_graph(&conn, &source).await;
 
-    let state = state::AppState::new(source, Arc::new(Mutex::new(conn)));
+    // Optional by design. With no `REDIS_URL`, or with a Redis that is down, every
+    // cache operation is a miss and the feed is built from source on each request —
+    // slower, never broken. Connecting is lazy, so a dead server can't delay startup.
+    let cache = cache::Cache::from_env().await;
+
+    let state = state::AppState::new(source, Arc::new(Mutex::new(conn)), cache);
     let app = routes::router(state)
         .nest_service("/img", ServeDir::new(img_dir))
         .layer(cors)

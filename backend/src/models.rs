@@ -13,7 +13,11 @@ use serde::{Deserialize, Serialize};
 
 /// An image as the export used it: a local path plus the alt text that was
 /// transcribed from Stitch's `data-alt` generation prompt.
-#[derive(Debug, Clone, Serialize)]
+///
+/// `Deserialize` because a built feed page is cached as JSON and read back (see
+/// `feed`), so every type reachable from `FeedItem` has to round-trip. Nothing
+/// accepts one of these from a client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Image {
     pub src: String,
     pub alt: String,
@@ -58,7 +62,7 @@ fn has_scheme(src: &str) -> bool {
 }
 
 /// A film. `year` is optional only because the mobile feed omits it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Movie {
     pub id: String,
     pub title: String,
@@ -67,7 +71,7 @@ pub struct Movie {
 }
 
 /// A poster tile in the desktop "Recent Entries" grid.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeedEntry {
     pub id: String,
     pub movie: Movie,
@@ -493,8 +497,31 @@ pub struct PostBodyRequest {
 /// `GET /api/people?q=`. One optional term, matched against nickname and name.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct PeopleQuery {
-    /// Absent or empty lists everyone, which is what the screen shows on arrival.
+    /// Absent or empty means "don't search" — the screen then draws only Following and
+    /// Followers. It used to mean "list everyone", which is what the removed "Everyone"
+    /// panel showed; a directory of every account is not a friends screen.
     pub q: Option<String>,
+}
+
+/// `GET /api/feed?cursor=`. Absent means the first page.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct FeedQuery {
+    /// The opaque cursor from the previous page's `next_cursor`. An unparseable one
+    /// is treated as absent rather than rejected: the shape can change between
+    /// deploys, and a stale cursor in a scrolled-back tab should restart the feed,
+    /// not break it.
+    pub cursor: Option<String>,
+    /// Skip the cache and build this page fresh — what the client sends on its
+    /// revalidation request, and what fills the cache for the next visitor.
+    #[serde(default)]
+    pub refresh: bool,
+}
+
+/// `GET /api/collections/{slug}?person=`. Absent `person` means the visitor's own.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CollectionQuery {
+    /// A nickname, with or without the `@`. Whose collection to show.
+    pub person: Option<String>,
 }
 
 /// `POST /api/people/{id}/follow`. Omitting the body toggles, as with the watchlist.
@@ -552,34 +579,13 @@ pub struct LikeState {
     pub like_count: Option<u32>,
 }
 
-/// Everything the desktop feed needs, in one request.
-///
-/// The three sections are what the visitor's own graph and taste produce. The
-/// export's two — a "Live Now" rail of invented discussion rooms and a "Friends
-/// Activity" sidebar of invented verbs — are gone: neither had anything behind it,
-/// and no upstream or local source can supply either (there are no rooms, and
-/// "watched" is an event nothing records). What is real is that people the visitor
-/// follows write reviews and give ratings, and that their favourites and watchlist
-/// imply films they haven't seen — so those are the two rails.
-#[derive(Debug, Clone, Serialize)]
-pub struct Feed {
-    /// Reviews and ratings by the people the visitor follows, newest first.
-    pub friend_reviews: Vec<UserReview>,
-    /// Films the visitor has logged, as the export's "Recent Entries" grid.
-    pub recent: Vec<FeedEntry>,
-    /// Films suggested from their favourites and watchlist. Empty until they have
-    /// one of either — a recommendation with no seed behind it would be back to
-    /// showing whatever trends and calling it personal.
-    pub recommended: Vec<Recommendation>,
-}
-
 /// One suggested film, with the film of the visitor's own that prompted it.
 ///
 /// `because` is the whole difference between a recommendation and a shelf of
 /// posters: the card says "because you liked Interstellar", which is a claim the
 /// data can back, and it comes from the seed that actually produced this film
 /// rather than from whichever favourite happens to be first.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Recommendation {
     pub movie: Movie,
     /// 0.0–5.0 crowd average, or `None` for a film nobody has voted on — the same
@@ -599,6 +605,50 @@ pub struct Recommendation {
     /// Whether the visitor already has it on their watchlist, so the "+" button
     /// draws the same state it does on every other poster in the app.
     pub on_watchlist: bool,
+}
+
+/// One card in the infinite feed: somebody's review, a suggestion, or one of the
+/// visitor's own journal entries.
+///
+/// A tagged union rather than three parallel arrays, because the whole point of a
+/// scrolling feed is that the three kinds are *interleaved* — the client renders the
+/// list in the order it arrives and never has to decide how to merge rails. `kind` is
+/// the discriminant serde writes, so the TypeScript side is a discriminated union.
+///
+/// Every variant already carries an id of its own, and the client keys its cards on
+/// `kind` plus that — deliberately not on the film alone, because the same film
+/// legitimately appears twice in one feed: a friend reviewed it *and* the visitor logged
+/// it. Those are two cards saying different things.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FeedItem {
+    /// A review by somebody the visitor follows.
+    Review(UserReview),
+    /// A film suggested from the visitor's own favourites or watchlist.
+    Recommendation(Recommendation),
+    /// A film the visitor logged themselves.
+    Entry(FeedEntry),
+}
+
+/// `GET /api/feed?cursor=` — one page of the infinite feed.
+///
+/// Paginated rather than the three fixed rails the screen used to draw, because a
+/// feed that ends after six reviews is a summary. The cursor is opaque on purpose:
+/// it encodes how far into each of the three underlying sources the page reached,
+/// and a client that parsed it would break the moment a fourth source is added.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedPage {
+    pub items: Vec<FeedItem>,
+    /// What to ask for next. `None` means the feed is exhausted — the client stops
+    /// observing and says so, rather than spinning forever on an empty page.
+    pub next_cursor: Option<String>,
+    /// Whether this page came out of Redis rather than being built for this request.
+    ///
+    /// Not decoration: the first page is served from the cache and revalidated in the
+    /// background (see `cache::feed`), so the client shows a quiet "refreshing" note
+    /// and reloads once the fresh copy lands. Without this the screen couldn't tell
+    /// the two apart and would either never refresh or always flash.
+    pub from_cache: bool,
 }
 
 /// Everything the mobile feed needs, in one request.
@@ -651,7 +701,7 @@ pub struct PersonCard {
 /// Carries the film *and* the author because both screens need one of them and
 /// neither can cheaply look it up: a person's page lists films, a film's page
 /// lists people, and one shape serves both.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserReview {
     pub id: String,
     pub author_id: String,
@@ -785,6 +835,56 @@ pub struct Profile {
     /// showed 124 beside a list of 3, and a count the list contradicts is the kind
     /// of decoration an SPA can't afford.
     pub following_count: u32,
+}
+
+/// `GET /api/collections/{slug}` — one named set of films, in full.
+///
+/// The profile's tiles are summaries capped at four and six posters
+/// (`content::FAVORITES_SHOWN`, `WATCHLIST_SHOWN`); this is the page behind them,
+/// which is what makes a tile worth clicking. Uncapped deliberately: a collection
+/// page that silently stopped at some number would be the same summary again.
+///
+/// `owner` and `title` are resolved here rather than composed by the client, so the
+/// heading can say "Elena Rostova's Watchlist" without the screen knowing whose page
+/// it came from.
+#[derive(Debug, Clone, Serialize)]
+pub struct Collection {
+    /// The slug that addresses it: "favorites", "watchlist", "journal".
+    pub slug: String,
+    /// "Favorite Films", "Watchlist", "Your Journal" — already in the right person's
+    /// voice, so the client prints it as-is.
+    pub title: String,
+    /// One line under the heading saying what the set *is*, since a grid of posters
+    /// can't say it. Empty collections lean on this entirely.
+    pub description: String,
+    /// Whose collection it is: `None` for the visitor's own, the person's name
+    /// otherwise. Drives the back link as well as the heading.
+    pub owner: Option<CollectionOwner>,
+    pub movies: Vec<CollectionMovie>,
+}
+
+/// Whose collection is on screen, when it isn't the visitor's.
+#[derive(Debug, Clone, Serialize)]
+pub struct CollectionOwner {
+    pub name: String,
+    /// "@elenarostova", so the page can link back to theirs.
+    pub handle: String,
+    pub avatar: Image,
+}
+
+/// One film in a collection grid: a poster, plus whatever the collection knows about
+/// it that a bare `Movie` doesn't.
+#[derive(Debug, Clone, Serialize)]
+pub struct CollectionMovie {
+    pub movie: Movie,
+    /// The owner's rating, where the collection is one that has ratings behind it —
+    /// the visitor's journal does, their favourites don't. `None` draws no stars
+    /// rather than zero.
+    pub rating_half_stars: Option<u8>,
+    /// Whether the *visitor* has this on their watchlist, so the grid's "+" behaves as
+    /// it does everywhere else — including on somebody else's collection, where the
+    /// button is about the visitor and the poster is about them.
+    pub on_watchlist: bool,
 }
 
 /// Where the films in every other response came from.

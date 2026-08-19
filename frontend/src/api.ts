@@ -300,20 +300,66 @@ export interface SearchParams {
 }
 
 /**
- * Everything the desktop feed draws.
+ * One card in the feed — a discriminated union on `kind`.
  *
- * The three sections are the visitor's own graph and taste. The export's two — a
- * "Live Now" rail of discussion rooms and a "Friends Activity" sidebar — are gone:
- * neither had anything behind it, and nothing can supply either (there are no rooms,
- * and "watched" is an event nothing records).
+ * The three kinds arrive interleaved in one list rather than as three arrays, which is
+ * what makes the feed a feed: the screen renders them in the order they came and never
+ * decides how to merge rails.
  */
-export interface Feed {
-  /** Reviews and ratings by the people you follow, newest first. */
-  friend_reviews: UserReview[]
-  /** Films you've logged. */
-  recent: FeedEntry[]
-  /** Suggestions from your favourites and watchlist. Empty until you have one. */
-  recommended: Recommendation[]
+export type FeedItem =
+  | ({ kind: 'review' } & UserReview)
+  | ({ kind: 'recommendation' } & Recommendation)
+  | ({ kind: 'entry' } & FeedEntry)
+
+/**
+ * One page of the feed.
+ *
+ * `next_cursor` is opaque — it encodes how far into each of the three sources the page
+ * reached, and a client that parsed it would break when a fourth is added. `null` means
+ * the end: stop observing and say so, rather than fetching an empty page per scroll.
+ */
+export interface FeedPage {
+  items: FeedItem[]
+  next_cursor: string | null
+  /**
+   * Whether this came out of Redis rather than being built for this request.
+   *
+   * Drives the revalidation: a page flagged `true` is last request's feed, so the screen
+   * paints it and immediately asks again with `refresh`, then swaps in what comes back.
+   */
+  from_cache: boolean
+}
+
+/** One film in a collection grid, with whatever that collection knows about it. */
+export interface CollectionMovie {
+  movie: Movie
+  /** The owner's rating, where the collection has ratings behind it. `null` draws no stars. */
+  rating_half_stars: number | null
+  /** Whether *you* have it on your watchlist — the button is yours even on their page. */
+  on_watchlist: boolean
+}
+
+/** Whose collection is on screen, when it isn't yours. */
+export interface CollectionOwner {
+  name: string
+  handle: string
+  avatar: Image
+}
+
+/**
+ * One named set of films, in full — the page behind a profile tile.
+ *
+ * The tiles are summaries capped at four and six posters; this is uncapped, which is
+ * what makes a tile worth clicking. `title` and `description` arrive in the right
+ * person's voice, so the screen prints them as-is.
+ */
+export interface Collection {
+  slug: string
+  title: string
+  description: string
+  /** `null` for your own. */
+  owner: CollectionOwner | null
+  movies: CollectionMovie[]
 }
 
 export interface MobileFeed {
@@ -542,7 +588,37 @@ function searchQuery({ q, genre, year, minRating, page, person }: SearchParams):
 
 export const api = {
   status: () => get<Status>('/api/status'),
-  feed: () => get<Feed>('/api/feed'),
+
+  /**
+   * One page of the feed. Omit `cursor` for the first.
+   *
+   * `refresh` skips the server's cache and rebuilds the page, which is also what fills
+   * the cache for the next visitor. The screen calls this twice on load — once without,
+   * to paint whatever Redis has, then once with, to replace it — see `FeedPage.from_cache`.
+   */
+  feedPage: (cursor?: string | null, refresh = false) => {
+    const params = new URLSearchParams()
+    if (cursor) params.set('cursor', cursor)
+    if (refresh) params.set('refresh', 'true')
+    const query = params.toString()
+    return get<FeedPage>(`/api/feed${query ? `?${query}` : ''}`)
+  },
+
+  /**
+   * One collection in full: `favorites`, `watchlist` or `journal`.
+   *
+   * `person` is a nickname, and omitting it means the visitor's own. A slug nobody has,
+   * or a nickname nobody has, is a 404 rather than an empty grid.
+   */
+  collection: (slug: string, person?: string | null) => {
+    const handle = person?.replace(/^@/, '')
+    return get<Collection>(
+      `/api/collections/${encodeURIComponent(slug)}${
+        handle ? `?person=${encodeURIComponent(handle)}` : ''
+      }`,
+    )
+  },
+
   mobileFeed: () => get<MobileFeed>('/api/feed/mobile'),
   reviews: () => get<Review[]>('/api/reviews'),
   review: (id: string) => get<Review>(`/api/reviews/${id}`),
@@ -570,7 +646,10 @@ export const api = {
   watchlist: () => get<string[]>('/api/watchlist'),
   profile: () => get<Profile>('/api/profile'),
 
-  /** The friend directory. An empty `q` lists everyone. */
+  /**
+   * The friend directory. An empty `q` searches for nobody — the screen then draws only
+   * Following and Followers, which is the point: a list of every account isn't friends.
+   */
   people: (q?: string) =>
     get<PeopleResponse>(`/api/people${q ? `?q=${encodeURIComponent(q)}` : ''}`),
 

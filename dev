@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+#
+# Start both dev servers with one command, and stop both with one Ctrl-C.
+#
+#   ./dev                 # API on 3001, UI on 5173
+#   PORT=4000 ./dev       # both ports moved together — see API_URL below
+#   UI_PORT=5199 ./dev
+#
+# The README's two-terminal recipe still works and is what this wraps. The three
+# things it adds are the ones that bit somebody:
+#
+#   - `PORT` and Vite's proxy target have to agree. Moving the API alone leaves the
+#     UI proxying to a port nothing is on, which surfaces as every screen failing to
+#     load rather than as a misconfiguration. Here one variable sets both.
+#   - `cargo run` compiles, then *spawns* `target/debug/cine-journal-api`. Killing
+#     cargo leaves that child holding the port, so the next run dies with "Address
+#     already in use" pointing at a server nobody remembers starting. Both servers
+#     run in their own process group and are stopped by group, not by pid.
+#   - A port that's already taken is reported with what's holding it, before
+#     anything starts. Nothing is killed automatically: on a shared machine the
+#     process on that port may be somebody's actual work.
+#
+# Not `set -e`: every failure below wants its own sentence, and a bare exit code
+# part-way through starting two servers is the least useful thing this can print.
+set -u -o pipefail
+set -m   # one process group per server — the whole point of stop()
+
+ROOT=$(cd "$(dirname "$0")" && pwd)
+PORT=${PORT:-3001}
+UI_PORT=${UI_PORT:-5173}
+
+# How long to wait for `GET /api/health`. Generous because the first run compiles
+# rusqlite and reqwest from source, which is minutes on a cold cache, and a script
+# that gave up at 60s would look like a broken build.
+API_TIMEOUT=${API_TIMEOUT:-600}
+
+if [ -t 1 ]; then
+  DIM=$'\033[2m'; BOLD=$'\033[1m'; RED=$'\033[31m'; YELLOW=$'\033[33m'
+  CYAN=$'\033[36m'; MAGENTA=$'\033[35m'; OFF=$'\033[0m'
+else
+  DIM=''; BOLD=''; RED=''; YELLOW=''; CYAN=''; MAGENTA=''; OFF=''
+fi
+
+say()  { printf '%s\n' "${DIM}dev:${OFF} $*"; }
+warn() { printf '%s\n' "${YELLOW}dev:${OFF} $*"; }
+die()  { printf '%s\n' "${RED}dev:${OFF} $*" >&2; exit 1; }
+
+# ---------------------------------------------------------------- preflight
+
+for tool in cargo node npm; do
+  command -v "$tool" >/dev/null 2>&1 || die "$tool is not on PATH."
+done
+
+# The pid listening on a port, or nothing. lsof isn't everywhere, so the fallback
+# answers the weaker question — "is it taken?" — with no pid to report.
+port_pid() {
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1
+  elif (exec 3<>/dev/tcp/127.0.0.1/"$1") 2>/dev/null; then
+    echo '?'
+  fi
+}
+
+check_port() {
+  local port=$1 what=$2 pid
+  pid=$(port_pid "$port")
+  [ -z "$pid" ] && return 0
+
+  printf '%s\n' "${RED}dev:${OFF} port $port ($what) is already in use." >&2
+  if [ "$pid" = '?' ]; then
+    printf '%s\n' "     Install lsof to see what by, or run with ${BOLD}$3=$((port + 1))${OFF}." >&2
+  else
+    printf '%s\n' "     Held by pid $pid: $(ps -o command= -p "$pid" 2>/dev/null | cut -c1-80)" >&2
+    printf '%s\n' "     Stop it with ${BOLD}kill $pid${OFF}, or run with ${BOLD}$3=$((port + 1))${OFF}." >&2
+  fi
+  exit 1
+}
+
+check_port "$PORT" 'the API' PORT
+check_port "$UI_PORT" 'the UI' UI_PORT
+
+# The backend reads `../.env` from `backend/`, i.e. this file. Creating it from the
+# committed template costs nothing and gives the token somewhere to be pasted;
+# without it the app runs in demo mode, which is a legitimate way to run and so is
+# never treated as an error.
+if [ ! -f "$ROOT/.env" ] && [ -f "$ROOT/.env.example" ]; then
+  cp "$ROOT/.env.example" "$ROOT/.env"
+  say "created .env from .env.example (gitignored)"
+fi
+
+# Whether a token is *present*, never what it is — same rule the backend follows,
+# which logs `tmdb: enabled` and nothing more.
+if grep -Eq '^[[:space:]]*TMDB_TOKEN=.+' "$ROOT/.env" 2>/dev/null; then
+  say "TMDB token found — real films"
+else
+  warn "no TMDB_TOKEN in .env — demo mode, with a banner saying the films are invented"
+fi
+
+if grep -Eq '^[[:space:]]*REDIS_URL=.+' "$ROOT/.env" 2>/dev/null; then
+  say "REDIS_URL set — feed pages will be cached if the server answers"
+fi
+
+# A partial install is worse than none: `vite` missing from .bin looks like a
+# corrupt project rather than an interrupted npm.
+#
+# The staleness check compares against `node_modules/.package-lock.json` — npm's own
+# record of what it installed — and not the directory, whose mtime an install doesn't
+# touch. Comparing against the directory reinstalls on every single start.
+node_stamp=$ROOT/frontend/node_modules/.package-lock.json
+if [ ! -x "$ROOT/frontend/node_modules/.bin/vite" ] || [ ! -f "$node_stamp" ] ||
+   [ "$ROOT/frontend/package-lock.json" -nt "$node_stamp" ] ||
+   [ "$ROOT/frontend/package.json" -nt "$node_stamp" ]; then
+  say "installing frontend dependencies…"
+  (cd "$ROOT/frontend" && npm install) || die "npm install failed."
+fi
+
+# ------------------------------------------------------------------- running
+
+api_pg=''
+ui_pg=''
+stopping=''
+
+# The process group of a job, which is the pid of the *first* command in its
+# pipeline — not `$!`, which is the last (the awk that prefixes the output).
+pgid_of() { ps -o pgid= -p "$1" 2>/dev/null | tr -d '[:space:]'; }
+
+# True while any process in the group is alive. cargo's spawned binary and the awk
+# reading its output are both in there, so this stays true until the server is
+# genuinely gone.
+alive() { [ -n "$1" ] && kill -0 -- "-$1" 2>/dev/null; }
+
+stop() {
+  trap - EXIT INT TERM   # a second Ctrl-C during cleanup shouldn't re-enter this
+  stopping=yes           # so the watch loop doesn't report the deaths it caused
+  local pg
+  for pg in "$api_pg" "$ui_pg"; do
+    alive "$pg" && kill -TERM -- "-$pg" 2>/dev/null
+  done
+  # Give them a moment to close their listeners, then insist. Without the second
+  # pass a stuck server survives as the "already in use" of the next run.
+  local waited=0
+  while [ "$waited" -lt 20 ]; do
+    alive "$api_pg" || alive "$ui_pg" || break
+    sleep 0.25
+    waited=$((waited + 1))
+  done
+  for pg in "$api_pg" "$ui_pg"; do
+    alive "$pg" && kill -KILL -- "-$pg" 2>/dev/null
+  done
+  printf '\n%s\n' "${DIM}dev:${OFF} stopped"
+}
+trap stop EXIT INT TERM
+
+say "starting the API on http://127.0.0.1:$PORT"
+(cd "$ROOT/backend" && exec env PORT="$PORT" cargo run) 2>&1 |
+  awk -v p="${CYAN}[api]${OFF} " '{ print p $0; fflush() }' &
+api_pg=$(pgid_of $!)
+
+# Vite would happily start first and proxy into nothing, so the browser's first
+# paint would be an error screen on a stack that was merely still compiling.
+health="http://127.0.0.1:$PORT/api/health"
+ready=''
+waited=0
+hinted=''
+while [ "$waited" -lt "$API_TIMEOUT" ]; do
+  if ! alive "$api_pg"; then
+    die "the API exited before it was ready — its output is above."
+  fi
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --max-time 2 "$health" >/dev/null 2>&1 && { ready=yes; break; }
+  elif [ -n "$(port_pid "$PORT")" ]; then
+    ready=yes; break
+  fi
+  if [ -z "$hinted" ] && [ "$waited" -ge 15 ]; then
+    hinted=yes
+    say "still compiling — first run builds rusqlite and reqwest from source"
+  fi
+  sleep 1
+  waited=$((waited + 1))
+done
+[ -n "$ready" ] || die "the API never answered $health after ${API_TIMEOUT}s."
+
+say "API ready"
+
+# API_URL is what keeps the proxy pointed at the port we actually used.
+(cd "$ROOT/frontend" && exec env API_URL="http://127.0.0.1:$PORT" \
+  npm run dev -- --port "$UI_PORT" --strictPort) 2>&1 |
+  awk -v p="${MAGENTA}[ui]${OFF} " '{ print p $0; fflush() }' &
+ui_pg=$(pgid_of $!)
+
+printf '\n%s\n\n' "${BOLD}CinéJournal is on http://localhost:$UI_PORT${OFF}  ${DIM}(Ctrl-C stops both)${OFF}"
+
+# bash 3.2 ships on macOS and has no `wait -n`, so poll. Either server going down
+# takes the other with it — the EXIT trap stops the survivor — because half a stack
+# looks like a bug in whichever half is left rather than like a crash in the other.
+while alive "$api_pg" && alive "$ui_pg"; do
+  sleep 1
+done
+if [ -z "$stopping" ]; then
+  alive "$api_pg" || warn 'the API stopped — its last output is above.'
+  alive "$ui_pg" || warn 'the UI stopped — its last output is above.'
+fi

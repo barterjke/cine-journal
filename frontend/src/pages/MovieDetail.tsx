@@ -647,14 +647,12 @@ export function MovieDetail() {
     try {
       return await api.movie(DEFAULT_MOVIE_ID)
     } catch {
-      const feed = await api.feed()
-      // The visitor's own journal first, then a suggestion, then a friend's review —
-      // in the order the feed itself draws them. All three can be empty on a new
-      // account, which is now the honest reason this route has nothing to show.
-      const filmId =
-        feed.recent[0]?.movie.id ??
-        feed.recommended[0]?.movie.id ??
-        feed.friend_reviews[0]?.movie_id
+      // Whatever the feed leads with — one page is plenty, and its first card is the
+      // most defensible "some film" this route can pick. An empty feed is an empty
+      // account, which is the honest reason for having nothing to show.
+      const page = await api.feedPage()
+      const first = page.items[0]
+      const filmId = first && (first.kind === 'review' ? first.movie_id : first.movie.id)
       if (!filmId) throw new Error('No films to show yet.')
       return api.movie(filmId)
     }

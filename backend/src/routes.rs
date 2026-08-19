@@ -21,7 +21,7 @@ use serde::Serialize;
 
 use crate::models::*;
 use crate::state::AppState;
-use crate::{content, db, hydrate};
+use crate::{cache, content, db, hydrate};
 
 /// Ratings are half-stars out of five, so ten is the ceiling.
 const MAX_HALF_STARS: u8 = 10;
@@ -55,6 +55,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/movies/{id}/rating", put(rate))
         .route("/api/movies/{id}/review", put(write_review))
         .route("/api/watchlist", get(watchlist_ids))
+        .route("/api/collections/{slug}", get(collection))
         .route("/api/profile", get(profile).put(edit_bio))
         .route("/api/people", get(people))
         .route("/api/people/{handle}", get(person))
@@ -103,9 +104,60 @@ async fn status(State(state): State<AppState>) -> Json<Status> {
     Json(content::status(&state.source))
 }
 
-async fn feed(State(state): State<AppState>) -> Json<Feed> {
-    let feed = content::feed(&state.source, &state.db).await;
-    Json(hydrate::feed(feed, &state.store()))
+/// One page of the infinite feed, from Redis when it's there.
+///
+/// Stale-while-revalidate, and the client drives both halves: it asks once without
+/// `refresh` and gets whatever the cache has (`from_cache: true`), which paints
+/// immediately; seeing that flag it asks again with `refresh=true`, which skips the
+/// cache, builds the page and stores it. So the visitor reads last request's feed while
+/// this request's is being made, and the *next* visitor reads what this one built.
+///
+/// The revalidation lives on the client rather than in a spawned task here because a
+/// background rebuild would have nowhere to deliver to — there is no push channel, so
+/// the fresh page would sit in Redis until somebody reloaded anyway. This way the
+/// screen swaps it in the moment it lands.
+///
+/// `hydrate::feed_page` runs on both paths, after the cache: a page built ten minutes
+/// ago knows nothing about a film watchlisted since, and the "+" buttons have to be
+/// current even when the cards aren't.
+async fn feed(State(state): State<AppState>, Query(query): Query<FeedQuery>) -> Json<FeedPage> {
+    // Normalised through `content`, so a cursor the server can't parse can't become a
+    // cache key of its own — otherwise a client sending junk would fill Redis with
+    // entries nothing will ever read again.
+    let cursor = content::feed_cursor(query.cursor.as_deref());
+    let key = cache::feed_key(cursor.as_deref());
+
+    if !query.refresh {
+        if let Some(cached) = state.cache.get::<FeedPage>(&key).await {
+            let page = FeedPage { from_cache: true, ..cached };
+            return Json(hydrate::feed_page(page, &state.store()));
+        }
+    }
+
+    let page = content::feed_page(&state.source, &state.db, cursor.as_deref()).await;
+    // Stored before hydration, so what's in Redis is the content and not one visitor's
+    // watchlist stamped onto it. With per-user identity this would be the bug that
+    // leaked one person's state to another.
+    state.cache.set(&key, &page).await;
+    Json(hydrate::feed_page(page, &state.store()))
+}
+
+/// One collection in full — the page behind a profile tile.
+///
+/// A single endpoint for the visitor's and anybody else's, selected by `?person=`,
+/// because they are the same page: same grid, same posters, same "+" buttons. Only the
+/// heading and the presence of ratings differ, and `content` resolves both.
+async fn collection(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    Query(query): Query<CollectionQuery>,
+) -> Response {
+    match content::collection(&state.source, &state.db, &slug, query.person.as_deref()).await {
+        Some(collection) => {
+            Json(hydrate::collection(collection, &state.store())).into_response()
+        }
+        None => not_found(format!("no collection '{slug}'")),
+    }
 }
 
 async fn mobile_feed(State(state): State<AppState>) -> Json<MobileFeed> {
@@ -188,7 +240,12 @@ async fn follow(
 ) -> Response {
     let requested = body.and_then(|Json(body)| body.following);
     match content::set_follow(&state.db, &id, requested) {
-        Ok(Some(state)) => Json(state).into_response(),
+        // Following someone changes whose reviews the feed draws, so the cached page is
+        // wrong the moment this lands.
+        Ok(Some(follow)) => {
+            invalidate_feed(&state).await;
+            Json(follow).into_response()
+        }
         Ok(None) => not_found(format!("no person with id '{id}'")),
         Err(error) => write_failed(error),
     }
@@ -215,6 +272,22 @@ async fn profile(State(state): State<AppState>) -> Json<Profile> {
 
 // --- Writes -------------------------------------------------------------------
 
+/// Drop the cached first page, after a write the feed would draw differently.
+///
+/// Called by every write the feed reads from: following someone changes whose reviews
+/// appear, rating or reviewing a film adds an entry, and favouriting or watchlisting one
+/// moves the recommendations. Without this the visitor would click and then scroll
+/// through the pre-click feed for the rest of the TTL, which reads as the click not
+/// having worked.
+///
+/// Only the head. Deeper pages are addressed by cursor and ride out their TTL rather
+/// than being walked, which would mean a `SCAN` across the namespace on every click; the
+/// client de-duplicates by `FeedItem::id`, so a stale deep page overlapping a rebuilt
+/// head shows its cards once rather than twice.
+async fn invalidate_feed(state: &AppState) {
+    state.cache.forget(&cache::feed_key(None)).await;
+}
+
 /// Add, remove, or toggle. Idempotent when the body states the target value, so
 /// a double-click can't desync the button from the store.
 async fn watchlist(
@@ -232,7 +305,10 @@ async fn watchlist(
     };
 
     match result {
-        Ok(on_watchlist) => Json(WatchlistState { movie_id: id, on_watchlist }).into_response(),
+        Ok(on_watchlist) => {
+            invalidate_feed(&state).await;
+            Json(WatchlistState { movie_id: id, on_watchlist }).into_response()
+        }
         Err(error) => write_failed(error),
     }
 }
@@ -253,7 +329,10 @@ async fn favorite(
     };
 
     match result {
-        Ok(is_favorite) => Json(FavoriteState { movie_id: id, is_favorite }).into_response(),
+        Ok(is_favorite) => {
+            invalidate_feed(&state).await;
+            Json(FavoriteState { movie_id: id, is_favorite }).into_response()
+        }
         Err(error) => write_failed(error),
     }
 }
@@ -279,6 +358,7 @@ async fn rate(
 
     match result {
         Ok(your_rating_half_stars) => {
+            invalidate_feed(&state).await;
             Json(RatingState { movie_id: id, your_rating_half_stars }).into_response()
         }
         Err(error) => write_failed(error),
@@ -381,7 +461,10 @@ async fn write_review(
     };
 
     match result {
-        Ok(your_review) => Json(ReviewState { movie_id: id, your_review }).into_response(),
+        Ok(your_review) => {
+            invalidate_feed(&state).await;
+            Json(ReviewState { movie_id: id, your_review }).into_response()
+        }
         Err(error) => write_failed(error),
     }
 }

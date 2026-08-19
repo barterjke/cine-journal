@@ -56,21 +56,27 @@ pub struct Store {
     pub posted_replies: BTreeMap<(String, String), Vec<PostedReply>>,
 }
 
-/// Everything a handler needs: where films come from, and where the visitor's own
-/// rows live.
+/// Everything a handler needs: where films come from, where the visitor's own rows
+/// live, and where built feed pages are parked.
 ///
 /// `Source` is behind the same `Arc` as the rest because axum clones the state for
 /// every request and `Tmdb` owns a connection pool and a cache — cloning that per
-/// request would throw the cache away each time.
+/// request would throw the cache away each time. `Cache` needs no `Arc` of its own:
+/// `redis::aio::ConnectionManager` is internally reference-counted and multiplexes,
+/// so cloning it shares one connection rather than opening another.
 #[derive(Clone)]
 pub struct AppState {
     pub source: std::sync::Arc<Source>,
     pub db: Db,
+    /// The feed cache, or a no-op stand-in when no Redis is configured or reachable.
+    /// Every operation on it degrades to a miss, so nothing downstream branches on
+    /// whether it's real — see `cache`.
+    pub cache: crate::cache::Cache,
 }
 
 impl AppState {
-    pub fn new(source: Source, db: Db) -> Self {
-        Self { source: std::sync::Arc::new(source), db }
+    pub fn new(source: Source, db: Db, cache: crate::cache::Cache) -> Self {
+        Self { source: std::sync::Arc::new(source), db, cache }
     }
 
     /// A fresh snapshot of the visitor's state.
