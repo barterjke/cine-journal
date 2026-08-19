@@ -472,7 +472,7 @@ pub fn derive_taste(
         reviews.iter().filter(|(_, stars, _, _)| *stars >= FAVORITE_FLOOR).collect();
     // Highest first; `reviews` is already newest-first, and a stable sort keeps that
     // as the tiebreak, so two 9s come back most-recently-written first.
-    best.sort_by(|a, b| b.1.cmp(&a.1));
+    best.sort_by_key(|b| std::cmp::Reverse(b.1));
     let favorites: Vec<String> =
         best.into_iter().take(TASTE_FAVORITES).map(|(id, _, _, _)| id.clone()).collect();
 
