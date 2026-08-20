@@ -566,7 +566,7 @@ fn first_name(name: &str) -> &str {
 /// way, but a poster *card* is nothing but its image, so this fills the frame rather
 /// than collapsing the grid. The path is the export's own placeholder art.
 fn missing_poster() -> Image {
-    Image::new("img/poster-missing.svg", "No poster available for this film.")
+    Image::missing_poster()
 }
 
 /// Films recommended from the visitor's own, each carrying the seed it came from.

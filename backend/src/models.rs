@@ -29,6 +29,16 @@ pub struct Image {
 }
 
 impl Image {
+    /// The stand-in for a film with no poster.
+    ///
+    /// One place, because the alternative was three. The demo dataset used to fall
+    /// back to a real film's poster *and* its description, so a film with no artwork
+    /// was shown another film's — which misattributes the artwork rather than
+    /// admitting there is none.
+    pub fn missing_poster() -> Self {
+        Self::new("img/poster-missing.svg", "No poster available for this film.")
+    }
+
     /// Callers pass the export's literal `img/…` string; the `src` that goes out
     /// on the wire is made root-relative.
     ///

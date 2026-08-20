@@ -157,7 +157,7 @@ mod tests {
             id: id.into(),
             title: data::title_from_slug(id),
             year: None,
-            poster: Image::new("img/poster-missing.svg", "No poster."),
+            poster: Image::missing_poster(),
         }
     }
 

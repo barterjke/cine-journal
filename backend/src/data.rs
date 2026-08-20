@@ -240,12 +240,10 @@ fn detail_for(id: &str, title: &str) -> MovieDetail {
             .filter(|entry| !entry.genres.is_empty())
             .map(|entry| entry.genres.clone())
             .unwrap_or_else(|| vec!["Sci-Fi".into(), "Noir".into(), "Thriller".into()]),
-        poster: listed.and_then(|entry| entry.poster).unwrap_or_else(|| {
-            Image::new(
-                "img/poster-neon-reverie.jpg",
-                "A minimalist, high-contrast poster design for a neo-noir film. The poster features strong vertical lines and a stark, two-tone color palette of deep blue and crisp white. A solitary silhouette is placed asymmetrically in the lower third, surrounded by vast, empty space. The typography, if imagined, is clean and sans-serif. The style is modern, editorial, and sophisticated, avoiding any cluttered blockbuster tropes.",
-            )
-        }),
+        // Not Neon Reverie's poster, which is what this used to be: a film with no
+        // artwork was served another film's, and `Movie.poster` is required on the
+        // wire, so nothing downstream could tell that apart from a real poster.
+        poster: listed.and_then(|entry| entry.poster).unwrap_or_else(Image::missing_poster),
         backdrop: Image::new(
             "img/backdrop-neon-reverie.jpg",
             "A sweeping, cinematic still frame from a high-end neo-noir film. A lone figure stands in a rain-slicked city street at night, illuminated by the soft, diffused glow of distant neon signs. The composition is expansive and minimalist, dominated by deep, inky blacks and cool blues, with a single striking red accent in the neon light. The overall mood is moody, atmospheric, and highly stylized, fitting a premium editorial film journal aesthetic.",
