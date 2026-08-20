@@ -545,6 +545,64 @@ jobs:
           echo "::error::https://$API_DOMAIN/ did not serve the bundle. Check 'docker compose logs web' on the VM, and the handle blocks in Caddyfile."
           exit 1
 
+      # Does the content the site links to actually exist?
+      #
+      # Every check above this passes while the app is thoroughly broken. That happened:
+      # the social graph was seeded from the demo dataset, then TMDB was switched on, so
+      # every seeded review linked to a film id TMDB has never heard of. /api/health, the
+      # bundle and the container healthchecks were all green while every review on the site
+      # led to "no movie with id 'le-souffle'".
+      #
+      # So this follows a real link instead of asking whether the server is up: take a film
+      # from the feed the way a visitor would, and open it.
+      - name: Smoke-test that the feed's films resolve
+        env:
+          API_DOMAIN: ${{ vars.API_DOMAIN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$API_DOMAIN" ]; then
+            echo "::warning::API_DOMAIN unset, so nothing checked that the feed's films resolve."
+            exit 0
+          fi
+
+          feed=$(curl -fsS --max-time 25 "https://$API_DOMAIN/api/feed")
+
+          # jq, not an inline python heredoc: python's own indentation rules fight a YAML
+          # block scalar, and a line at column 0 silently ends the block.
+          #
+          # An empty feed is not a pass. It is also not this check's business to explain,
+          # so it fails loudly and leaves diagnosis to the log.
+          ids=$(printf '%s' "$feed" | jq -r '[.items[].movie_id | select(. != null)] | unique | .[]')
+          if [ -z "$ids" ]; then
+            echo "::error::the feed carried no films at all. Check 'docker compose logs api' for the seed."
+            exit 1
+          fi
+
+          # Every distinct film, not just the first. The live site is mixed right now — one
+          # real TMDB id resolves while eight demo leftovers 404 — so sampling one would
+          # have called that healthy, which is how this shipped.
+          #
+          # A here-string, not a pipe: `while` on the right of a pipe runs in a subshell and
+          # the count would not survive it.
+          broken=0
+          while read -r id; do
+            [ -n "$id" ] || continue
+            code=$(curl -s -o /dev/null --max-time 15 -w '%{http_code}' \
+              "https://$API_DOMAIN/api/movies/$id")
+            if [ "$code" = "200" ]; then
+              echo "  ok      $id"
+            else
+              echo "  BROKEN  $id -> HTTP $code"
+              broken=$((broken + 1))
+            fi
+          done <<< "$ids"
+
+          if [ "$broken" -gt 0 ]; then
+            echo "::error::$broken film(s) in the feed do not resolve. The seeded graph and the content source disagree — see DEPLOY.md."
+            exit 1
+          fi
+          echo "every film in the feed resolves"
+
       # `always()`: a failure above should not leave a credential file on the VM.
       - name: Log the VM out of GHCR
         if: always()
