@@ -28,7 +28,13 @@
 //!
 //! Sign-in is optional. With no `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` the
 //! server boots, says so once, serves every read, and refuses every write with a 401
-//! — the same degrade-don't-die posture as a missing Redis.
+//! — the same degrade-don't-die posture as a missing Redis. `GET /api/status` reports
+//! whether it is available, so a client can hide the button rather than find out by
+//! pressing it.
+//!
+//! **The callback answers a browser, not a script.** It is reached by following
+//! Google's redirect, so every outcome is a 302 back into the app: success with a
+//! cookie, failure with `?auth_error=<slug>`. See `AuthError` for the four slugs.
 
 use axum::{
     extract::{Query, State},
@@ -119,6 +125,48 @@ pub struct Google {
     /// Where the app is reachable, without a trailing slash. The redirect URI and
     /// the post-sign-in landing page are both built from it.
     public_url: String,
+    /// Where a code is exchanged and where the token buys a profile.
+    ///
+    /// Fields rather than the constants directly so a test can point them at a closed
+    /// port and exercise the exchange failing without touching the network. Nothing
+    /// reads them from the environment: there is one Google.
+    token_url: String,
+    userinfo_url: String,
+}
+
+/// Why a sign-in did not finish, as the slug the app is sent back with.
+///
+/// Four, exactly, and the strings are a contract with the frontend: it renders a
+/// message per slug and a fallback for anything it does not recognise. Adding a fifth
+/// here without telling it lands the user on the fallback, which is the safe direction.
+///
+/// The slug is the *whole* payload. Nothing from Google's response and no internal
+/// error text goes in the URL — a query parameter is visible, shareable and logged by
+/// every proxy in between, and none of that detail helps the person reading it. The
+/// detail is logged server-side instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthError {
+    /// The user declined at Google's consent screen.
+    Cancelled,
+    /// The `state` was missing, already spent, or older than `db`'s window. One
+    /// answer for all three, because the fix is the same: start again.
+    Expired,
+    /// Google refused for some other reason of its own.
+    Denied,
+    /// Anything on our side or the wire: the exchange, the profile call, a database
+    /// write, or a server with no credentials configured.
+    Failed,
+}
+
+impl AuthError {
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Cancelled => "cancelled",
+            Self::Expired => "expired",
+            Self::Denied => "denied",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 impl Google {
@@ -157,21 +205,43 @@ impl Google {
             redirect_uri = %format!("{public_url}{CALLBACK_PATH}"),
             "google sign-in: enabled"
         );
-        Some(Self { client_id, client_secret, public_url })
+        Some(Self {
+            client_id,
+            client_secret,
+            public_url,
+            token_url: GOOGLE_TOKEN_URL.to_string(),
+            userinfo_url: GOOGLE_USERINFO_URL.to_string(),
+        })
     }
 
     /// Credentials that are configured but point nowhere, for tests.
     ///
     /// Not `from_env`: environment variables are process-wide and the test suite runs
     /// in parallel, so one test setting them would decide another test's outcome.
-    /// Nothing built this way ever reaches the network — the tests stop at the state
-    /// check, which is before the token exchange.
+    ///
+    /// Nothing built this way reaches the network. The two endpoints are a closed port
+    /// on loopback, so a test that gets past the state check finds the exchange
+    /// refused straight away — which is the failure worth covering, and covering it
+    /// against the real Google would be slow, flaky and rude.
     #[cfg(test)]
     pub fn testing() -> Self {
+        Self::testing_at("http://127.0.0.1:1")
+    }
+
+    /// The same, with Google's two endpoints somewhere a test controls.
+    ///
+    /// A test that wants a sign-in to *succeed* stands up a stub serving `/token` and
+    /// `/userinfo` and passes its address here. That is the only way to cover the
+    /// finished flow — the cookie, the redirect, the account — without a Google
+    /// project and a browser.
+    #[cfg(test)]
+    pub fn testing_at(google_base: &str) -> Self {
         Self {
             client_id: "test-client-id".into(),
             client_secret: "test-client-secret".into(),
             public_url: "http://localhost:5173".into(),
+            token_url: format!("{google_base}/token"),
+            userinfo_url: format!("{google_base}/userinfo"),
         }
     }
 
@@ -284,10 +354,6 @@ struct Error {
     error: String,
 }
 
-fn bad_request(message: &str) -> Response {
-    (StatusCode::BAD_REQUEST, Json(Error { error: message.into() })).into_response()
-}
-
 /// One named cookie out of the request, if it is there.
 ///
 /// Hand-parsed rather than through a cookie layer: one cookie is read and one is
@@ -388,6 +454,14 @@ pub async fn start(State(state): State<AppState>) -> Response {
     redirect(&url, None)
 }
 
+/// Back into the app, saying only which of the four things went wrong.
+///
+/// No cookie: a failed sign-in must not touch whatever session the browser already
+/// holds. Somebody signed in who then cancels a second sign-in stays signed in.
+fn auth_error(google: &Google, why: AuthError) -> Response {
+    redirect(&format!("{}/?auth_error={}", google.public_url, why.slug()), None)
+}
+
 /// What Google appends to the callback URL.
 #[derive(Debug, Deserialize)]
 pub struct Callback {
@@ -400,30 +474,43 @@ pub struct Callback {
 
 /// `GET /api/auth/google/callback` — finish the sign-in.
 ///
-/// Every failure before the session exists is a 4xx or 5xx with a body, not a
-/// redirect: a redirect to `/` would leave the user on a signed-out home page with no
-/// idea why. Only success redirects.
-pub async fn callback(
-    State(state): State<AppState>,
-    Query(query): Query<Callback>,
-) -> Response {
+/// **Every outcome is a 302 back into the app**, because this URL is a page-level
+/// navigation: a browser arrives here by following Google's redirect, so a JSON body
+/// would be rendered as the page and leave the user on a dead-end tab. Failures land on
+/// `/?auth_error=<slug>`, where the app can say what happened and offer the button
+/// again; success lands on `/` with the session cookie.
+///
+/// The slug is a fixed vocabulary of four — see `AuthError`. Nothing from Google and no
+/// internal detail is passed through it.
+pub async fn callback(State(state): State<AppState>, Query(query): Query<Callback>) -> Response {
     let Some(google) = state.google.as_ref() else {
-        return bad_request("google sign-in is not configured on this server");
+        // Only reachable by hand: with no credentials nothing can start a sign-in. Sent
+        // to a relative `/` because there is no `PUBLIC_URL` to build an absolute one
+        // from, and both environments serve the app and the API on one origin.
+        tracing::warn!("google sign-in: a callback arrived but sign-in is not configured");
+        return redirect(&format!("/?auth_error={}", AuthError::Failed.slug()), None);
     };
 
-    // The user declining is not an error worth a body full of detail, but it is not a
-    // sign-in either.
+    // Google says why it sent the browser back without a code. `access_denied` is the
+    // user pressing cancel, which is not an error so much as a decision.
     if let Some(error) = query.error.as_deref() {
-        tracing::info!(error, "google sign-in was not completed");
-        return bad_request("google sign-in was cancelled");
+        let why = if error == "access_denied" { AuthError::Cancelled } else { AuthError::Denied };
+        // Logged, not forwarded: the slug is the whole payload.
+        tracing::info!(error, slug = why.slug(), "google sign-in was not completed");
+        return auth_error(google, why);
     }
 
     let (Some(code), Some(csrf_state)) = (query.code, query.state) else {
-        return bad_request("the callback is missing its code or state");
+        // A callback with a piece missing is a stale or hand-edited URL. `expired`
+        // rather than `failed`, because "start again" is the advice either way.
+        tracing::warn!("google sign-in: a callback arrived without a code or a state");
+        return auth_error(google, AuthError::Expired);
     };
 
     // The CSRF check, before anything is exchanged or written. A mismatch means this
     // callback was not started by this server, so nothing about it is trustworthy.
+    // Still the one conditional DELETE, which is what makes forged, replayed and stale
+    // a single atomic question — only the answer's shape changed.
     let known = {
         let conn = state.db.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         db::consume_auth_state(&conn, &csrf_state)
@@ -432,11 +519,13 @@ pub async fn callback(
         Ok(true) => {}
         Ok(false) => {
             tracing::warn!("google sign-in: rejected a callback with an unknown state");
-            return bad_request("that sign-in has expired or did not start here");
+            return auth_error(google, AuthError::Expired);
         }
         Err(error) => {
+            // The database, not the state: nothing was proved either way, so this is
+            // ours to own rather than something the user should be told to retry from.
             tracing::error!(%error, "could not verify an auth state");
-            return bad_request("could not verify that sign-in");
+            return auth_error(google, AuthError::Failed);
         }
     }
 
@@ -445,11 +534,7 @@ pub async fn callback(
         Err(error) => {
             // The code and the token are deliberately absent from this line.
             tracing::warn!(%error, "google sign-in: could not read the profile");
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(Error { error: "google did not complete the sign-in".into() }),
-            )
-                .into_response();
+            return auth_error(google, AuthError::Failed);
         }
     };
 
@@ -463,11 +548,7 @@ pub async fn callback(
         Ok(account) => account,
         Err(error) => {
             tracing::error!(%error, "could not create an account or a session");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(Error { error: "could not finish signing you in".into() }),
-            )
-                .into_response();
+            return auth_error(google, AuthError::Failed);
         }
     };
 
@@ -537,7 +618,7 @@ async fn fetch_profile(google: &Google, code: &str) -> Result<db::GoogleAccount,
         .map_err(|error| format!("could not build an HTTP client: {error}"))?;
 
     let token: TokenResponse = client
-        .post(GOOGLE_TOKEN_URL)
+        .post(&google.token_url)
         .form(&[
             ("code", code),
             ("client_id", &google.client_id),
@@ -555,7 +636,7 @@ async fn fetch_profile(google: &Google, code: &str) -> Result<db::GoogleAccount,
         .map_err(|error| format!("the token response did not parse: {error}"))?;
 
     let info: UserInfo = client
-        .get(GOOGLE_USERINFO_URL)
+        .get(&google.userinfo_url)
         .bearer_auth(&token.access_token)
         .send()
         .await
@@ -737,9 +818,8 @@ mod tests {
     #[test]
     fn the_redirect_uri_and_the_cookie_follow_the_public_url() {
         let google = |public_url: &str| Google {
-            client_id: "id".into(),
-            client_secret: "secret".into(),
             public_url: public_url.trim_end_matches('/').to_string(),
+            ..Google::testing()
         };
 
         assert_eq!(

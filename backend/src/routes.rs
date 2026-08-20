@@ -118,9 +118,14 @@ fn write_failed(error: impl std::fmt::Display) -> Response {
 
 // --- Reads --------------------------------------------------------------------
 
-/// Whether the films on screen are real. The frontend's demo banner reads this.
+/// Whether the films on screen are real, and whether anybody can sign in. The demo
+/// banner and the sign-in button both read this.
+///
+/// The presence of the credentials, never the credentials: `Google` is mapped to a
+/// variant here and its fields are never reachable from outside `auth`.
 async fn status(State(state): State<AppState>) -> Json<Status> {
-    Json(content::status(&state.source))
+    let sign_in = state.google.as_ref().map(|_| SignIn::Google);
+    Json(content::status(&state.source, sign_in))
 }
 
 /// One page of the infinite feed, from Redis when it's there.
@@ -642,15 +647,77 @@ mod tests {
     /// Google configured but pointing nowhere, so the auth routes answer without a
     /// network call — every test below stops before the token exchange.
     fn app() -> (Router, AppState) {
+        app_with(Some(auth::Google::testing()))
+    }
+
+    /// The same, with the credentials decided by the caller — `None` for a server
+    /// where sign-in was never configured.
+    fn app_with(google: Option<auth::Google>) -> (Router, AppState) {
         let conn = db::open(":memory:").expect("in-memory database");
         db::seed_graph(&conn, &db::demo_graph()).expect("a seeded graph");
         let state = AppState::new(
             content::Source::Demo { reason: "testing".into() },
             std::sync::Arc::new(std::sync::Mutex::new(conn)),
             cache::Cache::disabled(),
-            Some(auth::Google::testing()),
+            google,
         );
         (router(state.clone()), state)
+    }
+
+    /// A stand-in for Google's two endpoints, on a port the OS picks.
+    ///
+    /// Enough to finish a sign-in: a token to present, and a profile to turn into an
+    /// account. It exists so the success path — the exchange, the account, the session,
+    /// the cookie, the redirect — is covered by something other than reading the code.
+    async fn fake_google() -> String {
+        let google = Router::new()
+            .route(
+                "/token",
+                post(|| async {
+                    Json(serde_json::json!({ "access_token": "an-access-token" }))
+                }),
+            )
+            .route(
+                "/userinfo",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "sub": "1001",
+                        "email": "sam.okonkwo@example.com",
+                        "name": "Sam Okonkwo",
+                        "picture": "https://cdn.test/sam.jpg",
+                    }))
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("a free port");
+        let address = listener.local_addr().expect("an address");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, google).await;
+        });
+        format!("http://{address}")
+    }
+
+    /// Walk a whole sign-in: start it, then hand the callback the state it issued.
+    ///
+    /// Returns the callback's response, so a test can read the redirect and the cookie
+    /// off it.
+    async fn complete_sign_in(app: &Router) -> axum::http::Response<Body> {
+        let start = Request::builder().uri("/api/auth/google").body(Body::empty()).unwrap();
+        let consent = app.clone().oneshot(start).await.expect("a redirect");
+        let issued = consent
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|url| url.split("state=").nth(1))
+            .and_then(|rest| rest.split('&').next())
+            .expect("a state parameter")
+            .to_string();
+
+        let callback = Request::builder()
+            .uri(format!("/api/auth/google/callback?code=a-code&state={issued}"))
+            .body(Body::empty())
+            .unwrap();
+        app.clone().oneshot(callback).await.expect("a response")
     }
 
     /// Sign somebody in and hand back the cookie a browser would then send.
@@ -931,22 +998,33 @@ mod tests {
         assert_eq!(status, StatusCode::NO_CONTENT);
     }
 
+    /// Where a failed callback sends the browser.
+    ///
+    /// Every outcome of the callback is a 302, so a test reads the `Location` rather
+    /// than a status and a body.
+    async fn callback_location(app: &Router, query: &str) -> String {
+        let request = Request::builder()
+            .uri(format!("/api/auth/google/callback?{query}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.expect("a response");
+        assert_eq!(response.status(), StatusCode::FOUND, "the callback answered with a body");
+        // A failed sign-in must not touch a session the browser already holds.
+        assert!(
+            response.headers().get(header::SET_COOKIE).is_none(),
+            "a failed callback set a cookie"
+        );
+        response.headers().get(header::LOCATION).unwrap().to_str().unwrap().to_string()
+    }
+
     /// The CSRF check, over HTTP. A callback carrying a `state` this server never
     /// issued must be refused before anything is exchanged or written.
     #[tokio::test]
     async fn the_callback_refuses_a_state_it_did_not_issue() {
         let (app, state) = app();
 
-        let (status, body) = call(
-            &app,
-            Method::GET,
-            "/api/auth/google/callback?code=a-code&state=not-ours",
-            None,
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "a forged state was accepted");
-        assert!(body.contains("\"error\""));
+        let landed = callback_location(&app, "code=a-code&state=not-ours").await;
+        assert_eq!(landed, "http://localhost:5173/?auth_error=expired");
         // No session was created on the way past.
         let sessions: i64 = {
             let conn = state.db.lock().unwrap();
@@ -955,32 +1033,99 @@ mod tests {
         assert_eq!(sessions, 0);
 
         // A state that *was* issued but is presented twice is refused the second time,
-        // which is the replay case. The first attempt gets past the check and fails at
-        // the token exchange instead — a different status, which is the point.
+        // which is the replay case.
         {
             let conn = state.db.lock().unwrap();
             db::remember_auth_state(&conn, "ours").unwrap();
             assert!(db::consume_auth_state(&conn, "ours").unwrap());
         }
-        let (status, _) = call(
+        let landed = callback_location(&app, "code=a-code&state=ours").await;
+        assert!(landed.ends_with("?auth_error=expired"), "{landed}");
+    }
+
+    /// The four slugs, each from the thing that produces it. They are a contract with
+    /// the frontend, which renders a message per slug, so the spelling is the test.
+    #[tokio::test]
+    async fn every_callback_failure_names_itself_in_one_of_four_slugs() {
+        let (app, state) = app();
+
+        for (query, slug) in [
+            // The user pressed cancel at Google's consent screen.
+            ("error=access_denied", "cancelled"),
+            // Google refused for some reason of its own.
+            ("error=invalid_scope", "denied"),
+            ("error=admin_policy_enforced&error_description=nope", "denied"),
+            // A stale or hand-edited callback: no state to check, or one nobody issued.
+            ("code=a-code", "expired"),
+            ("state=only-a-state", "expired"),
+            ("code=a-code&state=never-issued", "expired"),
+        ] {
+            let landed = callback_location(&app, query).await;
+            assert_eq!(
+                landed,
+                format!("http://localhost:5173/?auth_error={slug}"),
+                "{query} landed on {landed}"
+            );
+        }
+
+        // `failed` is the exchange going wrong, which needs a state that really was
+        // issued. `Google::testing` points the token endpoint at a closed port, so the
+        // request is refused rather than reaching Google.
+        {
+            let conn = state.db.lock().unwrap();
+            db::remember_auth_state(&conn, "issued").unwrap();
+        }
+        let landed = callback_location(&app, "code=a-code&state=issued").await;
+        assert_eq!(landed, "http://localhost:5173/?auth_error=failed");
+        // And that state was spent on the way through, so a retry of the same URL is
+        // `expired` rather than another attempt at the exchange.
+        let landed = callback_location(&app, "code=a-code&state=issued").await;
+        assert!(landed.ends_with("?auth_error=expired"), "{landed}");
+
+        // Nothing was written by any of it.
+        let conn = state.db.lock().unwrap();
+        for table in ["sessions", "auth_states"] {
+            let rows: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(rows, 0, "{table} was left with something in it");
+        }
+        let accounts: i64 = conn
+            .query_row("SELECT COUNT(*) FROM people WHERE is_account = 1", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(accounts, 0, "a failed sign-in created an account");
+    }
+
+    /// A failed callback carries the slug and nothing else. A query parameter is
+    /// visible, shareable and logged by every proxy in between, so Google's own error
+    /// text and any internal detail stay out of it.
+    #[tokio::test]
+    async fn a_failed_callback_leaks_nothing_into_the_url() {
+        let (app, _) = app();
+
+        let landed = callback_location(
             &app,
-            Method::GET,
-            "/api/auth/google/callback?code=a-code&state=ours",
-            None,
-            None,
+            "error=server_error&error_description=Something%20internal%20broke\
+             &error_uri=https%3A%2F%2Fgoogle.test%2Fwhy\
+             &state=secret-state&code=secret-code",
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
 
-        // A callback with no state at all is refused too.
-        let (status, _) =
-            call(&app, Method::GET, "/api/auth/google/callback?code=a-code", None, None).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        // As is the user pressing cancel on the consent screen.
-        let (status, _) =
-            call(&app, Method::GET, "/api/auth/google/callback?error=access_denied", None, None)
-                .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(landed, "http://localhost:5173/?auth_error=denied");
+        for leaked in
+            ["Something", "internal", "google.test", "secret-state", "secret-code", "server_error"]
+        {
+            assert!(!landed.contains(leaked), "{leaked:?} reached the URL: {landed}");
+        }
+    }
+
+    /// On a server with no credentials a hand-typed callback still lands in the app
+    /// rather than on a JSON page. Relative, because there is no `PUBLIC_URL` to build
+    /// an absolute one from.
+    #[tokio::test]
+    async fn a_callback_without_credentials_still_lands_in_the_app() {
+        let (app, _) = app_with(None);
+        assert_eq!(callback_location(&app, "code=a-code&state=x").await, "/?auth_error=failed");
     }
 
     /// Starting a sign-in redirects to Google with a state it has stored, and that
@@ -1287,23 +1432,116 @@ mod tests {
         assert_eq!(page["comments"][0]["like_count"], serde_json::Value::Null);
     }
 
+    /// The flag a client reads instead of probing `/api/auth/google` on every press.
+    ///
+    /// Whether, never what: the client id appears in the consent URL but has no
+    /// business in a status payload, and the secret has no business anywhere.
+    #[tokio::test]
+    async fn the_status_says_whether_sign_in_is_available() {
+        let (app, _) = app();
+
+        let (status, body) = call(&app, Method::GET, "/api/status", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.contains("test-client-id") && !body.contains("test-client-secret"));
+
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["sign_in"], "google");
+        // Additive: the fields the demo banner already reads are untouched.
+        assert_eq!(body["data_source"], "demo");
+        assert!(body["message"].is_string());
+        assert!(body["docs_url"].is_string());
+    }
+
+    /// The whole flow, end to end against a stub Google: consent, exchange, profile,
+    /// account, session, cookie, and home.
+    ///
+    /// The one outcome that carries a cookie, and the one that lands on `/` with no
+    /// slug on it.
+    #[tokio::test]
+    async fn a_finished_sign_in_lands_home_with_the_cookie() {
+        let base = fake_google().await;
+        let (app, state) = app_with(Some(auth::Google::testing_at(&base)));
+
+        let response = complete_sign_in(&app).await;
+        assert_eq!(response.status(), StatusCode::FOUND);
+        let landed = response.headers().get(header::LOCATION).unwrap().to_str().unwrap();
+        assert_eq!(landed, "http://localhost:5173/");
+        assert!(!landed.contains("auth_error"), "a finished sign-in reported an error");
+
+        // The cookie, with every attribute that keeps it from being read or replayed.
+        let cookie = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .expect("a session cookie")
+            .to_str()
+            .unwrap()
+            .to_string();
+        for flag in ["cj_session=", "HttpOnly", "SameSite=Lax", "Path=/", "Max-Age="] {
+            assert!(cookie.contains(flag), "{flag} is missing from {cookie}");
+        }
+        // Plain-HTTP localhost, so no `Secure` — see `auth::Google::secure_cookie`.
+        assert!(!cookie.contains("Secure"));
+
+        // And it is a session that works, on the account Google described.
+        let token = cookie.split(';').next().unwrap().to_string();
+        let (status, me) = call(&app, Method::GET, "/api/auth/me", Some(&token), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let me: serde_json::Value = serde_json::from_str(&me).unwrap();
+        assert_eq!(me["name"], "Sam Okonkwo");
+        // The nickname comes from the email's local part, cleaned.
+        assert_eq!(me["handle"], "@samokonkwo");
+        assert_eq!(me["id"], "account-1001");
+        assert_eq!(me["avatar"]["src"], "https://cdn.test/sam.jpg");
+        // No email on the wire, even though Google sent one.
+        assert!(!me.as_object().unwrap().contains_key("email"));
+
+        // A write works now, which is the point of the whole exercise.
+        let (status, _) =
+            call(&app, Method::POST, "/api/movies/le-souffle/watchlist", Some(&token), None).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // The state was spent, so the same callback URL cannot be replayed into a
+        // second session.
+        let sessions: i64 = {
+            let conn = state.db.lock().unwrap();
+            conn.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0)).unwrap()
+        };
+        assert_eq!(sessions, 1);
+
+        // Signing in again finds the same account rather than making a second one.
+        let response = complete_sign_in(&app).await;
+        assert_eq!(response.status(), StatusCode::FOUND);
+        let conn = state.db.lock().unwrap();
+        let accounts: i64 = conn
+            .query_row("SELECT COUNT(*) FROM people WHERE is_account = 1", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(accounts, 1);
+        assert_eq!(
+            conn.query_row::<i64, _, _>("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+                .unwrap(),
+            2,
+            "a second browser gets a second session, not a replaced one"
+        );
+    }
+
     /// With no credentials the server still runs: reads work, writes 401, and the
     /// sign-in button gets a straight answer rather than a broken redirect.
     #[tokio::test]
     async fn without_google_credentials_sign_in_says_so() {
-        let conn = db::open(":memory:").unwrap();
-        db::seed_graph(&conn, &db::demo_graph()).unwrap();
-        let state = AppState::new(
-            content::Source::Demo { reason: "testing".into() },
-            std::sync::Arc::new(std::sync::Mutex::new(conn)),
-            cache::Cache::disabled(),
-            None,
-        );
-        let app = router(state);
+        let (app, _) = app_with(None);
 
         let (status, _) = call(&app, Method::GET, "/api/feed", None, None).await;
         assert_eq!(status, StatusCode::OK, "reads must survive having no sign-in");
 
+        // `/api/status` says so, which is how a client knows not to draw the button.
+        let (status, body) = call(&app, Method::GET, "/api/status", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["sign_in"], serde_json::Value::Null);
+
+        // Pressing it anyway is still a straight answer rather than a broken redirect.
+        // Deliberately a 503 and not a 302: a client that still probes this endpoint
+        // reads a 302 as "sign-in works".
         let (status, body) = call(&app, Method::GET, "/api/auth/google", None, None).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert!(body.contains("not configured"));

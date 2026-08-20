@@ -106,16 +106,21 @@ impl Source {
 }
 
 /// `GET /api/status` — whether what's on screen is real.
-pub fn status(source: &Source) -> Status {
+/// `sign_in` is passed in rather than read here: whether Google is configured is
+/// `auth`'s business, and this module is the seam over TMDB-vs-demo and nothing else.
+pub fn status(source: &Source, sign_in: Option<SignIn>) -> Status {
     const DOCS: &str = "https://www.themoviedb.org/settings/api";
     match source {
-        Source::Tmdb(_) => Status { data_source: DataSource::Tmdb, message: None, docs_url: DOCS },
+        Source::Tmdb(_) => {
+            Status { data_source: DataSource::Tmdb, message: None, docs_url: DOCS, sign_in }
+        }
         Source::Demo { reason } => Status {
             data_source: DataSource::Demo,
             message: Some(format!(
                 "{reason} Get a free API read access token from TMDB and put it in .env as TMDB_TOKEN."
             )),
             docs_url: DOCS,
+            sign_in,
         },
     }
 }
@@ -2500,11 +2505,22 @@ mod tests {
 
     #[test]
     fn the_status_message_only_appears_in_demo_mode() {
-        let demo = status(&Source::Demo { reason: "No TMDB_TOKEN is set.".into() });
+        let demo = status(&Source::Demo { reason: "No TMDB_TOKEN is set.".into() }, None);
         assert_eq!(demo.data_source, DataSource::Demo);
         let message = demo.message.expect("demo mode must explain itself");
         assert!(message.contains("No TMDB_TOKEN"));
         assert!(message.contains("TMDB_TOKEN"), "the message must name the variable to set");
+    }
+
+    /// Whether sign-in is available is a fact about the server, not about the films, so
+    /// it is reported the same way in both modes and passed straight through.
+    #[test]
+    fn the_status_reports_sign_in_independently_of_the_films() {
+        let demo = |sign_in| status(&Source::Demo { reason: "testing".into() }, sign_in);
+        assert_eq!(demo(None).sign_in, None);
+        assert_eq!(demo(Some(SignIn::Google)).sign_in, Some(SignIn::Google));
+        // And the demo banner is untouched by it either way.
+        assert!(demo(Some(SignIn::Google)).message.is_some());
     }
 
     #[test]

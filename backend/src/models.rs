@@ -964,12 +964,23 @@ pub enum DataSource {
     Demo,
 }
 
-/// `GET /api/status`. What the frontend needs to decide whether to warn the user
-/// that the films on screen are made up.
+/// How somebody can sign in, when they can.
 ///
-/// A separate endpoint rather than a field on all six payload types: it's one
-/// fact about the server, not about a screen, and the banner is rendered once by
-/// shared chrome. One extra request per page load, cheap and cacheable.
+/// An enum rather than a bare `bool`, so a second provider is a variant rather than a
+/// second flag and a client that only knows `"google"` keeps working. Serialized as the
+/// bare string `"google"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignIn {
+    Google,
+}
+
+/// `GET /api/status`. The two facts about the server a client needs before it draws
+/// any chrome: whether the films are real, and whether anybody can sign in.
+///
+/// A separate endpoint rather than a field on all six payload types: these are facts
+/// about the server, not about a screen, and the banner and the sign-in button are
+/// rendered once by shared chrome. One extra request per page load, cheap and cacheable.
 #[derive(Debug, Clone, Serialize)]
 pub struct Status {
     pub data_source: DataSource,
@@ -978,6 +989,13 @@ pub struct Status {
     pub message: Option<String>,
     /// Where to get a token. Always sent, so the copy lives in one place.
     pub docs_url: &'static str,
+    /// `"google"` when sign-in is configured, `null` when it is not.
+    ///
+    /// Whether, never what: the client id and the secret stay in the process. A client
+    /// used to learn this by asking `/api/auth/google` with `redirect: 'manual'` and
+    /// watching for a 302 or a 503, which spent a single-use CSRF row per press and
+    /// could not answer until the button was pressed.
+    pub sign_in: Option<SignIn>,
 }
 
 #[cfg(test)]
