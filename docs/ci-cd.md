@@ -41,17 +41,22 @@ npm ci && npm run typecheck && npm run test && npm run build
 
 ## How the API deploy works
 
-1. Build `backend/Dockerfile` for `linux/arm64` (context = repo root). Push to GHCR as
-   `sha-<short>` and `latest`.
-2. Write the SSH key and known_hosts from secrets.
-3. On the VM: `git fetch origin main && git reset --hard <sha>`, updating
+1. `build-image` builds `backend/Dockerfile` twice in parallel — `linux/amd64` on
+   `ubuntu-latest`, `linux/arm64` on `ubuntu-24.04-arm` (context = repo root). Each pushes
+   to GHCR **by digest, untagged**.
+2. `publish-image` combines both digests into one manifest list and attaches the tags
+   `sha-<short>` and `latest`. It refuses to publish if fewer than two digests arrived.
+3. Write the SSH key and known_hosts from secrets.
+4. On the VM: `git fetch origin main && git reset --hard <sha>`, updating
    `docker-compose.yml` and `Caddyfile`. Cannot touch `.env` (gitignored) or the database
    (Docker volume). Does discard hand-edits to tracked files.
-4. Log the VM in to GHCR with the run's `GITHUB_TOKEN`, piped over stdin. Nothing
+5. Write `.env` on the VM from `API_DOMAIN`, `ACME_EMAIL` and `TMDB_TOKEN`, over stdin.
+   Skipped if the first two are unset, which leaves a hand-made `.env` alone.
+6. Log the VM in to GHCR with the run's `GITHUB_TOKEN`, piped over stdin. Nothing
    long-lived is stored on the VM; the SSH key is the only standing credential.
-5. `docker compose pull`, then `up -d --remove-orphans --wait --wait-timeout 330`, with
+7. `docker compose pull`, then `up -d --remove-orphans --wait --wait-timeout 330`, with
    `API_TAG` set to the sha tag. `--wait` blocks until the compose healthcheck passes.
-6. Curl `API_HEALTH_URL`, then log the VM out of GHCR.
+8. Curl `API_HEALTH_URL`, then log the VM out of GHCR.
 
 Compose comes from the VM's git clone, not `scp`, so the clone stays clean and `git pull`
 keeps working. The VM needs `git` and repo read access.
@@ -208,11 +213,20 @@ Caddy on the same VM.
 
 ## Two choices
 
-**arm64 runner vs QEMU.** `deploy-api` uses `ubuntu-24.04-arm` — free for public repos, and
-native. The alternative is `ubuntu-latest` plus `docker/setup-qemu-action@v3`, which
-emulates rustc and turns a ~6 minute build into most of an hour. Switch `runs-on` and add
-that step if arm64 minutes are not on your plan. Layer caching (`type=gha`) only helps
-because `backend/Dockerfile` builds dependencies in a separate layer; keep it that way.
+**Native runners vs QEMU.** The image is built for both amd64 and arm64, each on its own
+native runner, then merged into a manifest list. One runner with
+`docker/setup-qemu-action@v3` would be simpler YAML but emulates rustc, turning a ~6
+minute build into most of an hour.
+
+Both arches are built because which shape you get on the Always Free tier isn't fully your
+choice: A1.Flex (arm64) is frequently out of capacity, and the fallback E2.1.Micro is
+amd64. A single-arch image on the wrong shape pulls successfully and then dies with
+`exec format error`, which looks like a corrupt binary rather than an architecture
+mismatch.
+
+Layer caching (`type=gha`) is scoped per arch — one shared scope would have each arch
+evicting the other's layers every run. It only helps at all because `backend/Dockerfile`
+builds dependencies in a layer the source doesn't invalidate; keep it that way.
 
 **Vercel CLI vs git integration.** The CLI is used so the frontend is gated on the same
 tests as the API, and so the bundle CI verified is the one that ships. The git integration

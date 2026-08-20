@@ -112,28 +112,39 @@ jobs:
   #
   # `needs:` alone is not enough — a PR run satisfies it. Hence the `if:` on both.
 
-  deploy-api:
-    name: Deploy API to Oracle Cloud
+  # Both architectures, because which one you get on the Always Free tier is not a
+  # choice you fully control: A1.Flex (arm64) is often out of capacity, and the fallback
+  # E2.1.Micro is amd64. A single-arch image on the wrong shape fails as
+  # `exec format error` after a successful pull, which reads as a corrupt binary.
+  #
+  # Each arch builds on its own native runner rather than one runner with QEMU.
+  # Emulating rustc plus rusqlite's bundled SQLite turns a ~6 minute build into most of
+  # an hour; native and in parallel, both finish in about the time one used to.
+  build-image:
+    name: Build ${{ matrix.arch }} image
     needs: [test-backend, test-frontend]
     if: >-
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    # Native arm64, free for public repos. The alternative is `ubuntu-latest` plus
-    # docker/setup-qemu-action@v3, which emulates rustc and turns a ~6 min build into
-    # most of an hour. See docs/ci-cd.md.
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       # Lets the run's own GITHUB_TOKEN push to GHCR. No PAT needed.
       packages: write
+    strategy:
+      # One arch failing shouldn't cancel the other — the logs of the survivor are
+      # usually what tells you whether the cause was arch-specific.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
     steps:
       - uses: actions/checkout@v4
-
-      # `latest` moves, so it can only say what is newest. The sha tag is what rollback
-      # needs.
-      - name: Name this build
-        id: build
-        run: echo "tag=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -146,21 +157,97 @@ jobs:
       # Context is the repo root, not backend/: the API serves /img from
       # ../reference/cine-journal/img, which a backend/ context cannot COPY.
       #
-      # The gha layer cache only helps if backend/Dockerfile builds dependencies in a
-      # layer the source doesn't invalidate (it does — see its dummy-main.rs step).
-      - name: Build and push the arm64 image
+      # Pushed by digest with no tag. Tagging here would have the two jobs race, each
+      # overwriting the other's tag with a single-arch image — the exact bug this job
+      # exists to fix. `publish-image` attaches the tags once both digests exist.
+      #
+      # The cache scope is per-arch. Sharing one scope would have each arch evicting the
+      # other's layers on every run.
+      - name: Build and push by digest
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: backend/Dockerfile
-          platforms: linux/arm64
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ steps.build.outputs.tag }}
-            ${{ env.IMAGE }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
           provenance: false
+
+      - name: Hand the digest to publish-image
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          printf '%s' '${{ steps.push.outputs.digest }}' > "/tmp/digests/${{ matrix.arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/${{ matrix.arch }}
+          retention-days: 1
+
+  # Turns the two per-arch digests into one manifest list, so `docker pull` resolves to
+  # whichever arch is asking. Until this runs the tags don't move, which means a failed
+  # build leaves the previous good image in place rather than a half-published one.
+  publish-image:
+    name: Publish the multi-arch tag
+    needs: build-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # `latest` moves, so it can only say what is newest. The sha tag is what rollback
+      # needs.
+      - name: Name this build
+        id: tag
+        run: echo "tag=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Create the manifest list
+        run: |
+          set -euo pipefail
+          refs=()
+          for f in /tmp/digests/*; do
+            refs+=("${IMAGE}@$(cat "$f")")
+          done
+          # Guard against publishing a one-arch manifest if a matrix leg was skipped:
+          # that would silently reintroduce the exec format error.
+          [ "${#refs[@]}" -eq 2 ] || { echo "::error::expected 2 arch digests, got ${#refs[@]} — refusing to publish a single-arch tag"; exit 1; }
+          docker buildx imagetools create \
+            -t "${IMAGE}:${{ steps.tag.outputs.tag }}" \
+            -t "${IMAGE}:latest" \
+            "${refs[@]}"
+          docker buildx imagetools inspect "${IMAGE}:${{ steps.tag.outputs.tag }}"
+
+  deploy-api:
+    name: Deploy API to Oracle Cloud
+    needs: publish-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      TAG: ${{ needs.publish-image.outputs.tag }}
+    steps:
 
       - name: Set up the SSH key
         env:
@@ -270,7 +357,6 @@ jobs:
           USER_NAME: ${{ secrets.OCI_USER }}
           PORT: ${{ vars.SSH_PORT || '22' }}
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH || 'cine-journal' }}
-          TAG: ${{ steps.build.outputs.tag }}
         run: |
           set -euo pipefail
           # Script on stdin via `bash -s`, so quoting is handled once.
@@ -357,7 +443,7 @@ jobs:
           {
             echo "### API"
             echo
-            echo "- image: \`${IMAGE}:${{ steps.build.outputs.tag }}\`"
+            echo "- image: \`${IMAGE}:${TAG}\`"
             echo "- commit: ${{ github.sha }}"
             echo "- roll back with: \`API_TAG=<previous-tag> docker compose up -d\` on the VM"
           } >> "$GITHUB_STEP_SUMMARY"
