@@ -190,8 +190,8 @@ docker compose pull            # see note
 docker compose up -d
 ```
 
-`.env` lives only on the VM. It is gitignored, so it is never committed and never
-arrives from a deploy — you create it once, by hand, here. A redeploy leaves it alone.
+`.env` is gitignored, so it is never committed. Do it by hand for the first run — you
+want to watch the logs once — then hand it to CI as below.
 
 | Variable | Required | Purpose |
 |---|---|---|
@@ -207,6 +207,31 @@ API_DOMAIN=cinema-nerd.duckdns.org
 ACME_EMAIL=you@example.com
 TMDB_TOKEN=eyJhbGciOi...
 ```
+
+### Let CI own .env instead
+
+Recommended once the first deploy works. Put the same three values in GitHub and every
+deploy writes `.env` on the VM for you:
+
+```bash
+gh variable set API_DOMAIN --body cinema-nerd.duckdns.org
+gh secret set ACME_EMAIL --body you@example.com
+gh secret set TMDB_TOKEN                              # prompts
+```
+
+Why bother: Oracle stops idle Always Free instances, and ARM capacity churns, so you
+will probably rebuild this VM at some point. A hand-made `.env` dies with it. With the
+config in GitHub, a fresh VM needs only Docker, `git clone`, and a deploy.
+
+Two things to know:
+
+- **Hand edits get overwritten.** Once these are set, each deploy rewrites `.env`.
+  Change the values in GitHub, not on the box.
+- **Keep your TMDB token somewhere else too.** GitHub secrets are write-only — you
+  cannot read one back, only replace it.
+
+If `API_DOMAIN` or `ACME_EMAIL` is unset the deploy skips the write and leaves your
+hand-made file alone, so the manual route keeps working.
 
 `API_DOMAIN` and `ACME_EMAIL` have no defaults — compose refuses to start without
 them. An empty `ACME_EMAIL` used to crash-loop Caddy with `wrong argument count`, so

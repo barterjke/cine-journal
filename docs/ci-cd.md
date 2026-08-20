@@ -66,6 +66,8 @@ Settings → Secrets and variables → Actions → Secrets.
 | `OCI_USER` | SSH login | `ubuntu` (Canonical) or `opc` (Oracle Linux) |
 | `OCI_SSH_KEY` | Private key, whole PEM including `BEGIN`/`END` | The `.key` file the OCI console gave you when you created the instance. Its `.pub` is already in the VM's `authorized_keys`. Or make a new pair with `ssh-keygen -t ed25519 -f deploy_key` and append the `.pub` yourself. |
 | `OCI_SSH_KNOWN_HOSTS` | VM host key | `ssh-keyscan -p 22 <ip>` |
+| `ACME_EMAIL` | Your email, for Let's Encrypt expiry warnings | Optional. Set it with `API_DOMAIN` and the deploy writes the VM's `.env`; leave both unset and it uses whatever `.env` is on the box. |
+| `TMDB_TOKEN` | TMDB v4 read access token | Optional. Only used when the deploy writes `.env`. Unset means demo mode plus a banner. |
 | `VERCEL_TOKEN` | API token | Vercel → Account Settings → Tokens |
 | `VERCEL_ORG_ID` | Account/team id | `.vercel/project.json` after `vercel link`, or Settings → General |
 | `VERCEL_PROJECT_ID` | Project id | Same file, or Project → Settings → General |
@@ -104,6 +106,7 @@ Settings → Secrets and variables → Actions → Variables. All optional.
 | Name | Default | Purpose |
 | --- | --- | --- |
 | `API_HEALTH_URL` | none | Public URL of `GET /api/health`. Set it — it is the only check on Caddy, DNS, the certificate and the firewalls. Unset means a warning and a pass. |
+| `API_DOMAIN` | none | The API's hostname. With the `ACME_EMAIL` secret, the deploy writes the VM's `.env` from these instead of you keeping it by hand. Either both or neither. |
 | `DEPLOY_PATH` | `cine-journal` | The VM's git clone, relative to the deploy user's home. Matches DEPLOY.md. |
 | `SSH_PORT` | `22` | Only if you moved sshd. |
 

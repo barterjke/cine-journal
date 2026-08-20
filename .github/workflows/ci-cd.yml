@@ -214,6 +214,41 @@ jobs:
           echo "checkout now at $(git rev-parse --short HEAD)"
           REMOTE
 
+      # Config lives in GitHub rather than by hand on the VM, so a rebuilt instance needs
+      # only `git clone` plus a deploy. Oracle stops idle Always Free instances and ARM
+      # capacity churns, so rebuilding is likely enough to plan for.
+      #
+      # Skipped entirely when API_DOMAIN or ACME_EMAIL is unset, which leaves a hand-made
+      # .env alone — that is still a supported way to run.
+      #
+      # The file content goes over stdin, never in the ssh command string: argv is visible
+      # in the VM's process list. `umask 077` so it lands 600, and write-then-rename so a
+      # dropped connection can't leave a half-written .env that compose would read.
+      - name: Write .env on the VM
+        env:
+          HOST: ${{ secrets.OCI_HOST }}
+          USER_NAME: ${{ secrets.OCI_USER }}
+          PORT: ${{ vars.SSH_PORT || '22' }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || 'cine-journal' }}
+          API_DOMAIN: ${{ vars.API_DOMAIN }}
+          ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
+          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${API_DOMAIN:-}" ] || [ -z "${ACME_EMAIL:-}" ]; then
+            echo "::notice::API_DOMAIN variable or ACME_EMAIL secret is unset — leaving the VM's own .env in place. See DEPLOY.md Part 3."
+            exit 0
+          fi
+          # Not fatal: no token is demo mode, which is a legitimate way to deploy.
+          if [ -z "${TMDB_TOKEN:-}" ]; then
+            echo "::warning::TMDB_TOKEN is unset — the API will serve the invented dataset behind a banner."
+          fi
+          printf 'API_DOMAIN=%s\nACME_EMAIL=%s\nTMDB_TOKEN=%s\n' \
+            "$API_DOMAIN" "$ACME_EMAIL" "${TMDB_TOKEN:-}" |
+            ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                -o ConnectTimeout=15 -p "$PORT" "$USER_NAME@$HOST" \
+                "cd '$DEPLOY_PATH' && umask 077 && cat > .env.new && mv .env.new .env && echo 'wrote .env'"
+
       # The token goes over stdin, so it never appears in the VM's process list, and it
       # expires when this job ends. Nothing long-lived is stored on the box.
       - name: Log the VM in to GHCR
@@ -259,7 +294,7 @@ jobs:
           elif [ -f .env ]; then
             echo "--- using .env"
           else
-            echo "::error::neither .env.deploy nor .env exists in $PWD, so API_DOMAIN and TMDB_TOKEN are unset and compose will refuse to start. See DEPLOY.md Part 3."
+            echo "::error::neither .env.deploy nor .env exists in $PWD, so API_DOMAIN is unset and compose will refuse to start. Set the API_DOMAIN variable and the ACME_EMAIL secret so the deploy writes it, or create it by hand — see DEPLOY.md Part 3."
             exit 1
           fi
 
