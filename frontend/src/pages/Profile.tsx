@@ -32,6 +32,7 @@ import {
   SignOutButton,
   TopAppBar,
 } from '../components/Chrome'
+import { reviewPath } from '../components/People'
 import { Empty, PosterRow, ProfileHeader, Tile } from '../components/ProfileParts'
 import { Poster } from '../components/PosterTile'
 import { StarRating } from '../components/StarRating'
@@ -82,17 +83,28 @@ function ReviewMeta({ film }: { film: RatedFilm }) {
  * film's synopsis blurb: a card headed "Recent Reviews" printing the studio's own
  * copy underneath was the thing that made it not one.
  *
+ * The row opens the review, not the film. Both used to lead to `/movie/{id}`, which
+ * meant your own writing was the one thing on the site you could not open: no full
+ * text, no likes, no replies. A score with no prose keeps the old target, because
+ * there is nothing behind it to read — see `RatedFilm.review_id`.
+ *
+ * The poster and the title are two links rather than one anchor around the whole row.
+ * `Person` wrapped a row that way and the posters inside it stopped being links at
+ * all: an `<a>` inside an `<a>` is invalid HTML and the browser un-nests it. The stars
+ * and the meta line stay outside both — a date is not somewhere to go.
+ *
  * The thumbnail goes through the shared `Poster`, so a film whose artwork the API
  * couldn't resolve gets the same placeholder it gets everywhere else instead of an
  * `<img>` with nothing behind it.
  */
 function ReviewRow({ film }: { film: RatedFilm }) {
   const excerpt = film.body ?? film.blurb
+  const to = film.review_id === null ? `/movie/${film.id}` : reviewPath(film.review_id)
 
   return (
     <div className="flex items-start gap-md">
       <Link
-        to={`/movie/${film.id}`}
+        to={to}
         title={film.title}
         className="block w-16 shrink-0 aspect-[2/3] rounded-lg overflow-hidden bg-surface-container inner-stroke hover:opacity-80 transition-opacity"
       >
@@ -101,7 +113,7 @@ function ReviewRow({ film }: { film: RatedFilm }) {
       <div className="flex flex-col gap-xs min-w-0 flex-grow">
         <div className="flex items-baseline justify-between gap-sm">
           <Link
-            to={`/movie/${film.id}`}
+            to={to}
             className="font-body-md text-body-md font-bold text-on-background truncate hover:text-primary transition-colors"
           >
             {film.title}
@@ -115,7 +127,7 @@ function ReviewRow({ film }: { film: RatedFilm }) {
             />
           )}
         </div>
-        {/* `line-clamp-2` for your own words: the row links to the film, where the
+        {/* `line-clamp-2` for your own words: the row links to the review, where the
             whole thing is, but a review clipped to one line is usually clipped
             mid-clause. */}
         {excerpt !== null && (

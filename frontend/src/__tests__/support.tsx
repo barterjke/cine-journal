@@ -282,6 +282,9 @@ export function aComment(overrides: Partial<Comment> = {}): Comment {
  * The boring case is the complete one: scored, written, with artwork, a date and a
  * like. All three of the last fields are nullable in the API, so the cases a test
  * overrides to are `poster: null`, `written_on: null` and `like_count: null`.
+ *
+ * `review_id` is set, because the default row has prose behind it. The other case is
+ * a score nobody wrote anything for: `review_id: null` with `like_count: null`.
  */
 export function aRatedFilm(overrides: Partial<RatedFilm> = {}): RatedFilm {
   return {
@@ -293,6 +296,7 @@ export function aRatedFilm(overrides: Partial<RatedFilm> = {}): RatedFilm {
     poster: anImage('Mirror poster'),
     written_on: 'Oct 12',
     like_count: 3,
+    review_id: 'me-mirror',
     ...overrides,
   }
 }

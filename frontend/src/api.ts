@@ -505,11 +505,13 @@ export interface FollowState {
 /**
  * One entry in the visitor's journal: a rating, a written review, or both.
  *
- * `id` is the film's, so a row links to `/movie/{id}`.
+ * Two addresses, not one. `id` is the film's; `review_id` is the review's, and that
+ * is the one a row opens. A row that led to the film left you no way to read, like or
+ * reply to your own entry.
  *
- * The last three fields are all nullable, and a row has to read correctly with any
- * of them missing. Absent means absent: no thumbnail frame of its own, no date, and
- * no "0" beside a heart nobody has pressed.
+ * The nullable fields all have to read correctly when absent. Absent means absent:
+ * no thumbnail frame of its own, no date, and no "0" beside a heart nobody has
+ * pressed.
  */
 export interface RatedFilm {
   id: string
@@ -531,6 +533,17 @@ export interface RatedFilm {
   written_on: string | null
   /** How many people liked the review. `null` for none — never `0`. */
   like_count: number | null
+  /**
+   * The review this row opens — the id `api.review` takes.
+   *
+   * Sent by the server rather than built here, because the format of the id is the
+   * server's business. Pass it to `reviewPath` and nothing else.
+   *
+   * `null` for a score with no prose: there is no review to read, so the row opens
+   * the film instead. `like_count` is `null` in exactly those cases, so a row that
+   * offers a count always offers somewhere to go.
+   */
+  review_id: string | null
 }
 
 export interface Profile {

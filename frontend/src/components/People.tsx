@@ -25,6 +25,17 @@ export function personPath(handle: string): string {
 }
 
 /**
+ * Where one review lives, given its id.
+ *
+ * A function like `personPath` rather than the path spelled out at each call site.
+ * Three screens link here now — the feed's cards, a person's page, and your own
+ * journal rows — and the route is what they have to agree about.
+ */
+export function reviewPath(id: string): string {
+  return `/review/${id}`
+}
+
+/**
  * What to call the author of a comment or a reply.
  *
  * The server always sends the real name, so "You" is derived here. Shared by both
@@ -229,7 +240,7 @@ export function ReviewCard({ review, showFilm = false }: { review: UserReview; s
             only the rest of the text, it's where the likes and the conversation
             are. Without it a clamped review was a dead end. */}
         <Link
-          to={`/review/${review.id}`}
+          to={reviewPath(review.id)}
           className="font-label-sm text-label-sm text-primary uppercase tracking-widest hover:opacity-70 transition-opacity self-start"
         >
           Read full review →

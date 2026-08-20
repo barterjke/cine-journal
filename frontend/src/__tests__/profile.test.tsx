@@ -53,6 +53,16 @@ async function card(heading: string): Promise<HTMLElement> {
   return section
 }
 
+/**
+ * Every address a card links to.
+ *
+ * For the cases about where a row goes, which are as much about the link that should
+ * *not* be there — the whole bug was a review row leading to the film instead.
+ */
+function hrefs(root: HTMLElement): (string | null)[] {
+  return [...root.querySelectorAll('a')].map((link) => link.getAttribute('href'))
+}
+
 describe('the profile page with nobody signed in', () => {
   it('prompts for a sign in instead of reporting a failed request', async () => {
     vi.mocked(api.me).mockRejectedValue(anAuthFailure('GET', '/api/auth/me'))
@@ -165,6 +175,76 @@ describe('a row in the recent reviews card', () => {
     // behind it — a missing poster looks the same here as everywhere else.
     expect(within(reviews).getByRole('img', { name: 'No poster available' })).toBeInTheDocument()
     expect(reviews.querySelectorAll('img')).toHaveLength(0)
+  })
+})
+
+/**
+ * Where a journal row goes.
+ *
+ * It used to go to the film, both from the thumbnail and from the title, which left
+ * your own writing as the one thing on the site you could not open — no full text, no
+ * like, no reply. The review page already did all three; nothing linked to it.
+ */
+describe('the links on a recent review row', () => {
+  it('opens the review, where the whole text and the replies are', async () => {
+    show(aProfile({ recent_reviews: [aRatedFilm({ review_id: 'me-mirror' })] }))
+
+    const reviews = await card('Recent Reviews')
+    expect(within(reviews).getByRole('link', { name: 'Mirror' })).toHaveAttribute(
+      'href',
+      '/review/me-mirror',
+    )
+    // The bug, stated: no link on the row leads to the film any more.
+    expect(hrefs(reviews)).not.toContain('/movie/mirror')
+  })
+
+  it('still opens the film for a score with no prose behind it', async () => {
+    show(
+      aProfile({
+        recent_reviews: [
+          aRatedFilm({
+            review_id: null,
+            body: null,
+            blurb: 'A man sifts through his own memory.',
+            like_count: null,
+          }),
+        ],
+      }),
+    )
+
+    const reviews = await card('Recent Reviews')
+    // Nothing was written, so there is no review to read. The film is all there is.
+    expect(within(reviews).getByRole('link', { name: 'Mirror' })).toHaveAttribute(
+      'href',
+      '/movie/mirror',
+    )
+    expect(hrefs(reviews).some((href) => href?.startsWith('/review/'))).toBe(false)
+  })
+
+  it('links the poster and the title separately, not the row as one anchor', async () => {
+    show()
+
+    const reviews = await card('Recent Reviews')
+    const poster = within(reviews).getByAltText('Mirror poster').closest('a')
+    const title = within(reviews).getByRole('link', { name: 'Mirror' })
+
+    // `Person` wrapped a whole row in one `<a>`, and the posters inside it stopped
+    // being links at all — an `<a>` inside an `<a>` is invalid HTML the browser
+    // un-nests. Two anchors, neither inside the other.
+    expect(poster).toHaveAttribute('href', '/review/me-mirror')
+    expect(title).toHaveAttribute('href', '/review/me-mirror')
+    expect(poster?.contains(title)).toBe(false)
+    expect(title.contains(poster)).toBe(false)
+  })
+
+  it('leaves the stars, the date and the like count outside the link', async () => {
+    show(aProfile({ recent_reviews: [aRatedFilm({ written_on: 'Oct 12', like_count: 3 })] }))
+
+    const reviews = await card('Recent Reviews')
+    // A date is not somewhere to go, and neither is a count or a rating.
+    expect(within(reviews).getByText('Oct 12').closest('a')).toBeNull()
+    expect(within(reviews).getByText('3').closest('a')).toBeNull()
+    expect(within(reviews).getByText('star_half').closest('a')).toBeNull()
   })
 })
 
