@@ -3,7 +3,7 @@
  * what they mean to watch, and everything they've reviewed.
  *
  * Built from the same `ProfileParts` your own profile is, and deliberately in the
- * same order — header, two poster strips, then the long lists. Someone else's page
+ * same order — header, two poster rows, then the long lists. Someone else's page
  * should be the same kind of page as yours, and it used to be reviews and nothing
  * else, which made a friend's page look like a comment history.
  *
@@ -30,7 +30,7 @@ import {
   TopAppBar,
 } from '../components/Chrome'
 import { FollowButton, FollowsYouBadge, ReviewCard } from '../components/People'
-import { PosterStrip, ProfileHeader, SectionHeading, Tile } from '../components/ProfileParts'
+import { PosterRow, ProfileHeader, SectionHeading, Tile } from '../components/ProfileParts'
 import { collectionPath } from './Collection'
 import { Link, useParams } from 'react-router-dom'
 
@@ -63,24 +63,23 @@ function Body({
         }
       />
 
-      {/* The same two tiles your own profile opens with, linking to the same collection
+      {/* The same two cards your own profile opens with, linking to the same collection
           page with their nickname on it. They used to scroll to full copies of
-          themselves further down, so every film on this page appeared twice. */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
-        <Tile label="Favorite Films" to={collectionPath('favorites', data.handle)}>
-          <PosterStrip
+          themselves further down, so every film on this page appeared twice.
+
+          `items-start` so a card with one poster isn't drawn as tall as the card
+          beside it — see the note in `Profile`. */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-md items-start">
+        <Tile label="Favorite Films" to={collectionPath('favorites', data.handle)} viewAll>
+          <PosterRow
             films={data.favorites}
-            linked={false}
+            captioned
             empty={`${first} hasn’t raved about anything yet.`}
           />
         </Tile>
 
-        <Tile label="Watchlist" to={collectionPath('watchlist', data.handle)}>
-          <PosterStrip
-            films={data.watchlist}
-            linked={false}
-            empty={`${first}’s watchlist is empty.`}
-          />
+        <Tile label="Watchlist" to={collectionPath('watchlist', data.handle)} viewAll>
+          <PosterRow films={data.watchlist} empty={`${first}’s watchlist is empty.`} />
         </Tile>
       </div>
 

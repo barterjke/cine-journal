@@ -502,7 +502,15 @@ export interface FollowState {
   following_count: number
 }
 
-/** One entry in the visitor's journal: a rating, a written review, or both. */
+/**
+ * One entry in the visitor's journal: a rating, a written review, or both.
+ *
+ * `id` is the film's, so a row links to `/movie/{id}`.
+ *
+ * The last three fields are all nullable, and a row has to read correctly with any
+ * of them missing. Absent means absent: no thumbnail frame of its own, no date, and
+ * no "0" beside a heart nobody has pressed.
+ */
 export interface RatedFilm {
   id: string
   title: string
@@ -512,6 +520,17 @@ export interface RatedFilm {
   body: string | null
   /** The film's own first sentence, sent only when `body` is null. */
   blurb: string | null
+  /**
+   * The film's artwork for the row's thumbnail.
+   *
+   * `null` for a film with no poster, and for one the active source can no longer
+   * resolve. Drawn through `Poster`, so either case gets the standard placeholder.
+   */
+  poster: Image | null
+  /** Pre-formatted and short, e.g. "Oct 12". `null` when no date was stored. */
+  written_on: string | null
+  /** How many people liked the review. `null` for none — never `0`. */
+  like_count: number | null
 }
 
 export interface Profile {

@@ -15,12 +15,15 @@ import { vi } from 'vitest'
 import type {
   Collection,
   Comment,
+  FollowedPerson,
   Image,
   Movie,
   MovieDetail,
   PeopleResponse,
   PersonCard,
   PersonProfile,
+  Profile,
+  RatedFilm,
   Reply,
   Review,
   SearchResponse,
@@ -269,6 +272,66 @@ export function aComment(overrides: Partial<Comment> = {}): Comment {
     like_count: null,
     replies: [],
     liked: false,
+    ...overrides,
+  }
+}
+
+/**
+ * One row of the visitor's journal, as the "Recent Reviews" card draws it.
+ *
+ * The boring case is the complete one: scored, written, with artwork, a date and a
+ * like. All three of the last fields are nullable in the API, so the cases a test
+ * overrides to are `poster: null`, `written_on: null` and `like_count: null`.
+ */
+export function aRatedFilm(overrides: Partial<RatedFilm> = {}): RatedFilm {
+  return {
+    id: 'mirror',
+    title: 'Mirror',
+    rating_half_stars: 9,
+    body: 'A cold film that stays warm in the memory.',
+    blurb: null,
+    poster: anImage('Mirror poster'),
+    written_on: 'Oct 12',
+    like_count: 3,
+    ...overrides,
+  }
+}
+
+/**
+ * Somebody the visitor follows, as a Following chip draws them.
+ *
+ * Two words, because the chip abbreviates the surname to an initial and the case
+ * that has to keep working is the one-word name — override `name` for that.
+ */
+export function aFollowedPerson(overrides: Partial<FollowedPerson> = {}): FollowedPerson {
+  return {
+    id: '1136406',
+    name: 'Sarah Jennings',
+    avatar: anImage('Portrait of Sarah'),
+    subtitle: '5 films reviewed · generous ratings',
+    handle: '@sarah',
+    ...overrides,
+  }
+}
+
+/**
+ * The visitor's own page: one of everything.
+ *
+ * A fuller or emptier profile is a matter of overriding the four lists, which is
+ * what the layout cases do — the page has to look deliberate at both ends.
+ */
+export function aProfile(overrides: Partial<Profile> = {}): Profile {
+  return {
+    name: 'Sam Reyes',
+    handle: '@sam',
+    avatar: anImage('Portrait of Sam'),
+    member_since: 'Cinephile since 2026',
+    bio: 'Amateur critic, full-time dreamer.',
+    favorites: [aMovie()],
+    watchlist: [aMovie({ id: 'stalker', title: 'Stalker', poster: anImage('Stalker poster') })],
+    recent_reviews: [aRatedFilm()],
+    following: [aFollowedPerson()],
+    following_count: 1,
     ...overrides,
   }
 }
