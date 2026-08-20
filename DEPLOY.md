@@ -196,7 +196,7 @@ want to watch the logs once — then hand it to CI as below.
 | Variable | Required | Purpose |
 |---|---|---|
 | `API_DOMAIN` | yes | Your hostname from Part 2, e.g. `cinema-nerd.duckdns.org`. Caddy gets its cert for this. No `https://`, no trailing slash. |
-| `ACME_EMAIL` | yes | Your own email. Let's Encrypt mails it if renewal starts failing. |
+| `ACME_EMAIL` | yes | **A real address of yours.** Let's Encrypt rejects `example.com`, `test.com` and friends with `invalidContact`, and Caddy then falls back to a different certificate authority — so the failure shows up as "no HTTPS" rather than "bad email". |
 | `TMDB_TOKEN` | no | v4 read access token. Empty = fake data + banner. |
 | `API_TAG` | no | Image tag. Defaults to `latest`. Used for rollback. |
 
@@ -204,9 +204,14 @@ So a filled-in `.env` is three lines:
 
 ```
 API_DOMAIN=cinema-nerd.duckdns.org
-ACME_EMAIL=you@example.com
+ACME_EMAIL=your.real.address@gmail.com
 TMDB_TOKEN=eyJhbGciOi...
 ```
+
+Do not leave `ACME_EMAIL` as an `@example.com` address. Let's Encrypt returns
+`invalidContact - contact email has forbidden domain`, Caddy silently tries another
+certificate authority instead, and the symptom you see is a site that never comes up —
+nothing that mentions email. `docker compose logs caddy` is where it says so.
 
 ### Let CI own .env instead
 
@@ -215,7 +220,7 @@ deploy writes `.env` on the VM for you:
 
 ```bash
 gh variable set API_DOMAIN --body cinema-nerd.duckdns.org
-gh secret set ACME_EMAIL --body you@example.com
+gh secret set ACME_EMAIL --body your.real.address@gmail.com
 gh secret set TMDB_TOKEN                              # prompts
 ```
 
