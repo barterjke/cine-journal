@@ -226,7 +226,12 @@ pub struct Review {
     pub watched_on: String,
     /// `null` for prose written without a score — see `UserReview`.
     pub rating_half_stars: Option<u8>,
-    /// One string per rendered `<p>`.
+    /// One string per rendered `<p>`, and **empty for a rating with nothing written**.
+    ///
+    /// A score on its own is a review here, with a page of its own that can be liked and
+    /// replied to, so this page has to render without prose. Empty rather than a
+    /// server-invented sentence: the score is the content and the wording is the
+    /// frontend's.
     pub paragraphs: Vec<String>,
     /// How many people have liked this review, or `null` for none.
     ///
@@ -787,7 +792,13 @@ pub struct UserReview {
     /// are separate acts here, and `0` would draw five empty stars and read as a
     /// one-star-out-of-five verdict. Same shape `RatedFilm` already uses.
     pub rating_half_stars: Option<u8>,
-    pub body: String,
+    /// What they wrote, or `null` for a rating they wrote nothing about.
+    ///
+    /// **A review is a rating, or text, or both**, so at least one of this and
+    /// `rating_half_stars` is always set and either can be absent. A score on its own is
+    /// a post: the frontend supplies the wording ("rated this 5"), because the server
+    /// inventing prose nobody typed would put words in somebody's mouth.
+    pub body: Option<String>,
     /// "12 November 2014", pre-formatted as everywhere else in this file.
     pub written_on: String,
 }
@@ -890,8 +901,10 @@ pub struct RatedFilm {
     ///
     /// A real total, as on `Review` and `Comment`. `null` at zero rather than `0`, so
     /// the row draws no number until somebody presses the button — see
-    /// `hydrate::like_count`. Always `null` when `review_id` is, since there is no
-    /// review there to like.
+    /// `hydrate::like_count`.
+    ///
+    /// No longer gated on there being prose: every journal entry is a review with a page
+    /// now, so every one of them can be liked.
     pub like_count: Option<u32>,
     /// Where the review lives: the id `GET /api/reviews/{id}` takes.
     ///
@@ -903,10 +916,9 @@ pub struct RatedFilm {
     /// The same id the film's review list and the feeds carry for that review, minted by
     /// `db::review_id`. One definition, so a card and the page it opens cannot disagree.
     ///
-    /// `null` for a score with nothing written: there is no review to open. `like_count`
-    /// is `null` in exactly the same cases, so a row that offers a count always offers
-    /// somewhere to go.
-    pub review_id: Option<String>,
+    /// Always present. It was optional while a rating with nothing written was not a
+    /// review; it is one now, so every row on this tile has somewhere to go.
+    pub review_id: String,
 }
 
 /// `GET /api/profile` — the signed-in user's whole profile screen in one request.

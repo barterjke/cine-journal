@@ -198,7 +198,9 @@ const ANONYMOUS: &str = "anon";
 /// sharing the server (a local Redis is usually shared), and the version is bumped by
 /// hand when the payload shape changes — belt to `get`'s braces, since it retires old
 /// entries immediately rather than letting them expire unread. It went to v2 when the
-/// user id joined the key, so no v1 entry can be read as one of these.
+/// user id joined the key, and v3 when a review's `body` became nullable — a rating with
+/// nothing written is a review now, so a cached page from before that cannot be read as
+/// one of these.
 ///
 /// **The user id is the load-bearing part.** A feed is built from whom you follow and
 /// what you have logged, so two accounts asking for the same cursor want two
@@ -208,8 +210,8 @@ const ANONYMOUS: &str = "anon";
 pub fn feed_key(user: Option<&str>, cursor: Option<&str>) -> String {
     let user = user.unwrap_or(ANONYMOUS);
     match cursor {
-        None => format!("cinejournal:v2:feed:{user}:head"),
-        Some(cursor) => format!("cinejournal:v2:feed:{user}:{cursor}"),
+        None => format!("cinejournal:v3:feed:{user}:head"),
+        Some(cursor) => format!("cinejournal:v3:feed:{user}:{cursor}"),
     }
 }
 

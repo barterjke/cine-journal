@@ -1229,6 +1229,112 @@ mod tests {
         }
     }
 
+    /// A score with nothing written is a post: a friend can open it, like it and reply
+    /// to it, exactly as they can a written review.
+    ///
+    /// The whole point of the decision — "i want your friends be able to engage with your
+    /// score too". Before this a rating had no page at all.
+    #[tokio::test]
+    async fn a_friend_can_engage_with_a_rating_that_has_no_prose() {
+        let (app, state) = app();
+        let sam = sign_in(&state, "1001", "sam");
+        let ada = sign_in(&state, "2002", "ada");
+
+        // Ada follows Sam. Sam rates a film and writes nothing.
+        let (status, _) =
+            call(&app, Method::POST, "/api/people/account-1001/follow", Some(&ada), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = call(
+            &app,
+            Method::PUT,
+            "/api/movies/le-souffle/rating",
+            Some(&sam),
+            Some(r#"{"rating_half_stars":10}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // It is on Sam's public page, with a score and no text.
+        let (_, page) = call(&app, Method::GET, "/api/people/sam", Some(&ada), None).await;
+        let page: serde_json::Value = serde_json::from_str(&page).unwrap();
+        assert_eq!(page["review_count"], 1, "a rating did not count as a review");
+        let listed = &page["reviews"][0];
+        assert_eq!(listed["rating_half_stars"], 10);
+        assert_eq!(listed["body"], serde_json::Value::Null, "prose was invented");
+        let id = listed["id"].as_str().expect("a review id").to_string();
+
+        // And in Ada's feed, which is how she finds out about it at all.
+        let (_, feed) = call(&app, Method::GET, "/api/feed", Some(&ada), None).await;
+        let feed: serde_json::Value = serde_json::from_str(&feed).unwrap();
+        assert!(
+            feed["items"].as_array().unwrap().iter().any(|item| item["kind"] == "review"
+                && item["author_id"] == "account-1001"
+                && item["id"] == id.as_str()),
+            "a rating never reached the follower's feed"
+        );
+
+        // The page opens for her, with no paragraphs to read.
+        let review = format!("/api/reviews/{id}");
+        let (status, opened) = call(&app, Method::GET, &review, Some(&ada), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let opened: serde_json::Value = serde_json::from_str(&opened).unwrap();
+        assert_eq!(opened["rating_half_stars"], 10);
+        assert_eq!(opened["paragraphs"].as_array().unwrap().len(), 0);
+        assert_eq!(opened["author_handle"], "@sam");
+
+        // She likes it, and the count is real.
+        let (status, liked) =
+            call(&app, Method::POST, &format!("{review}/like"), Some(&ada), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let liked: serde_json::Value = serde_json::from_str(&liked).unwrap();
+        assert_eq!((liked["liked"].as_bool(), liked["like_count"].as_u64()), (Some(true), Some(1)));
+
+        // And she comments on it — "wow, i liked this too!".
+        let (status, after) = call(
+            &app,
+            Method::POST,
+            &format!("{review}/comments"),
+            Some(&ada),
+            Some(r#"{"body":"Wow, I liked this too!"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let after: serde_json::Value = serde_json::from_str(&after).unwrap();
+        let comments = after["comments"].as_array().unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0]["body"], "Wow, I liked this too!");
+        assert_eq!(comments[0]["author_handle"], "@ada");
+
+        // Sam sees her comment and the like on his own review, from his own profile row.
+        let (_, profile) = call(&app, Method::GET, "/api/profile", Some(&sam), None).await;
+        let profile: serde_json::Value = serde_json::from_str(&profile).unwrap();
+        let row = &profile["recent_reviews"][0];
+        assert_eq!(row["review_id"], id.as_str(), "the profile row cannot open its own review");
+        assert_eq!(row["like_count"], 1);
+        assert_eq!(row["body"], serde_json::Value::Null);
+
+        // Sam can reply to her, on a review with no prose of its own.
+        let comment = comments[0]["id"].as_str().unwrap();
+        let (status, _) = call(
+            &app,
+            Method::POST,
+            &format!("{review}/comments/{comment}/replies"),
+            Some(&sam),
+            Some(r#"{"body":"Right?"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // A signed-out reader can follow all of it, and still not join in.
+        let (status, public) = call(&app, Method::GET, &review, None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        let public: serde_json::Value = serde_json::from_str(&public).unwrap();
+        assert_eq!(public["like_count"], 1);
+        assert_eq!(public["comments"][0]["replies"].as_array().unwrap().len(), 1);
+        let (status, _) = call(&app, Method::POST, &format!("{review}/like"), None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
     /// Prose with no score publishes as `null` rather than as zero stars, which would
     /// read as a one-out-of-five verdict.
     #[tokio::test]

@@ -1523,9 +1523,9 @@ async fn rated_films(source: &Source, user: &str, journal: &[db::JournalRow]) ->
         // same page the film's list and the feeds link to. There is only one definition
         // of a review's address, and this is not a second one.
         //
-        // `None` for a score with nothing written: there is no review to open. A
-        // `visitor_reviews` row is what makes a review exist — see `db::REVIEW_SOURCE`.
-        let review_id = row.body.is_some().then(|| db::review_id(user, &row.movie_id));
+        // Every journal entry has one. A rating with nothing written is a review too —
+        // see `db::review_source` — so there is always a page to open.
+        let review_id = db::review_id(user, &row.movie_id);
         out.push(RatedFilm {
             id: row.movie_id.clone(),
             title: detail
@@ -1542,13 +1542,7 @@ async fn rated_films(source: &Source, user: &str, journal: &[db::JournalRow]) ->
             },
             poster: detail.and_then(|detail| artwork(detail.poster)),
             written_on: row.written_at.as_deref().and_then(map::short_date),
-            // Gated on there being a review, so the two cannot disagree: a like left
-            // behind by prose that has since been deleted would otherwise report a
-            // count for a review this row says does not exist.
-            like_count: match review_id {
-                Some(_) => hydrate::like_count(row.like_count),
-                None => None,
-            },
+            like_count: hydrate::like_count(row.like_count),
             review_id,
         });
     }
@@ -1669,7 +1663,9 @@ async fn full_review(
             None => "Reviewed recently".into(),
         },
         rating_half_stars: row.half_stars,
-        paragraphs: map::paragraphs(&row.body),
+        // Empty for a rating with nothing written, rather than a sentence this server
+        // made up about somebody else's opinion.
+        paragraphs: row.body.as_deref().map(map::paragraphs).unwrap_or_default(),
         like_count: hydrate::like_count(likes),
         comments,
         // `hydrate::review` fills this in — it is the one field here that is about the
@@ -2536,7 +2532,7 @@ mod tests {
         assert_eq!(full.movie.id, "dune-part-two");
         // The prose, split into paragraphs rather than clamped to four lines.
         assert!(!full.paragraphs.is_empty());
-        assert_eq!(full.paragraphs.join(" "), card.body);
+        assert_eq!(Some(full.paragraphs.join(" ")), card.body);
 
         // And the guards the mutation handlers use agree with the lookup.
         assert!(review_exists(&db, &card.id));
@@ -2790,7 +2786,7 @@ mod tests {
             .into_iter()
             .find(|row| row.id == "le-souffle")
             .expect("the row");
-        let review_id = row.review_id.expect("a review to open");
+        let review_id = row.review_id;
 
         // The address really resolves — this is what `GET /api/reviews/{id}` does.
         let opened = review_by_id(&source, &db, Some(&me), &review_id)
@@ -2820,10 +2816,12 @@ mod tests {
         assert_eq!(review_id, db::review_id(&me, "le-souffle"));
     }
 
-    /// A score with nothing written has no review to open, and says so in both fields at
-    /// once — a row that offers a like count always offers somewhere to go.
+    /// A score with nothing written is a review too: it opens, and it can be liked.
+    ///
+    /// "I rated this 5" is a post. This used to have no `review_id` and a suppressed
+    /// like count, so there was nothing for a friend to engage with.
     #[tokio::test]
-    async fn a_score_with_no_prose_has_no_review_to_open() {
+    async fn a_score_with_no_prose_is_still_a_review() {
         let source = Source::Demo { reason: "testing".into() };
         let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
         let me = sign_in(&db);
@@ -2835,21 +2833,61 @@ mod tests {
         let row = profile(&source, &db, &me).await.unwrap().recent_reviews.remove(0);
         assert_eq!(row.id, "red-shift");
         assert_eq!(row.rating_half_stars, Some(7));
-        assert_eq!(row.review_id, None);
-        assert_eq!(row.like_count, None);
+        assert_eq!(row.body, None, "no prose was invented for it");
+        assert_eq!(row.review_id, db::review_id(&me, "red-shift"));
+        assert_eq!(row.like_count, None, "nobody has liked it yet");
 
-        // The two stay in step even when a like outlives the prose it was for: deleting
-        // a review leaves the `liked_reviews` row behind, and the count must not come
-        // back for a review the row says is not there.
+        // The page opens, with the score and no text.
+        let opened = review_by_id(&source, &db, Some(&me), &row.review_id)
+            .await
+            .expect("a rating-only review has a page");
+        assert_eq!(opened.rating_half_stars, Some(7));
+        assert!(opened.paragraphs.is_empty(), "prose was invented: {:?}", opened.paragraphs);
+
+        // And a like on it counts, where the old gate hid it.
         {
             let conn = lock(&db);
+            db::toggle_review_like(&conn, "account-2002", &row.review_id).unwrap();
+        }
+        let row = profile(&source, &db, &me).await.unwrap().recent_reviews.remove(0);
+        assert_eq!(row.like_count, Some(1));
+    }
+
+    /// A like survives the prose being deleted, because the rating is still a review.
+    ///
+    /// This is the case the old gate hid: it reported no count, on the reasoning that
+    /// there was nothing left to open. There is — the score.
+    #[tokio::test]
+    async fn a_like_survives_the_prose_being_deleted() {
+        let source = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+        let me = sign_in(&db);
+        let review = db::review_id(&me, "red-shift");
+        {
+            let conn = lock(&db);
+            db::set_rating(&conn, &me, "red-shift", 7).unwrap();
             db::set_user_review(&conn, &me, "red-shift", "Briefly.").unwrap();
-            db::toggle_review_like(&conn, &me, &db::review_id(&me, "red-shift")).unwrap();
+            db::toggle_review_like(&conn, "account-2002", &review).unwrap();
+        }
+        let row = profile(&source, &db, &me).await.unwrap().recent_reviews.remove(0);
+        assert_eq!(row.like_count, Some(1));
+        assert_eq!(row.body.as_deref(), Some("Briefly."));
+
+        {
+            let conn = lock(&db);
             db::set_user_review(&conn, &me, "red-shift", "").unwrap();
         }
         let row = profile(&source, &db, &me).await.unwrap().recent_reviews.remove(0);
-        assert_eq!(row.review_id, None, "the prose is gone, so there is nothing to open");
-        assert_eq!(row.like_count, None, "a count without a review to open");
+        assert_eq!(row.body, None, "the prose went");
+        assert_eq!(row.review_id, review, "the rating is still a review");
+        assert_eq!(row.like_count, Some(1), "the like was hidden with the prose");
+
+        // Clearing the score as well is what really removes the entry.
+        {
+            let conn = lock(&db);
+            db::set_rating(&conn, &me, "red-shift", 0).unwrap();
+        }
+        assert!(profile(&source, &db, &me).await.unwrap().recent_reviews.is_empty());
     }
 
     /// A review whose film the source can no longer resolve keeps its address. The prose
@@ -2874,7 +2912,7 @@ mod tests {
         let row = profile(&tmdb, &db, &me).await.unwrap().recent_reviews.remove(0);
         assert_eq!(row.poster, None);
         assert_eq!(row.body.as_deref(), Some("Words about a film that went."));
-        let review_id = row.review_id.expect("the review kept its address");
+        let review_id = row.review_id.clone();
         assert_eq!(review_id, db::review_id(&me, "le-souffle"));
 
         // The id names a review that is really there, whatever the film is doing.
@@ -2882,7 +2920,10 @@ mod tests {
             let conn = lock(&db);
             db::review_by_id(&conn, &me, &review_id).unwrap()
         };
-        assert_eq!(stored.expect("the stored review").body, "Words about a film that went.");
+        assert_eq!(
+            stored.expect("the stored review").body.as_deref(),
+            Some("Words about a film that went.")
+        );
 
         // And under a source that can resolve the film, the page opens at that same id.
         let demo = Source::Demo { reason: "testing".into() };

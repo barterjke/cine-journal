@@ -1293,10 +1293,11 @@ pub struct FollowRow {
 /// about the same fact. Those rails are gone entirely, and the feed's rails are
 /// built from this same list.
 pub fn following(conn: &Connection, user_id: &str) -> Result<Vec<FollowRow>> {
+    let count = review_count();
     let mut stmt = conn.prepare(&format!(
         "SELECT p.id AS id, p.name AS name, p.avatar_src AS avatar_src,
                 p.avatar_alt AS avatar_alt, p.handle AS handle, p.bio AS bio,
-                {REVIEW_COUNT} AS review_count
+{count} AS review_count
          FROM people p
          JOIN follows f ON f.person_id = p.id AND f.user_id = ?1
          ORDER BY f.followed_at DESC, p.name"
@@ -1352,6 +1353,7 @@ pub struct UserRow {
 /// otherwise the seeded flag would tell a signed-out reader that eight people follow
 /// them.
 fn user_select() -> String {
+    let count = review_count();
     format!(
         "SELECT p.id AS id, p.name AS name, p.handle AS handle,
                 p.avatar_src AS avatar_src, p.avatar_alt AS avatar_alt, p.bio AS bio,
@@ -1361,7 +1363,7 @@ fn user_select() -> String {
                                OR EXISTS(SELECT 1 FROM follows b
                                          WHERE b.user_id = p.id
                                            AND b.person_id = ?1))) AS follows_you,
-                {REVIEW_COUNT} AS review_count
+{count} AS review_count
          FROM people p LEFT JOIN follows f ON f.person_id = p.id AND f.user_id = ?1"
     )
 }
@@ -1519,7 +1521,11 @@ pub struct UserReviewRow {
     /// the harvest never separated them — but an account can write about a film
     /// without rating it, and showing that as zero stars would be a lie about it.
     pub half_stars: Option<u8>,
-    pub body: String,
+    /// `None` for a rating with nothing written. At least one of this and `half_stars`
+    /// is always set — that pair is what a review is.
+    pub body: Option<String>,
+    /// `""` where neither the prose nor the rating carried a date, which is a rating
+    /// stored before `ratings.rated_at` existed.
     pub created_at: String,
 }
 
@@ -1552,24 +1558,69 @@ fn review_from_row(row: &rusqlite::Row) -> Result<UserReviewRow> {
 /// film today, and if anybody ever did the review would otherwise be listed twice.
 /// `UNION ALL` rather than `UNION` because that guard already rules out duplicates,
 /// and `UNION` would pay for a sort to prove it.
-const REVIEW_SOURCE: &str = "SELECT person_id, movie_id, half_stars, body, created_at
-       FROM user_reviews
-     UNION ALL
-     SELECT v.user_id AS person_id, v.movie_id AS movie_id, r.half_stars AS half_stars,
-            v.body AS body, v.written_at AS created_at
-       FROM visitor_reviews v
-       LEFT JOIN ratings r ON r.user_id = v.user_id AND r.movie_id = v.movie_id
-      WHERE NOT EXISTS(SELECT 1 FROM user_reviews u
-                       WHERE u.person_id = v.user_id AND u.movie_id = v.movie_id)";
+/// Every film an account has reviewed, once each.
+///
+/// **A review is a rating, or text, or both.** Scoring a film is a post in its own
+/// right — "I rated this 5" is something friends can open, like and reply to — so this
+/// is the union of the two tables rather than the prose table alone. It used to be
+/// driven by `visitor_reviews`, which made a rating with nothing written invisible to
+/// everybody: no page, no card, no feed.
+///
+/// Uncorrelated on purpose, so callers can join or filter it however they need.
+const ACCOUNT_REVIEWS: &str = "SELECT user_id, movie_id FROM ratings
+          UNION SELECT user_id, movie_id FROM visitor_reviews";
 
-/// How many reviews one person has written, counted the same way `REVIEW_SOURCE`
-/// lists them. `p.id` is the person, so this only reads inside `USER_SELECT` and
-/// `following`.
-const REVIEW_COUNT: &str = "((SELECT COUNT(*) FROM user_reviews r WHERE r.person_id = p.id)
-      + (SELECT COUNT(*) FROM visitor_reviews v
-         WHERE v.user_id = p.id
-           AND NOT EXISTS(SELECT 1 FROM user_reviews u
-                          WHERE u.person_id = v.user_id AND u.movie_id = v.movie_id)))";
+/// Every review anybody wrote, from the two tables that hold them.
+///
+/// There are two because the app keeps a *rating* and the *prose* about a film apart:
+/// clearing a score must not delete what you wrote. A seeded person's review arrives
+/// from the harvest with both in one `user_reviews` row; an account's is assembled here
+/// from whichever of the two it has.
+///
+/// So `half_stars` and `body` are both nullable, and at least one of them is always
+/// there — that pair is what a review *is*. A seeded person always has both, because
+/// `user_reviews` declares them NOT NULL; only an account can have one without the
+/// other, and no empty prose is invented to paper over the difference.
+///
+/// `created_at` prefers the prose's date, since that is what a reader is reading, and
+/// falls back to the rating's. `''` where neither has one, which is a rating stored
+/// before `ratings.rated_at` existed.
+///
+/// `NOT EXISTS` keeps `UNION ALL` honest: nobody has rows in both halves for the same
+/// film today, and if anybody ever did the review would otherwise be listed twice.
+fn review_source() -> String {
+    format!(
+        "SELECT person_id, movie_id, half_stars, body, created_at
+           FROM user_reviews
+         UNION ALL
+         SELECT ids.user_id AS person_id, ids.movie_id AS movie_id,
+                r.half_stars AS half_stars, v.body AS body,
+                COALESCE(v.written_at, r.rated_at, '') AS created_at
+           FROM ({ACCOUNT_REVIEWS}) ids
+           LEFT JOIN ratings r ON r.user_id = ids.user_id AND r.movie_id = ids.movie_id
+           LEFT JOIN visitor_reviews v
+                  ON v.user_id = ids.user_id AND v.movie_id = ids.movie_id
+          WHERE NOT EXISTS(SELECT 1 FROM user_reviews u
+                           WHERE u.person_id = ids.user_id AND u.movie_id = ids.movie_id)"
+    )
+}
+
+/// How many reviews one person has written, counted the same way `review_source` lists
+/// them — so a page cannot print a number its own contents contradict.
+///
+/// A film they rated counts, whether or not they wrote about it: that is what deciding a
+/// rating is a review means. `p.id` is the person, so this only reads inside
+/// `user_select` and `following`.
+fn review_count() -> String {
+    format!(
+        "((SELECT COUNT(*) FROM user_reviews r WHERE r.person_id = p.id)
+          + (SELECT COUNT(*) FROM ({ACCOUNT_REVIEWS}) mine
+             WHERE mine.user_id = p.id
+               AND NOT EXISTS(SELECT 1 FROM user_reviews u
+                              WHERE u.person_id = mine.user_id
+                                AND u.movie_id = mine.movie_id)))"
+    )
+}
 
 /// The columns every review query selects, over both source tables.
 ///
@@ -1584,13 +1635,14 @@ const REVIEW_COUNT: &str = "((SELECT COUNT(*) FROM user_reviews r WHERE r.person
 /// page. Every account is, so an account's reviews reach the same screens a seeded
 /// person's do, with the same attribution.
 fn review_select() -> String {
+    let source = review_source();
     format!(
         "SELECT r.person_id AS person_id, p.name AS name, p.handle AS handle,
                 p.avatar_src AS avatar_src, p.avatar_alt AS avatar_alt,
                 f.user_id IS NOT NULL AS followed,
                 r.movie_id AS movie_id, r.half_stars AS half_stars,
                 r.body AS body, r.created_at AS created_at
-         FROM ({REVIEW_SOURCE}) r
+         FROM ({source}) r
          JOIN people p ON p.id = r.person_id
          LEFT JOIN follows f ON f.person_id = r.person_id AND f.user_id = ?1"
     )
@@ -1719,10 +1771,11 @@ pub fn followed_with_newest_review(
     user_id: &str,
     limit: u32,
 ) -> Result<Vec<StoryRow>> {
+    let source = review_source();
     let mut stmt = conn.prepare(&format!(
         "SELECT p.id AS id, p.name AS name, p.handle AS handle,
                 p.avatar_src AS avatar_src, p.avatar_alt AS avatar_alt,
-                (SELECT r.person_id || '-' || r.movie_id FROM ({REVIEW_SOURCE}) r
+                (SELECT r.person_id || '-' || r.movie_id FROM ({source}) r
                  WHERE r.person_id = p.id
                  ORDER BY r.created_at DESC, r.movie_id LIMIT 1) AS newest_review
          FROM people p JOIN follows f ON f.person_id = p.id AND f.user_id = ?1
@@ -3595,7 +3648,7 @@ mod tests {
         // Their own page.
         let theirs = reviews_by_person(&conn, &follower, ME).unwrap();
         assert_eq!(theirs.len(), 1);
-        assert_eq!(theirs[0].body, "Still the best hour of the New Wave.");
+        assert_eq!(theirs[0].body.as_deref(), Some("Still the best hour of the New Wave."));
         assert_eq!(theirs[0].half_stars, Some(9), "the score came from `ratings`");
         // Attributed to them, with the name, nickname and face their profile shows.
         assert_eq!(theirs[0].name, "testviewer the viewer");
@@ -3640,6 +3693,84 @@ mod tests {
         assert_eq!(reviews_by_person(&conn, &follower, "user-elenarostova").unwrap().len(), 5);
     }
 
+    /// A rating with nothing written reaches every screen a text review does.
+    ///
+    /// The product decision: a score is a post — "I rated this 5" — and friends have to
+    /// be able to see and engage with it. Before this it existed only in the owner's own
+    /// journal.
+    #[test]
+    fn a_rating_with_no_prose_reaches_every_screen() {
+        let conn = graph();
+        let follower = sign_in(&conn, "2002", "ada").id;
+        set_follow(&conn, &follower, ME, Some(true)).unwrap();
+
+        // A score, and not a word about it.
+        set_rating(&conn, ME, "le-souffle", 10).unwrap();
+        let id = review_id(ME, "le-souffle");
+
+        // The author's public page.
+        let theirs = reviews_by_person(&conn, &follower, ME).unwrap();
+        assert_eq!(theirs.len(), 1);
+        assert_eq!(theirs[0].half_stars, Some(10));
+        assert_eq!(theirs[0].body, None, "prose was invented for a score");
+        assert_eq!(theirs[0].name, "testviewer the viewer", "credited to its author");
+
+        // A follower's feed.
+        let followed: Vec<String> = reviews_from_followed(&conn, &follower, 50)
+            .unwrap()
+            .into_iter()
+            .map(|row| review_id(&row.person_id, &row.movie_id))
+            .collect();
+        assert!(followed.contains(&id), "a follower's feed misses a rating");
+
+        // The film's own list, and the graph-wide list.
+        assert!(reviews_for_movie(&conn, &follower, "le-souffle")
+            .unwrap()
+            .iter()
+            .any(|row| row.person_id == ME));
+        assert!(recent_reviews(&conn, &follower, 50).unwrap().iter().any(|r| r.person_id == ME));
+
+        // Its own page, by the id every one of those carries.
+        assert_eq!(
+            review_by_id(&conn, &follower, &id).unwrap().map(|row| row.half_stars),
+            Some(Some(10))
+        );
+
+        // And the stories rail, which opens somebody's newest review.
+        let circle = followed_with_newest_review(&conn, &follower, 50)
+            .unwrap()
+            .into_iter()
+            .find(|row| row.id == ME)
+            .expect("a circle for the followed account");
+        assert_eq!(circle.newest_review.as_deref(), Some(id.as_str()));
+    }
+
+    /// The asymmetry between the two tables, held: a seeded person's review always has
+    /// both halves, because `user_reviews` declares them NOT NULL. No empty prose is
+    /// invented for them to match an account's shape.
+    #[test]
+    fn a_seeded_persons_review_always_has_both_halves() {
+        let conn = graph();
+        for user in demo_graph() {
+            for row in reviews_by_person(&conn, ME, &user.id).unwrap() {
+                assert!(row.half_stars.is_some(), "{} lost a score", row.movie_id);
+                let body = row.body.as_deref().unwrap_or_else(|| panic!("{} lost its prose", row.movie_id));
+                assert!(!body.is_empty(), "{} was given empty prose", row.movie_id);
+            }
+        }
+        // A rating on a seeded person is not even expressible: they have no `ratings`
+        // rows, so nothing can produce a half-written review for them.
+        let rated: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ratings WHERE user_id IN
+                     (SELECT id FROM people WHERE is_account = 0)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rated, 0);
+    }
+
     /// Prose without a score is a real state here — the two are separate acts — so it
     /// publishes with no rating rather than with zero stars.
     #[test]
@@ -3661,12 +3792,19 @@ mod tests {
         set_rating(&conn, ME, "endless", 0).unwrap();
         assert_eq!(reviews_by_person(&conn, ME, ME).unwrap()[0].half_stars, None);
 
-        // A rating with nothing written is not a review at all: there would be no
-        // prose for the page to render.
+        // A rating with nothing written is a review of its own — "I rated this 8" is a
+        // post — so it joins the list rather than being invisible.
         set_rating(&conn, ME, "red-shift", 8).unwrap();
-        let films: Vec<String> =
-            reviews_by_person(&conn, ME, ME).unwrap().into_iter().map(|r| r.movie_id).collect();
-        assert_eq!(films, ["endless"]);
+        let rows = reviews_by_person(&conn, ME, ME).unwrap();
+        let films: Vec<&str> = rows.iter().map(|r| r.movie_id.as_str()).collect();
+        assert_eq!(films, ["endless", "red-shift"]);
+        let scored = rows.iter().find(|r| r.movie_id == "red-shift").unwrap();
+        assert_eq!(scored.half_stars, Some(8));
+        assert_eq!(scored.body, None, "no prose was invented for a score");
+
+        // Clearing both is what removes the entry.
+        set_rating(&conn, ME, "red-shift", 0).unwrap();
+        assert_eq!(reviews_by_person(&conn, ME, ME).unwrap().len(), 1);
     }
 
     /// The count and the list have to be the same rows, whichever table they came out
@@ -3686,10 +3824,26 @@ mod tests {
         assert_eq!(counted(&conn, ME), 2);
         assert_eq!(reviews_by_person(&conn, &other, ME).unwrap().len(), 2);
 
-        // Editing is not a second review, and clearing one takes the count back down.
+        // A film they only rated counts as well, because a rating is a review.
+        set_rating(&conn, ME, "red-shift", 8).unwrap();
+        assert_eq!(counted(&conn, ME), 3);
+        assert_eq!(reviews_by_person(&conn, &other, ME).unwrap().len(), 3);
+        // Rating one they already wrote about does not count it twice.
+        set_rating(&conn, ME, "le-souffle", 9).unwrap();
+        assert_eq!(counted(&conn, ME), 3, "one film, two acts, one review");
+
+        // Editing is not a second review.
         set_user_review(&conn, ME, "le-souffle", "One, rewritten.").unwrap();
-        assert_eq!(counted(&conn, ME), 2);
+        assert_eq!(counted(&conn, ME), 3);
+
+        // Clearing takes the count down only when nothing is left about the film:
+        // `endless` was prose alone, so it goes.
         set_user_review(&conn, ME, "endless", "").unwrap();
+        assert_eq!(counted(&conn, ME), 2);
+        // `le-souffle` still has its score, so it stays.
+        set_user_review(&conn, ME, "le-souffle", "").unwrap();
+        assert_eq!(counted(&conn, ME), 2, "a rated film stopped counting when its prose went");
+        set_rating(&conn, ME, "le-souffle", 0).unwrap();
         assert_eq!(counted(&conn, ME), 1);
 
         // A seeded person's count is untouched by any of it.
