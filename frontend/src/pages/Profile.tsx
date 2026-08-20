@@ -84,9 +84,10 @@ function ReviewMeta({ film }: { film: RatedFilm }) {
  * copy underneath was the thing that made it not one.
  *
  * The row opens the review, not the film. Both used to lead to `/movie/{id}`, which
- * meant your own writing was the one thing on the site you could not open: no full
- * text, no likes, no replies. A score with no prose keeps the old target, because
- * there is nothing behind it to read — see `RatedFilm.review_id`.
+ * meant your own entries were the one thing on the site you could not open: no full
+ * text, no likes, no replies. Every row goes there, a bare score included — a rating
+ * is a review with no words in it, and it can be liked and replied to like any other.
+ * The film is only the fallback for a server that sends no id at all.
  *
  * The poster and the title are two links rather than one anchor around the whole row.
  * `Person` wrapped a row that way and the posters inside it stopped being links at
@@ -99,6 +100,7 @@ function ReviewMeta({ film }: { film: RatedFilm }) {
  */
 function ReviewRow({ film }: { film: RatedFilm }) {
   const excerpt = film.body ?? film.blurb
+  // The film only for a row that arrived without an id. Defensive, not a mode.
   const to = film.review_id === null ? `/movie/${film.id}` : reviewPath(film.review_id)
 
   return (

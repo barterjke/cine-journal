@@ -283,8 +283,8 @@ export function aComment(overrides: Partial<Comment> = {}): Comment {
  * like. All three of the last fields are nullable in the API, so the cases a test
  * overrides to are `poster: null`, `written_on: null` and `like_count: null`.
  *
- * `review_id` is set, because the default row has prose behind it. The other case is
- * a score nobody wrote anything for: `review_id: null` with `like_count: null`.
+ * `review_id` is always set, and no case here overrides it: every row is a review, a
+ * bare score included. `null` is only what a server without the field would send.
  */
 export function aRatedFilm(overrides: Partial<RatedFilm> = {}): RatedFilm {
   return {

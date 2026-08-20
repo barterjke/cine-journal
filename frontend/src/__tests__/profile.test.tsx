@@ -182,8 +182,9 @@ describe('a row in the recent reviews card', () => {
  * Where a journal row goes.
  *
  * It used to go to the film, both from the thumbnail and from the title, which left
- * your own writing as the one thing on the site you could not open — no full text, no
- * like, no reply. The review page already did all three; nothing linked to it.
+ * your own entries as the one thing on the site you could not open — no full text, no
+ * like, no reply. The review page already did all three; nothing linked to it. Every
+ * row goes there now, a rating with no words included.
  */
 describe('the links on a recent review row', () => {
   it('opens the review, where the whole text and the replies are', async () => {
@@ -198,27 +199,28 @@ describe('the links on a recent review row', () => {
     expect(hrefs(reviews)).not.toContain('/movie/mirror')
   })
 
-  it('still opens the film for a score with no prose behind it', async () => {
+  it('opens the review for a bare score too, not the film', async () => {
     show(
       aProfile({
         recent_reviews: [
           aRatedFilm({
-            review_id: null,
+            review_id: 'me-mirror',
             body: null,
             blurb: 'A man sifts through his own memory.',
-            like_count: null,
           }),
         ],
       }),
     )
 
     const reviews = await card('Recent Reviews')
-    // Nothing was written, so there is no review to read. The film is all there is.
+    // A rating with no words is still a review: friends can like it and reply to it,
+    // so it has the same page to open. Only the row's excerpt falls back to the
+    // film's own sentence.
     expect(within(reviews).getByRole('link', { name: 'Mirror' })).toHaveAttribute(
       'href',
-      '/movie/mirror',
+      '/review/me-mirror',
     )
-    expect(hrefs(reviews).some((href) => href?.startsWith('/review/'))).toBe(false)
+    expect(hrefs(reviews)).not.toContain('/movie/mirror')
   })
 
   it('links the poster and the title separately, not the row as one anchor', async () => {

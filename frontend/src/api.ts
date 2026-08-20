@@ -539,9 +539,10 @@ export interface RatedFilm {
    * Sent by the server rather than built here, because the format of the id is the
    * server's business. Pass it to `reviewPath` and nothing else.
    *
-   * `null` for a score with no prose: there is no review to read, so the row opens
-   * the film instead. `like_count` is `null` in exactly those cases, so a row that
-   * offers a count always offers somewhere to go.
+   * Every row has one, a bare score included: a rating is a review with no words in
+   * it, and friends can like it and reply to it either way. Nullable only so a server
+   * that predates the field can't break the card — the row falls back to the film
+   * then. Nothing here is designed around that case.
    */
   review_id: string | null
 }
