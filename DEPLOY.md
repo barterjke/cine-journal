@@ -75,10 +75,19 @@ There are two firewalls. Fixing one leaves the symptom unchanged.
 **1. VCN**, in the console: Networking → Virtual Cloud Networks → your VCN → public
 subnet → Security List → Add Ingress Rules.
 
-| Source | Protocol | Port |
-|---|---|---|
-| `0.0.0.0/0` | TCP | 80 |
-| `0.0.0.0/0` | TCP | 443 |
+| Source | Protocol | Source Port Range | Destination Port Range |
+|---|---|---|---|
+| `0.0.0.0/0` | TCP | **All** | 80 |
+| `0.0.0.0/0` | TCP | **All** | 443 |
+
+**Leave Source Port Range as `All`.** Putting 80 or 443 there is the easy mistake, because
+the form has two port fields and one of them is the number you're thinking about. Clients
+connect *from* a random high port *to* 80, so a rule with source port 80 matches nothing.
+It looks correct in the rule list, and the symptom is a connection that hangs — including
+Let's Encrypt reporting `Timeout during connect (likely firewall problem)`.
+
+Compare against the default SSH rule, which ships with source port `All`. That is what
+yours should look like.
 
 **2. The instance**, over SSH. Oracle's Ubuntu images reject everything except SSH:
 
