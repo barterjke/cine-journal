@@ -74,6 +74,16 @@ services:
       # Empty is supported: the app serves the demo dataset with a banner.
       TMDB_TOKEN: ${TMDB_TOKEN:-}
       RUST_LOG: ${RUST_LOG:-cine_journal_api=info,tower_http=info}
+      # Google sign-in. All three empty is supported: the server boots, logs that
+      # sign-in is off, serves reads publicly and 401s every write.
+      #
+      # PUBLIC_URL is the site's own origin. The backend derives the OAuth redirect
+      # URI from it, and that value must match the one in the Google Cloud console
+      # exactly — so this is https://<API_DOMAIN>, not a bare host and no trailing
+      # slash. Wrong here means `redirect_uri_mismatch` at sign-in, nothing at boot.
+      PUBLIC_URL: ${PUBLIC_URL:-https://${API_DOMAIN}}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     volumes:
       # The visitor's data plus the seeded social graph.
       #

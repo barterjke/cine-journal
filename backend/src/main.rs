@@ -9,16 +9,21 @@
 //!   nothing downstream knows which one answered.
 //! - **The social layer** — friends, stories, live rooms — lives in SQLite (`db`),
 //!   because TMDB has no such thing.
-//! - **The visitor's deltas** — watchlist, ratings, likes, posted comments — also
+//! - **Each user's deltas** — watchlist, ratings, likes, posted comments — also
 //!   live in SQLite, are read as a snapshot into `state::Store`, and are folded
 //!   into responses by `hydrate`.
 //!
-//! There is no per-user identity, so all clients share one visitor.
+//! **Identity is Google sign-in, and it lives in `auth`.** An account is a row in the
+//! same `people` table the seeded folk are in, so it has a page, a nickname and an
+//! avatar like anyone else and can be followed. Reads are public and answer for an
+//! anonymous browser against an empty `Store`; writes need a session and 401 without
+//! one. Sign-in is optional: with no Google credentials the server boots and says so.
 //!
 //! The export's poster and avatar images live in `reference/cine-journal/img/` and
 //! are served from `/img`; the social layer's avatars still come from there, while
-//! TMDB posters are absolute CDN URLs.
+//! TMDB posters and Google profile pictures are absolute CDN URLs.
 
+mod auth;
 mod cache;
 mod content;
 mod data;
@@ -48,9 +53,8 @@ const IMG_DIR: &str = "../reference/cine-journal/img";
 /// with `PORT=... cargo run`; keep `frontend/vite.config.ts` in sync.
 const DEFAULT_PORT: u16 = 3001;
 
-/// Which interface to listen on. Loopback by default: the writes here are
-/// unauthenticated (see the CORS note below), so `0.0.0.0` would expose them on
-/// every network the machine is on. Override with `BIND_ADDR`.
+/// Which interface to listen on. Loopback by default, so a development server is not
+/// exposed on every network the machine is on. Override with `BIND_ADDR`.
 ///
 /// A container has to override it — loopback there is reachable only from inside
 /// the container. `docker-compose.yml` sets `BIND_ADDR=0.0.0.0`, and that is safe
@@ -72,11 +76,16 @@ async fn main() {
         )
         .init();
 
-    // The frontend is served by Vite on a different port in dev, so the browser
-    // treats API calls as cross-origin. No auth and no credentials on any
-    // endpoint, so permissive is fine for local development. The writes are
-    // unauthenticated by design (one shared visitor) and now land in a real file
-    // on disk, so this must not be exposed publicly.
+    // Permissive, and safe to be, because it does not allow credentials. Both
+    // environments are single-origin anyway — Vite proxies `/api` in development
+    // (see `frontend/vite.config.ts`) and Caddy does the same in production — so
+    // nothing the app itself does is cross-origin.
+    //
+    // Refusing credentials is what makes the wildcard harmless now that writes need
+    // a session: a browser will not attach the session cookie to a cross-origin
+    // request under this policy, so another site cannot spend a visitor's session
+    // from their browser. Adding `allow_credentials(true)` here would open exactly
+    // that hole, and would require naming an explicit origin instead of `Any`.
     let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
 
     let img_dir = PathBuf::from(IMG_DIR);
@@ -102,7 +111,12 @@ async fn main() {
     // slower, never broken. Connecting is lazy, so a dead server can't delay startup.
     let cache = cache::Cache::from_env().await;
 
-    let state = state::AppState::new(source, Arc::new(Mutex::new(conn)), cache);
+    // Also optional. With no credentials sign-in is off, every read still works and
+    // every write is a 401 — the same degrade-don't-die posture as Redis above.
+    // Reads the credentials from the environment and never logs them.
+    let google = auth::Google::from_env();
+
+    let state = state::AppState::new(source, Arc::new(Mutex::new(conn)), cache, google);
     let app = routes::router(state)
         .nest_service("/img", ServeDir::new(img_dir))
         .layer(cors)
