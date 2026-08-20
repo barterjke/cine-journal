@@ -1514,26 +1514,41 @@ async fn movies_for<'a>(
 /// write.
 async fn rated_films(source: &Source, journal: &[db::JournalRow]) -> Vec<RatedFilm> {
     let mut out = Vec::new();
-    for row in journal {
-        if out.len() == REVIEWS_SHOWN {
-            break;
-        }
-        if let Some(detail) = movie_detail_by_id(source, &row.movie_id).await {
-            out.push(RatedFilm {
-                id: detail.id,
-                title: detail.title,
-                rating_half_stars: row.half_stars,
-                body: row.body.clone(),
-                // Only when there is no review to show, so the row never prints the
-                // synopsis under prose that already says something better.
-                blurb: match row.body {
-                    Some(_) => None,
-                    None => first_sentence(&detail.synopsis),
-                },
-            });
-        }
+    for row in journal.iter().take(REVIEWS_SHOWN) {
+        // A film the source can't resolve still gets its row: what the visitor wrote is
+        // the point of the tile, and losing it because TMDB was unreachable would make
+        // the profile shrink for reasons of its own. Same rule as `user_reviews`.
+        let detail = movie_detail_by_id(source, &row.movie_id).await;
+        out.push(RatedFilm {
+            id: row.movie_id.clone(),
+            title: detail
+                .as_ref()
+                .map(|detail| detail.title.clone())
+                .unwrap_or_else(|| data::title_from_slug(&row.movie_id)),
+            rating_half_stars: row.half_stars,
+            body: row.body.clone(),
+            // Only when there is no review to show, so the row never prints the
+            // synopsis under prose that already says something better.
+            blurb: match row.body {
+                Some(_) => None,
+                None => detail.as_ref().and_then(|detail| first_sentence(&detail.synopsis)),
+            },
+            poster: detail.and_then(|detail| artwork(detail.poster)),
+            written_on: row.written_at.as_deref().and_then(map::short_date),
+            like_count: hydrate::like_count(row.like_count),
+        });
     }
     out
+}
+
+/// A film's poster, or `None` where there is no artwork.
+///
+/// `MovieDetail.poster` is required on the wire, so a film with none carries
+/// `Image::missing_poster` — a placeholder tile, which is right for a full-size grid
+/// and wrong for a row that would rather leave the space empty. This turns the
+/// placeholder back into the absence it stands for.
+fn artwork(poster: Image) -> Option<Image> {
+    (poster != Image::missing_poster()).then_some(poster)
 }
 
 /// The synopsis' opening sentence, for the one-line blurb under a rated film.
@@ -2604,6 +2619,169 @@ mod tests {
         assert_eq!(filled.recent_reviews.len(), 2);
         assert!(filled.recent_reviews.iter().any(|r| r.rating_half_stars == Some(9)));
         assert!(filled.recent_reviews[0].blurb.is_some());
+    }
+
+    /// A review row is dated when the review was written, and a score-only row when it
+    /// was scored. The row shows their prose, so it says when they wrote it.
+    #[tokio::test]
+    async fn a_journal_row_is_dated_by_whichever_act_it_shows() {
+        let source = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+        sign_in(&db);
+        {
+            let conn = lock(&db);
+            // Written and scored, on different days. The review's date is the one to
+            // print, even though the rating is the later of the two.
+            conn.execute_batch(
+                "INSERT INTO visitor_reviews (user_id, movie_id, body, written_at)
+                     VALUES ('account-1001', 'le-souffle', 'Two hours of held breath.',
+                             '2026-10-12 09:00:00');
+                 INSERT INTO ratings (user_id, movie_id, half_stars, rated_at)
+                     VALUES ('account-1001', 'le-souffle', 9, '2026-11-30 09:00:00');
+                 INSERT INTO ratings (user_id, movie_id, half_stars, rated_at)
+                     VALUES ('account-1001', 'red-shift', 7, '2026-03-04 09:00:00');",
+            )
+            .unwrap();
+        }
+
+        let rows = profile(&source, &db, ME).await.unwrap().recent_reviews;
+        let dated = |id: &str| {
+            rows.iter().find(|row| row.id == id).expect("the row").written_on.clone()
+        };
+        assert_eq!(dated("le-souffle").as_deref(), Some("Oct 12"), "the rating's date won");
+        assert_eq!(dated("red-shift").as_deref(), Some("Mar 4"));
+
+        // The *ordering* still follows whichever happened later, which is why the
+        // rewritten-review case keeps working.
+        assert_eq!(rows[0].id, "le-souffle");
+    }
+
+    /// A rating stored before `ratings.rated_at` existed has no date to print, and
+    /// nothing is invented for it.
+    #[tokio::test]
+    async fn a_rating_with_no_timestamp_has_no_date() {
+        let source = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+        sign_in(&db);
+        {
+            let conn = lock(&db);
+            conn.execute(
+                "INSERT INTO ratings (user_id, movie_id, half_stars) VALUES (?1, 'legacy', 9)",
+                [ME],
+            )
+            .unwrap();
+        }
+
+        let rows = profile(&source, &db, ME).await.unwrap().recent_reviews;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].written_on, None);
+        // The rest of the row is still there — a missing date drops nothing.
+        assert_eq!(rows[0].rating_half_stars, Some(9));
+    }
+
+    /// A film the source can no longer resolve keeps its row, without a poster. The
+    /// prose is the point, and dropping it would shrink the tile for reasons of its own.
+    #[tokio::test]
+    async fn a_film_that_will_not_resolve_keeps_its_row_without_a_poster() {
+        // A TMDB source cannot address a demo slug at all, so this resolves nothing and
+        // touches no network.
+        let tmdb = dead_tmdb();
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+        sign_in(&db);
+        {
+            let conn = lock(&db);
+            db::set_user_review(&conn, ME, "le-souffle", "Words about a film that went.")
+                .unwrap();
+            db::set_rating(&conn, ME, "le-souffle", 8).unwrap();
+        }
+
+        let rows = profile(&tmdb, &db, ME).await.unwrap().recent_reviews;
+        assert_eq!(rows.len(), 1, "the review was dropped with its film");
+        assert_eq!(rows[0].id, "le-souffle");
+        assert_eq!(rows[0].body.as_deref(), Some("Words about a film that went."));
+        assert_eq!(rows[0].rating_half_stars, Some(8));
+        assert_eq!(rows[0].poster, None);
+        // A title derived from the id, rather than a blank where one should be.
+        assert_eq!(rows[0].title, "Le Souffle");
+        // And no blurb, because there is no synopsis to take one from.
+        assert_eq!(rows[0].blurb, None);
+    }
+
+    /// A film that resolves but has no artwork is `None` too, not the placeholder tile
+    /// — a cramped row would rather leave the space empty than draw one.
+    #[tokio::test]
+    async fn a_film_with_no_artwork_has_no_poster() {
+        let source = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+        sign_in(&db);
+        {
+            let conn = lock(&db);
+            // In the catalogue, so it has real artwork.
+            db::set_rating(&conn, ME, "le-souffle", 9).unwrap();
+            // Not in the catalogue: the demo dataset answers for it, with no poster.
+            db::set_rating(&conn, ME, "not-a-catalogue-film", 7).unwrap();
+        }
+
+        let rows = profile(&source, &db, ME).await.unwrap().recent_reviews;
+        let poster = |id: &str| {
+            rows.iter().find(|row| row.id == id).expect("the row").poster.clone()
+        };
+        let real = poster("le-souffle").expect("a catalogue film has artwork");
+        assert!(real.src.contains("le-souffle"), "{}", real.src);
+        assert_eq!(poster("not-a-catalogue-film"), None);
+        // Never the placeholder: that is what `None` is standing in for.
+        assert!(rows.iter().all(|row| row.poster.as_ref() != Some(&Image::missing_poster())));
+    }
+
+    /// The like count on a journal row is everybody's, and absent until somebody
+    /// presses the button.
+    #[tokio::test]
+    async fn a_journal_rows_like_count_is_the_real_total() {
+        let source = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+        sign_in(&db);
+        let review = db::review_id(ME, "le-souffle");
+        {
+            let conn = lock(&db);
+            db::set_user_review(&conn, ME, "le-souffle", "Worth it.").unwrap();
+            // A score with no prose: no review, so nothing to like.
+            db::set_rating(&conn, ME, "red-shift", 7).unwrap();
+        }
+
+        async fn counted(source: &Source, db: &Db, id: &str) -> Option<u32> {
+            profile(source, db, ME)
+                .await
+                .unwrap()
+                .recent_reviews
+                .iter()
+                .find(|row| row.id == id)
+                .expect("the row")
+                .like_count
+        }
+
+        // Nobody yet, so no number rather than a visible zero.
+        assert_eq!(counted(&source, &db, "le-souffle").await, None);
+
+        {
+            let conn = lock(&db);
+            db::toggle_review_like(&conn, ME, &review).unwrap();
+            db::toggle_review_like(&conn, "account-2002", &review).unwrap();
+        }
+        assert_eq!(
+            counted(&source, &db, "le-souffle").await,
+            Some(2),
+            "the total is everybody's"
+        );
+
+        // One of them unliking leaves the other's like standing.
+        {
+            let conn = lock(&db);
+            db::toggle_review_like(&conn, ME, &review).unwrap();
+        }
+        assert_eq!(counted(&source, &db, "le-souffle").await, Some(1));
+
+        // A score with no prose has no review behind it, so never a count.
+        assert_eq!(counted(&source, &db, "red-shift").await, None);
     }
 
     /// Prose the visitor wrote reaches their profile, and it replaces the synopsis

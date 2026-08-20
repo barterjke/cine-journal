@@ -1704,6 +1704,21 @@ pub struct JournalRow {
     pub half_stars: Option<u8>,
     /// `None` for a film they scored without writing about.
     pub body: Option<String>,
+    /// When to say this happened, as stored. The *review's* date when they wrote one,
+    /// the rating's otherwise — the row shows their prose, so it should be dated when
+    /// they wrote it.
+    ///
+    /// Deliberately not the same as the ordering key: the list sorts on whichever of
+    /// the two happened *later*, so re-rating a film still moves it to the top.
+    ///
+    /// `None` for a score whose `rated_at` is NULL, which is every rating written
+    /// before that column existed.
+    pub written_at: Option<String>,
+    /// How many people have liked their review of this film, everybody's likes counted.
+    ///
+    /// Zero for a score with no prose: there is no review to like, because a review is
+    /// a `visitor_reviews` row — see `REVIEW_SOURCE`.
+    pub like_count: u32,
 }
 
 /// Everything the visitor has logged about a film, newest first.
@@ -1717,9 +1732,16 @@ pub struct JournalRow {
 /// film to the top exactly as re-rating it does. `rated_at` is NULL for rows written
 /// before that column existed; `COALESCE` to the empty string makes those sort last
 /// rather than dropping the row.
+///
+/// Two dates come out of this, and they are different questions: `logged_at` orders the
+/// list, while `written_at` is the one to print. `'-' ||` rebuilds the wire review id
+/// `review_id` mints, because that is what `liked_reviews` stores.
 pub fn journal_recent_first(conn: &Connection, user_id: &str) -> Result<Vec<JournalRow>> {
     let mut stmt = conn.prepare(
         "SELECT ids.movie_id AS movie_id, r.half_stars AS half_stars, v.body AS body,
+                COALESCE(v.written_at, r.rated_at) AS written_at,
+                (SELECT COUNT(*) FROM liked_reviews l
+                 WHERE l.review_id = ?1 || '-' || ids.movie_id) AS like_count,
                 MAX(COALESCE(r.rated_at, ''), COALESCE(v.written_at, '')) AS logged_at
          FROM (SELECT movie_id FROM ratings WHERE user_id = ?1
                UNION SELECT movie_id FROM visitor_reviews WHERE user_id = ?1) ids
@@ -1732,6 +1754,8 @@ pub fn journal_recent_first(conn: &Connection, user_id: &str) -> Result<Vec<Jour
             movie_id: row.get("movie_id")?,
             half_stars: row.get("half_stars")?,
             body: row.get("body")?,
+            written_at: row.get("written_at")?,
+            like_count: row.get("like_count")?,
         })
     })?;
     rows.collect()

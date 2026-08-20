@@ -338,13 +338,38 @@ const MONTHS: [&str; 12] = [
 /// Parsed off the fixed prefix rather than with a date crate: the only date
 /// arithmetic in the app is none, and the format is pinned by TMDB.
 pub fn long_date(timestamp: &str) -> Option<String> {
+    let (y, month, d) = date_parts(timestamp)?;
+    Some(format!("{month} {d}, {y}"))
+}
+
+/// "2026-10-12" -> "Oct 12". The same date where there is no room for a year.
+///
+/// The profile's review rows put the date in a metadata line beside a star rating and
+/// a like count, and "October 12, 2026" does not fit. The month is the first three
+/// letters of the long name, which is what every English abbreviation is, so the two
+/// forms cannot drift.
+///
+/// No year, so a row from two years ago reads the same as one from last week. The
+/// alternative — printing the year only when it isn't the current one — needs a clock,
+/// and nothing else in this file is allowed one: the output would change on New Year's
+/// Day for no event.
+pub fn short_date(timestamp: &str) -> Option<String> {
+    let (_, month, d) = date_parts(timestamp)?;
+    Some(format!("{} {d}", &month[..3]))
+}
+
+/// `(year, month name, day)` out of a leading `YYYY-MM-DD`.
+///
+/// Shared by the two formatters so they agree about what a date is, and about what
+/// isn't one: a month of 13 has no name, and anything unparseable is `None` rather
+/// than a guess.
+fn date_parts(timestamp: &str) -> Option<(u16, &'static str, u8)> {
     let date = timestamp.get(..10)?;
     let mut parts = date.split('-');
     let y: u16 = parts.next()?.parse().ok()?;
     let m: usize = parts.next()?.parse().ok()?;
     let d: u8 = parts.next()?.parse().ok()?;
-    let month = MONTHS.get(m.checked_sub(1)?)?;
-    Some(format!("{month} {d}, {y}"))
+    Some((y, MONTHS.get(m.checked_sub(1)?)?, d))
 }
 
 /// 169 -> "2h 49m". `None` and 0 give an em dash — the metadata row reads fine
@@ -685,11 +710,15 @@ pub fn filmography(person: &dto::Person, images: &ImageBase) -> Vec<CatalogueEnt
 pub fn movie_detail(detail: &dto::MovieDetail, images: &ImageBase) -> MovieDetail {
     let title = detail.title.clone();
 
+    // The stand-in, not Neon Reverie's artwork, which is what this used to be — the
+    // same misattribution `data::movie_detail_by_id` was fixed for. `Movie.poster` is
+    // required on the wire, so serving a real film's poster for one with none left
+    // nothing downstream able to tell the difference.
     let poster = detail
         .poster_path
         .as_deref()
         .map(|p| images.poster(p, &title))
-        .unwrap_or_else(|| Image::new("img/poster-neon-reverie.jpg", &format!("Poster for {title}.")));
+        .unwrap_or_else(Image::missing_poster);
 
     // One wide frame, for the review screen's faded header. Prefers the film's own
     // backdrop, then any from the images block, then the poster — an empty src
@@ -911,6 +940,50 @@ mod tests {
         assert_eq!(year(None), None);
     }
 
+    /// A film with no artwork gets the stand-in, not another film's poster.
+    ///
+    /// This used to fall back to Neon Reverie's, which `Movie.poster` being required
+    /// made indistinguishable from a real one — the same misattribution `data` was
+    /// fixed for. `RatedFilm.poster` now reads the stand-in as "no artwork", so it has
+    /// to actually be there.
+    #[test]
+    fn a_film_with_no_poster_gets_the_stand_in() {
+        let mut film = interstellar();
+        film.poster_path = None;
+
+        let detail = movie_detail(&film, &ImageBase::default());
+        assert_eq!(detail.poster, Image::missing_poster());
+        // The backdrop is its own field and still prefers a real frame.
+        assert_ne!(detail.backdrop, Image::missing_poster());
+    }
+
+    /// The short form, for a metadata line with no room for a year.
+    ///
+    /// The month is the first three letters of the long name, which is what every
+    /// English abbreviation is — so the two formatters cannot disagree about a month.
+    #[test]
+    fn short_dates_abbreviate_the_month_and_drop_the_year() {
+        assert_eq!(short_date("2026-10-12 09:00:00").as_deref(), Some("Oct 12"));
+        assert_eq!(short_date("2026-10-12T09:00:00Z").as_deref(), Some("Oct 12"));
+        // No leading zero on the day: the design's line is cramped.
+        assert_eq!(short_date("2026-03-04").as_deref(), Some("Mar 4"));
+        // Every month abbreviates to three letters, and to the ones people expect.
+        let months: Vec<String> = (1..=12)
+            .map(|m| short_date(&format!("2026-{m:02}-01")).expect("a date"))
+            .collect();
+        assert_eq!(
+            months,
+            [
+                "Jan 1", "Feb 1", "Mar 1", "Apr 1", "May 1", "Jun 1", "Jul 1", "Aug 1",
+                "Sep 1", "Oct 1", "Nov 1", "Dec 1"
+            ]
+        );
+        // Rejected exactly where `long_date` is, since they share the parsing.
+        assert_eq!(short_date("not a date"), None);
+        assert_eq!(short_date("2026-13-01"), None);
+        assert_eq!(short_date(""), None);
+    }
+
     #[test]
     fn review_prose_splits_on_blank_lines() {
         let body = "First para.\r\n\r\nSecond para.\r\n\r\n\r\nThird.";
@@ -1043,6 +1116,8 @@ mod tests {
         assert_eq!(detail.id, "157336-interstellar");
         assert_eq!(detail.title, "Interstellar");
         assert_eq!(detail.year, Some(2014));
+        assert!(detail.poster.src.ends_with(".jpg"));
+        assert_ne!(detail.poster, Image::missing_poster(), "a real poster went missing");
         assert_eq!(detail.certification.as_deref(), Some("PG-13"));
         assert_eq!(detail.runtime, "2h 49m");
         assert!(detail.genres.contains(&"Sci-Fi".to_string()), "got {:?}", detail.genres);

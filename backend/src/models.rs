@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 /// `Deserialize` because a built feed page is cached as JSON and read back (see
 /// `feed`), so every type reachable from `FeedItem` has to round-trip. Nothing
 /// accepts one of these from a client.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Image {
     pub src: String,
     pub alt: String,
@@ -869,6 +869,30 @@ pub struct RatedFilm {
     /// One sentence of the synopsis — what the row says about a film they rated but
     /// haven't written about. `None` when the source has no synopsis either.
     pub blurb: Option<String>,
+    /// The film's artwork, for the row's thumbnail.
+    ///
+    /// `None` twice over: for a film with no poster at all, and for one the active
+    /// source can no longer resolve. The row is still returned either way — the prose
+    /// is what it is for, and dropping somebody's review because TMDB was unreachable
+    /// would make the tile shrink for reasons of its own.
+    ///
+    /// `Option` rather than the required `Image` every `Movie` carries, because a
+    /// cramped row can leave a gap where a full-size tile has to draw a placeholder.
+    pub poster: Option<Image>,
+    /// "Oct 12" — when they wrote the review, or scored the film if they wrote
+    /// nothing. Pre-formatted, as every other date in this file is, and short because
+    /// it shares a line with the stars and the like count.
+    ///
+    /// `None` for a rating stored before `ratings.rated_at` existed. There is no date
+    /// to print for those and no honest one to invent.
+    pub written_on: Option<String>,
+    /// How many people have liked their review of this film, or `null` for none.
+    ///
+    /// A real total, as on `Review` and `Comment`. `null` at zero rather than `0`, so
+    /// the row draws no number until somebody presses the button — see
+    /// `hydrate::like_count`. Always `null` for a score with no prose, since there is
+    /// no review there to like.
+    pub like_count: Option<u32>,
 }
 
 /// `GET /api/profile` — the signed-in user's whole profile screen in one request.
