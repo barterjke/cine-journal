@@ -32,11 +32,13 @@ want it, see [Add a password](#add-a-password) below before you set up DNS.
 
 - Oracle Cloud account (free tier needs a card for ID checks, doesn't charge it)
 - Vercel account, connected to the GitHub repo
-- A domain. The API needs its own hostname — Let's Encrypt won't issue a cert for a
-  bare IP.
+- A hostname for the API. A free `duckdns.org` subdomain is enough; you don't need to
+  buy a domain. See Part 2.
 - TMDB read access token. Without it the app serves fake data and shows a banner.
 
-Examples below use `api.example.com` and `example.com`.
+Examples below write the API's hostname as `api.example.com`. Substitute whatever you
+pick in Part 2 — `yourname.duckdns.org`, say. The frontend needs no hostname of its
+own; it lives on `<project>.vercel.app` unless you choose to give it one.
 
 ---
 
@@ -116,20 +118,56 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 ---
 
-## 2. DNS
+## 2. A hostname for the API
 
-| Record | Name | Value |
-|---|---|---|
-| `A` | `api` | the instance's public IP |
-| `CNAME` | `www` | `cname.vercel-dns.com` |
+**The frontend needs nothing.** Vercel gives you `<project>.vercel.app` with working
+HTTPS. No DNS, no records.
 
-Add the `A` record **before** starting Caddy. Caddy gets its cert on startup by
-proving it controls the name over HTTP. If DNS doesn't resolve yet it fails, and
-Let's Encrypt rate-limits failures, so your next few tries fail too.
+**The API needs a hostname**, because Let's Encrypt won't issue a certificate for a
+bare IP, and without a certificate Caddy can't serve HTTPS. Pick one:
 
-Check with `dig +short api.example.com`.
+### Option A — DuckDNS (free, no domain needed)
 
-Use Vercel's dashboard for the apex domain record — it tells you the exact value.
+Go to [duckdns.org](https://www.duckdns.org), sign in with GitHub, pick a subdomain,
+and put your VM's public IP in the box. That's the whole setup.
+
+Then `API_DOMAIN=yourname.duckdns.org`.
+
+Works because `duckdns.org` is on the Public Suffix List, so Let's Encrypt treats your
+subdomain as its own domain with its own rate limit.
+
+### Option B — your own domain (~$10/yr)
+
+At your registrar, add one record:
+
+| Type | Name | Value | TTL |
+|---|---|---|---|
+| `A` | `api` | your VM's public IP | 300 |
+
+That gives you `api.yourdomain.com`. Only add Vercel's records if you also want the
+*frontend* on your domain instead of `.vercel.app` — Vercel's dashboard tells you the
+exact values, so take them from there rather than from a guide.
+
+### Don't use nip.io or sslip.io
+
+They look ideal — `1.2.3.4.sslip.io` resolves to `1.2.3.4` with no signup. But neither
+is on the Public Suffix List, so Let's Encrypt counts the whole of `sslip.io` as one
+domain with a 50-certificates-per-week limit **shared with every other user in the
+world**. Issuance fails unpredictably.
+
+### Before you start Caddy
+
+The name must already resolve. Caddy asks Let's Encrypt for a certificate on startup,
+and Let's Encrypt proves ownership by connecting to whatever the name points at. If
+it doesn't resolve yet the attempt fails, and repeated failures hit a rate limit that
+keeps failing you for a while after you've fixed it.
+
+```bash
+dig +short yourname.duckdns.org     # must print your VM's IP
+```
+
+The same hostname goes in two places: `API_DOMAIN` (Part 3) and the rewrites in
+`frontend/vercel.json` (Part 4).
 
 ---
 
