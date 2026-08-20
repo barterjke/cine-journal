@@ -228,7 +228,11 @@ export function FeedMobile() {
           )}
 
           {watchlist.error && (
-            <ActionError message={watchlist.error} onDismiss={watchlist.clearError} />
+            <ActionError
+              message={watchlist.error}
+              onDismiss={watchlist.clearError}
+              signIn={watchlist.signInRequired}
+            />
           )}
 
           {data.items.length > 0 ? (

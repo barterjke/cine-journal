@@ -511,6 +511,20 @@ export interface LikeState {
   like_count: number | null
 }
 
+/**
+ * Who is signed in, as `GET /api/auth/me` sends them.
+ *
+ * No email — the backend keeps it off the wire. The session cookie is HttpOnly, so
+ * this request is the only way to know who you are.
+ */
+export interface User {
+  id: string
+  name: string
+  /** "@sam", with the sigil, like every other handle in the API. */
+  handle: string
+  avatar: Image
+}
+
 /** Where the films came from. `demo` means they're invented — see `DemoBanner`. */
 export type DataSource = 'tmdb' | 'demo'
 
@@ -544,10 +558,34 @@ export function isNotFound(error: unknown): boolean {
 }
 
 /**
- * Prefers the API's own `{ error }` message over the bare status line — the
- * backend explains rejected writes ("body must not be empty"), and that text is
- * what the UI shows the user.
+ * Whether a thrown value is an API 401. That means "sign in", not "something broke".
+ *
+ * The status is what to read, not the message. Every 401 in the API sends the same
+ * sentence. `/api/profile` and `/api/watchlist` answer 401 anonymously, and so does
+ * every write.
  */
+export function isUnauthorized(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 401
+}
+
+/**
+ * The API's own `{ error }` message, or the status line when there isn't one.
+ *
+ * The backend explains rejected writes ("body must not be empty"). That text is what
+ * the UI shows the user.
+ */
+async function errorMessage(res: Response): Promise<string> {
+  try {
+    const payload: unknown = await res.json()
+    if (payload && typeof payload === 'object' && 'error' in payload) {
+      return String((payload as { error: unknown }).error)
+    }
+  } catch {
+    // Non-JSON error body — the status line is all we have.
+  }
+  return `${res.status} ${res.statusText}`
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
@@ -556,19 +594,18 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   })
 
   if (!res.ok) {
-    let message = `${res.status} ${res.statusText}`
-    try {
-      const payload: unknown = await res.json()
-      if (payload && typeof payload === 'object' && 'error' in payload) {
-        message = String((payload as { error: unknown }).error)
-      }
-    } catch {
-      // Non-JSON error body — the status line is all we have.
-    }
-    throw new ApiError(`${method} ${path} failed: ${message}`, res.status)
+    throw new ApiError(`${method} ${path} failed: ${await errorMessage(res)}`, res.status)
   }
 
   return res.json() as Promise<T>
+}
+
+/** The same, for an endpoint that answers 204 with no body to parse. */
+async function requestEmpty(method: string, path: string): Promise<void> {
+  const res = await fetch(path, { method })
+  if (!res.ok) {
+    throw new ApiError(`${method} ${path} failed: ${await errorMessage(res)}`, res.status)
+  }
 }
 
 const get = <T>(path: string) => request<T>('GET', path)
@@ -586,8 +623,42 @@ function searchQuery({ q, genre, year, minRating, page, person }: SearchParams):
   return query ? `?${query}` : ''
 }
 
+/** Where a sign-in starts. A 302 to Google, or a 503 on a server with no credentials. */
+const SIGN_IN_PATH = '/api/auth/google'
+
 export const api = {
   status: () => get<Status>('/api/status'),
+
+  /** Who is signed in. Throws a 401 `ApiError` when nobody is — see `isUnauthorized`. */
+  me: () => get<User>('/api/auth/me'),
+
+  /** Ends the session and clears the cookie. 204 either way, so there is no body. */
+  logout: () => requestEmpty('POST', '/api/auth/logout'),
+
+  /**
+   * Send the browser to Google's consent screen.
+   *
+   * This has to be a real navigation. The endpoint answers 302 to another origin, and
+   * `fetch` cannot follow that. But a server with no Google credentials answers 503
+   * with JSON, and navigating into that would leave the user reading `{"error":…}`.
+   *
+   * So ask first, then navigate. `redirect: 'manual'` stops the browser chasing the
+   * 302 cross-origin; it reports an opaque response instead, which is the yes. A 503
+   * is thrown with the server's own sentence, and the button prints it.
+   *
+   * The cost is one wasted CSRF state per click, which the next sign-in sweeps. A
+   * `sign_in` flag on `/api/status` would remove the extra round trip.
+   */
+  signIn: async (): Promise<void> => {
+    const res = await fetch(SIGN_IN_PATH, { redirect: 'manual' })
+    // A browser gives an opaque response with status 0. Node's fetch gives the 3xx
+    // itself. Either one means this leads to Google.
+    const redirects = res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)
+    if (!redirects) {
+      throw new ApiError(await errorMessage(res), res.status)
+    }
+    window.location.assign(SIGN_IN_PATH)
+  },
 
   /**
    * One page of the feed. Omit `cursor` for the first.

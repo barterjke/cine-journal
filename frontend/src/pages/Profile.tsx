@@ -18,7 +18,7 @@
  */
 import { useState } from 'react'
 import type { FollowedPerson, Profile as ProfileData, RatedFilm } from '../api'
-import { api } from '../api'
+import { api, isUnauthorized } from '../api'
 import { useApi } from '../useApi'
 import { useAction } from '../useAction'
 import {
@@ -27,6 +27,8 @@ import {
   DemoBanner,
   ErrorNote,
   Loading,
+  SignInPrompt,
+  SignOutButton,
   TopAppBar,
 } from '../components/Chrome'
 import { Empty, PosterStrip, ProfileHeader, Tile } from '../components/ProfileParts'
@@ -148,7 +150,13 @@ function BioField({ bio, onSaved }: { bio: string; onSaved: (bio: string) => voi
           {draft.trim().length} / {MAX_BIO} — empty restores the default
         </span>
       </div>
-      {save.error && <ActionError message={save.error} onDismiss={save.clearError} />}
+      {save.error && (
+        <ActionError
+          message={save.error}
+          onDismiss={save.clearError}
+          signIn={save.signInRequired}
+        />
+      )}
     </div>
   )
 }
@@ -213,6 +221,9 @@ function Body({
         name={data.name}
         meta={`${data.handle} • ${data.member_since}`}
         bio={<BioField bio={data.bio} onSaved={onBioSaved} />}
+        // Only below `md`. There is no app bar on a phone, so this is the only way
+        // out there. It belongs on your own page anyway.
+        action={<SignOutButton className="md:hidden" />}
       />
 
       <div className="grid grid-cols-1 md:grid-cols-5 gap-md">
@@ -275,6 +286,11 @@ function Body({
 export function Profile() {
   const { data, error, loading, update } = useApi(() => api.profile())
 
+  // This page is the account's own, so a visitor without one gets a 401. That is an
+  // answer, not a fault. It asks them in rather than reporting a dead API at somebody
+  // who has never signed in.
+  const anonymous = isUnauthorized(error)
+
   return (
     // `pb-24` clears the 64px mobile nav, which is fixed and would otherwise sit
     // over the last row of the following list.
@@ -282,7 +298,8 @@ export function Profile() {
       <TopAppBar active="profile" />
       <DemoBanner />
       {loading && <Loading />}
-      {error && <ErrorNote error={error} />}
+      {anonymous && <SignInPrompt heading="Sign in to see your profile." />}
+      {error && !anonymous && <ErrorNote error={error} />}
       {data && (
         <Body
           data={data}

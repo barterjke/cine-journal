@@ -213,7 +213,11 @@ export function Collection() {
       <DemoBanner />
       {watchlist.error && (
         <div className="max-w-[1440px] mx-auto px-margin-mobile md:px-margin-desktop pt-md">
-          <ActionError message={watchlist.error} onDismiss={watchlist.clearError} />
+          <ActionError
+            message={watchlist.error}
+            onDismiss={watchlist.clearError}
+            signIn={watchlist.signInRequired}
+          />
         </div>
       )}
       {loading && <Loading />}

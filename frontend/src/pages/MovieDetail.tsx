@@ -910,16 +910,32 @@ export function MovieDetail() {
               {(rating.error ?? watchlist.error ?? favorite.error ?? review.error) && (
                 <div className="flex flex-col gap-sm">
                   {rating.error && (
-                    <ActionError message={rating.error} onDismiss={rating.clearError} />
+                    <ActionError
+                      message={rating.error}
+                      onDismiss={rating.clearError}
+                      signIn={rating.signInRequired}
+                    />
                   )}
                   {watchlist.error && (
-                    <ActionError message={watchlist.error} onDismiss={watchlist.clearError} />
+                    <ActionError
+                      message={watchlist.error}
+                      onDismiss={watchlist.clearError}
+                      signIn={watchlist.signInRequired}
+                    />
                   )}
                   {favorite.error && (
-                    <ActionError message={favorite.error} onDismiss={favorite.clearError} />
+                    <ActionError
+                      message={favorite.error}
+                      onDismiss={favorite.clearError}
+                      signIn={favorite.signInRequired}
+                    />
                   )}
                   {review.error && (
-                    <ActionError message={review.error} onDismiss={review.clearError} />
+                    <ActionError
+                      message={review.error}
+                      onDismiss={review.clearError}
+                      signIn={review.signInRequired}
+                    />
                   )}
                 </div>
               )}

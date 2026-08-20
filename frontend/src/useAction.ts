@@ -1,12 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-interface Action<A extends unknown[]> {
+import { isUnauthorized } from './api'
+
+/** What a notice needs to know about a failed action — see `ActionError`. */
+export interface ActionState {
+  /** Message from the last failure, or null. Cleared when the next call starts. */
+  error: string | null
+  /**
+   * Whether that failure was a 401, so the write needs an account.
+   *
+   * Every write in the API refuses an anonymous caller. That is a normal first
+   * visit, not a fault, so the notice says "sign in" and offers the button.
+   */
+  signInRequired: boolean
+  clearError: () => void
+}
+
+interface Action<A extends unknown[]> extends ActionState {
   run: (...args: A) => Promise<void>
   /** True while the request is in flight, for disabling the control. */
   busy: boolean
-  /** Message from the last failure, or null. Cleared when the next call starts. */
-  error: string | null
-  clearError: () => void
 }
 
 /**
@@ -25,6 +38,7 @@ interface Action<A extends unknown[]> {
 export function useAction<A extends unknown[]>(perform: (...args: A) => Promise<void>): Action<A> {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [signInRequired, setSignInRequired] = useState(false)
 
   const latest = useRef(perform)
   useEffect(() => {
@@ -34,16 +48,26 @@ export function useAction<A extends unknown[]>(perform: (...args: A) => Promise<
   const run = useCallback(async (...args: A) => {
     setBusy(true)
     setError(null)
+    setSignInRequired(false)
     try {
       await latest.current(...args)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      // A 401 gets plain copy instead of the API's line. That line is the same for
+      // every write, and with the method and path in front of it, it reads like a bug
+      // report about a button the visitor simply can't use yet.
+      const unauthorized = isUnauthorized(cause)
+      setSignInRequired(unauthorized)
+      if (unauthorized) setError('Sign in to do that.')
+      else setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setBusy(false)
     }
   }, [])
 
-  const clearError = useCallback(() => setError(null), [])
+  const clearError = useCallback(() => {
+    setError(null)
+    setSignInRequired(false)
+  }, [])
 
-  return { run, busy, error, clearError }
+  return { run, busy, error, signInRequired, clearError }
 }

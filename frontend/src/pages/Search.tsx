@@ -459,7 +459,11 @@ export function Search() {
 
             {watchlist.error && (
               <div className="mb-lg">
-                <ActionError message={watchlist.error} onDismiss={watchlist.clearError} />
+                <ActionError
+                  message={watchlist.error}
+                  onDismiss={watchlist.clearError}
+                  signIn={watchlist.signInRequired}
+                />
               </div>
             )}
 

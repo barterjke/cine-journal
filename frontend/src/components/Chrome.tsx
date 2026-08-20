@@ -9,6 +9,8 @@ import { Link, useNavigate } from 'react-router-dom'
 
 import type { Status } from '../api'
 import { api } from '../api'
+import { useAction } from '../useAction'
+import { signOut, useAuth } from '../useAuth'
 
 export type Tab = 'feed' | 'movies' | 'friends' | 'profile'
 
@@ -65,6 +67,146 @@ function SearchBox() {
         onChange={(e) => setDraft(e.target.value)}
       />
     </form>
+  )
+}
+
+/** The pill both auth buttons wear. Written once so the two can't drift. */
+const PILL =
+  'font-label-sm text-label-sm uppercase tracking-wider px-4 py-2 rounded-full inline-flex items-center gap-xs transition-opacity disabled:cursor-wait'
+
+/**
+ * The one way in. Always drawn while nobody is signed in.
+ *
+ * Whether this server has Google credentials is a fact about today's deployment, not
+ * about the app. Hiding the button on a server that lacks them is how "there is no
+ * sign-in" ships. So the 503 is reported on the click instead. `api.signIn` asks the
+ * endpoint before navigating to it, so a misconfigured server can't dump JSON at you.
+ *
+ * `float` puts a failure in a card under the button instead of in the flow. That is
+ * for the app bar, whose height is fixed so it doesn't shift between routes.
+ */
+export function SignInButton({ float = false }: { float?: boolean }) {
+  const signIn = useAction(() => api.signIn())
+
+  return (
+    <div className={float ? 'relative' : 'flex flex-col items-center gap-sm'}>
+      <button
+        onClick={() => void signIn.run()}
+        disabled={signIn.busy}
+        className={`${PILL} bg-primary text-on-primary hover:opacity-90`}
+      >
+        <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+          login
+        </span>
+        {signIn.busy ? 'Signing in…' : 'Sign in with Google'}
+      </button>
+      {signIn.error && (
+        <p
+          role="status"
+          className={
+            float
+              ? 'absolute top-full right-0 mt-sm w-64 rounded-lg border border-secondary/40 bg-surface px-md py-sm font-label-sm text-label-sm text-secondary soft-shadow z-50'
+              : 'max-w-xs font-label-sm text-label-sm text-secondary'
+          }
+        >
+          {signIn.error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The way out. Signing out refreshes the auth state, so the bar updates with no
+ * reload — see `signOut`.
+ *
+ * Logout answers 204 either way, so the only failure is not reaching the API. The
+ * label stays short because this sits in a bar of fixed height, and the message goes
+ * in `title`, the way `FollowButton` handles its own.
+ */
+export function SignOutButton({ className = '' }: { className?: string }) {
+  const out = useAction(signOut)
+
+  return (
+    <button
+      onClick={() => void out.run()}
+      disabled={out.busy}
+      title={out.error ?? 'Sign out'}
+      className={`${PILL} border ${
+        out.error
+          ? 'border-secondary text-secondary'
+          : 'border-outline-variant text-on-surface-variant hover:bg-surface-container-low'
+      } ${className}`.trim()}
+    >
+      {out.error ? 'Retry sign out' : out.busy ? 'Signing out…' : 'Sign out'}
+    </button>
+  )
+}
+
+/**
+ * The right end of the app bar: your own page, and the way in or out of it.
+ *
+ * The profile link is the one that was always there. It wears your face once there
+ * is one to draw.
+ */
+function AccountControl({ active }: { active: Tab }) {
+  const { user, loading } = useAuth()
+
+  return (
+    <div className="flex items-center gap-sm">
+      <Link
+        to="/profile"
+        aria-label="Your profile"
+        title={user?.name ?? 'Your profile'}
+        className={
+          active === 'profile'
+            ? 'text-primary dark:text-primary-fixed p-sm active:opacity-70'
+            : 'text-on-surface-variant hover:text-primary transition-colors p-sm active:opacity-70'
+        }
+      >
+        {user ? (
+          <img
+            className="w-8 h-8 rounded-full object-cover border border-surface-variant block"
+            alt={user.avatar.alt}
+            src={user.avatar.src}
+          />
+        ) : (
+          <span
+            className="material-symbols-outlined block"
+            style={active === 'profile' ? { fontVariationSettings: "'FILL' 1" } : undefined}
+          >
+            account_circle
+          </span>
+        )}
+      </Link>
+      {/* Nothing until the first `/api/auth/me` answers. A sign-in button that turns
+          into your avatar a beat later reads as a session that dropped. */}
+      {loading ? null : user ? <SignOutButton /> : <SignInButton float />}
+    </div>
+  )
+}
+
+/**
+ * What a screen shows in place of `ErrorNote` when the API asked for an account.
+ *
+ * A 401 from `/api/profile` is an answer, not a failure. So this reads as an
+ * invitation, and says what stays readable without signing in.
+ */
+export function SignInPrompt({ heading }: { heading: string }) {
+  return (
+    <div className="flex flex-col items-center gap-sm py-xxl px-margin-mobile text-center">
+      <span className="material-symbols-outlined text-primary" aria-hidden="true">
+        account_circle
+      </span>
+      <p className="font-headline-md text-headline-md text-on-background">{heading}</p>
+      <p className="font-body-md text-body-md text-on-surface-variant max-w-md">
+        Your films, your ratings and your watchlist live on your account. The feed,
+        every film's page and everybody's reviews are readable without one.
+      </p>
+      <div className="pt-sm">
+        <SignInButton />
+      </div>
+    </div>
   )
 }
 
@@ -136,26 +278,11 @@ export function TopAppBar({ active }: { active: Tab }) {
           </Link>
           <SearchBox />
           {/* Was a bell and a cast icon: two `<button>`s with no `onClick`, no
-              notifications behind them and nothing to cast to. One link to your own
-              page instead — the Profile tab goes to the same place, but this corner
-              of a masthead is where "you" belongs, and it is reachable below `lg`
-              where the nav collapses. */}
-          <Link
-            to="/profile"
-            aria-label="Your profile"
-            className={
-              active === 'profile'
-                ? 'text-primary dark:text-primary-fixed p-sm active:opacity-70'
-                : 'text-on-surface-variant hover:text-primary transition-colors p-sm active:opacity-70'
-            }
-          >
-            <span
-              className="material-symbols-outlined block"
-              style={active === 'profile' ? { fontVariationSettings: "'FILL' 1" } : undefined}
-            >
-              account_circle
-            </span>
-          </Link>
+              notifications behind them and nothing to cast to. Your own page and the
+              way in or out instead — the Profile tab goes to the same place, but this
+              corner of a masthead is where "you" belongs, and it is reachable below
+              `lg` where the nav collapses. */}
+          <AccountControl active={active} />
         </div>
       </div>
     </header>
@@ -289,15 +416,29 @@ export function Loading() {
  * Inline notice for a failed action (a like, a post, a watchlist toggle) where
  * the screen itself loaded fine. Distinct from `ErrorNote`, which replaces the
  * screen's content when the initial fetch failed.
+ *
+ * Pass `signIn={action.signInRequired}` for a write the server refused for want of
+ * an account. The notice then carries the way out instead of only naming the problem.
  */
-export function ActionError({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
+export function ActionError({
+  message,
+  onDismiss,
+  signIn = false,
+}: {
+  message: string
+  onDismiss?: () => void
+  signIn?: boolean
+}) {
   return (
     <div
       role="status"
       className="flex items-start gap-sm rounded-lg border border-secondary/40 bg-secondary/5 px-md py-sm font-label-sm text-label-sm text-on-surface"
     >
-      <span className="material-symbols-outlined text-secondary text-lg">error</span>
+      <span className="material-symbols-outlined text-secondary text-lg">
+        {signIn ? 'account_circle' : 'error'}
+      </span>
       <span className="flex-grow">{message}</span>
+      {signIn && <SignInButton />}
       {onDismiss && (
         <button
           onClick={onDismiss}

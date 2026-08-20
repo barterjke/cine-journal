@@ -524,7 +524,11 @@ export function Feed() {
           )}
 
           {watchlist.error && (
-            <ActionError message={watchlist.error} onDismiss={watchlist.clearError} />
+            <ActionError
+              message={watchlist.error}
+              onDismiss={watchlist.clearError}
+              signIn={watchlist.signInRequired}
+            />
           )}
 
           {feed.items.length === 0 ? (

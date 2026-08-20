@@ -21,8 +21,10 @@ import type {
   PersonCard,
   SearchResponse,
   SearchResult,
+  User,
 } from '../api'
-import { api } from '../api'
+import { ApiError, api } from '../api'
+import { resetAuth } from '../useAuth'
 
 /**
  * Mount one screen at one address. `path` is the route pattern, because that is what
@@ -30,8 +32,15 @@ import { api } from '../api'
  *
  * Also answers `api.status`, which every screen's `DemoBanner` calls. "tmdb" keeps the
  * banner off the page.
+ *
+ * Auth is shared in a module, so it is forgotten here instead of carried from the
+ * last case into this one. `api.me` is left to the test. Unstubbed it rejects, and
+ * the chrome reads any failure as "nobody is signed in" — the right default for a
+ * case that isn't about accounts.
  */
 export function renderScreen(element: ReactElement, { path, at }: { path: string; at: string }) {
+  resetAuth()
+
   vi.mocked(api.status).mockResolvedValue({
     data_source: 'tmdb',
     message: null,
@@ -50,6 +59,22 @@ export function renderScreen(element: ReactElement, { path, at }: { path: string
 /** A poster or avatar. jsdom never loads `src`, so `alt` is all a test can see. */
 export function anImage(alt: string): Image {
   return { src: `/img/${alt.toLowerCase().replace(/\W+/g, '-')}.jpg`, alt }
+}
+
+/** Whoever `GET /api/auth/me` says is signed in. */
+export function aUser(overrides: Partial<User> = {}): User {
+  return {
+    id: 'me',
+    name: 'Sam Reyes',
+    handle: '@sam',
+    avatar: anImage('Portrait of Sam'),
+    ...overrides,
+  }
+}
+
+/** The one 401 the API answers with, for a read or a write. */
+export function anAuthFailure(method: string, path: string): ApiError {
+  return new ApiError(`${method} ${path} failed: sign in to do that`, 401)
 }
 
 export function aMovie(overrides: Partial<Movie> = {}): Movie {
