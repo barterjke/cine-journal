@@ -64,18 +64,37 @@ Console → Compute → Instances → Create instance.
 
 | Setting | Value |
 |---|---|
-| Image | Ubuntu 24.04, **aarch64** build |
+| Image | Ubuntu 24.04 or Oracle Linux 9 — match the arch to the shape |
 | Shape | `VM.Standard.A1.Flex`, **2 OCPU / 12 GB** |
 | Boot volume | default (~47 GB) |
 | SSH key | paste your public key |
 
-2 OCPU / 12 GB is the whole Always Free ARM allowance. Use it in one instance.
+### Only two shapes are actually free
 
-Block storage is 200 GB total across the tenancy. You don't need an extra volume —
-the SQLite file is tiny and lives on a Docker volume on the boot disk.
+This is the part that costs money if you get it wrong. The console will happily offer
+you shapes that are not in the free tier.
 
-**"Out of host capacity"** is normal, not a misconfiguration. Try each availability
-domain, then retry later. Capacity frees up in minutes to days.
+| Shape | Arch | Free? |
+|---|---|---|
+| `VM.Standard.A1.Flex` | arm64 | Yes — 2 OCPU / 12 GB total, the whole ARM allowance |
+| `VM.Standard.E2.1.Micro` | x86_64 | Yes — up to 2, but only 1 GB RAM each |
+| `VM.Standard.E3.Flex`, `E4.Flex`, `E5.Flex` | x86_64 | **No. Billed.** |
+
+Anything in the third row runs against your Free Trial credits and then bills you or
+gets stopped. If you already created one, check **Billing & Cost Management → Cost
+Analysis**.
+
+Take the A1.Flex allowance in one instance rather than two — nothing here benefits from
+a second box.
+
+**"Out of host capacity"** on A1.Flex is normal, not a misconfiguration. Try each
+availability domain, then retry later; capacity frees up in minutes to days. It is the
+reason people end up on a paid shape by accident, so retry rather than substitute.
+
+Either arch works — the images are multi-arch — so this is only about cost and size.
+
+Block storage is 200 GB total across the tenancy. You don't need an extra volume — the
+SQLite file is tiny and lives on a Docker volume on the boot disk.
 
 ### Open ports 80 and 443 — in two places
 
@@ -98,7 +117,10 @@ Let's Encrypt reporting `Timeout during connect (likely firewall problem)`.
 Compare against the default SSH rule, which ships with source port `All`. That is what
 yours should look like.
 
-**2. The instance**, over SSH. Oracle's Ubuntu images reject everything except SSH:
+**2. The instance**, over SSH. Oracle's images reject everything except SSH. The command
+depends on the distro — running the wrong one silently does nothing.
+
+**Ubuntu** (iptables):
 
 ```bash
 sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
@@ -109,18 +131,34 @@ sudo netfilter-persistent save
 Check with `sudo iptables -L INPUT --line-numbers` that the rules are **above** the
 REJECT line. Below it they do nothing.
 
-Skipping this gives you a connection that hangs then times out. It looks like a DNS
-or cert problem. It isn't.
+**Oracle Linux** (firewalld):
+
+```bash
+sudo firewall-cmd --permanent --add-service=http --add-service=https
+sudo firewall-cmd --reload
+sudo firewall-cmd --list-all
+```
+
+Docker publishes ports by writing its own iptables rules, which usually bypass the host
+firewall — so on either distro the VCN rule above is the more common culprit. Do both and
+you have ruled out the whole stack.
+
+Skipping this gives you a connection that hangs then times out. It looks like a DNS or
+certificate problem. It isn't.
 
 ### Install Docker
 
 ```bash
-sudo apt-get update && sudo apt-get install -y ca-certificates curl
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker "$USER"
+sudo systemctl enable --now docker
 ```
 
-Log out and back in, then test with `docker run --rm hello-world`.
+The convenience script handles both Ubuntu and Oracle Linux, picks the right arch, and
+installs the Compose plugin — so `docker compose` (no hyphen) is what you use.
+
+Log out and back in for the group change, then test with `docker run --rm hello-world`.
+Without the re-login every command needs `sudo`.
 
 ### Add swap (optional)
 
@@ -192,7 +230,7 @@ Nothing is baked into the frontend bundle.
 **Everything in this part runs on the VM, not on your laptop.** SSH in first:
 
 ```bash
-ssh -i ~/.ssh/oci-cine-journal ubuntu@<VM_PUBLIC_IP>
+ssh -i ~/.ssh/oci-cine-journal ubuntu@<VM_PUBLIC_IP>   # `opc@` on Oracle Linux
 ```
 
 Then, on the VM:
