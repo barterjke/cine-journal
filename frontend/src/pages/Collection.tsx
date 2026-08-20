@@ -175,7 +175,7 @@ function NotFound() {
 export function Collection() {
   const { slug = '' } = useParams()
   const person = useSearchParams()[0].get('person')
-  const { data, error, loading, update } = useApi(
+  const { data, error, loading, update, reload } = useApi(
     () => api.collection(slug, person),
     [slug, person],
   )
@@ -222,7 +222,7 @@ export function Collection() {
       )}
       {loading && <Loading />}
       {missing && <NotFound />}
-      {error && !missing && <ErrorNote error={error} />}
+      {error && !missing && <ErrorNote error={error} onRetry={reload} />}
       {data && (
         <Body
           data={data}

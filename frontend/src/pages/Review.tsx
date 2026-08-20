@@ -34,6 +34,7 @@ import {
   Loading,
   TopAppBar,
 } from '../components/Chrome'
+import { Poster } from '../components/PosterTile'
 import { authorLabel, FollowButton, personPath } from '../components/People'
 import { StarRating } from '../components/StarRating'
 
@@ -194,7 +195,7 @@ export function Review() {
   // "the newest one" — see `api.reviewOrNewest`. The id is a dependency, so
   // clicking through from one review to another refetches.
   const { id } = useParams<{ id: string }>()
-  const { data, error, loading, update, replace } = useApi(
+  const { data, error, loading, update, replace, reload } = useApi(
     () => api.reviewOrNewest(id),
     [id],
   )
@@ -314,7 +315,7 @@ export function Review() {
       )}
 
       {loading && <Loading />}
-      {error && <ErrorNote error={error} />}
+      {error && <ErrorNote error={error} onRetry={reload} missing="That review isn't here any more. It may have been deleted." />}
 
       {data && (
         <main className="max-w-7xl mx-auto px-margin-mobile md:px-margin-desktop pt-xl pb-xxl relative z-10">
@@ -335,10 +336,9 @@ export function Review() {
                   className="block relative rounded-lg overflow-hidden shadow-[0px_4px_20px_rgba(0,0,0,0.04)] bg-white mb-lg group"
                 >
                   <div className="absolute inset-0 border border-black/10 rounded-lg pointer-events-none z-10"></div>
-                  <img
+                  <Poster
+                    image={data.movie.poster}
                     className="w-full h-auto object-cover aspect-[2/3] transition-transform duration-500 group-hover:scale-105"
-                    alt={data.movie.poster.alt}
-                    src={data.movie.poster.src}
                   />
                 </Link>
                 <Link to={`/movie/${data.movie.id}`}>
@@ -373,10 +373,9 @@ export function Review() {
               <Link to={`/movie/${data.movie.id}`} className="md:hidden flex items-center space-x-4 mb-lg">
                 <div className="w-16 h-24 rounded shadow-sm relative flex-shrink-0">
                   <div className="absolute inset-0 border border-black/10 rounded pointer-events-none z-10"></div>
-                  <img
+                  <Poster
+                    image={data.movie.poster}
                     className="w-full h-full object-cover rounded"
-                    alt={data.movie.poster.alt}
-                    src={data.movie.poster.src}
                   />
                 </div>
                 <div>

@@ -14,6 +14,8 @@
 import type { Movie } from '../api'
 import { Link } from 'react-router-dom'
 
+import { Poster } from './PosterTile'
+
 /** Shared by both tile variants, so the linked one can't drift from the plain one. */
 const TILE_SHELL =
   'bg-surface-container-low rounded-xl p-md border border-surface-variant flex flex-col gap-sm'
@@ -94,7 +96,7 @@ export function Thumbnail({ film }: { film: Movie }) {
       title={film.title}
       className={`${THUMBNAIL} hover:opacity-80 transition-opacity`}
     >
-      <img className="w-full h-full object-cover" alt={film.poster.alt} src={film.poster.src} />
+      <Poster image={film.poster} className="w-full h-full object-cover" />
     </Link>
   )
 }
@@ -127,11 +129,7 @@ export function PosterStrip({
           <Thumbnail key={film.id} film={film} />
         ) : (
           <div key={film.id} className={THUMBNAIL} title={film.title}>
-            <img
-              className="w-full h-full object-cover"
-              alt={film.poster.alt}
-              src={film.poster.src}
-            />
+            <Poster image={film.poster} className="w-full h-full object-cover" />
           </div>
         ),
       )}

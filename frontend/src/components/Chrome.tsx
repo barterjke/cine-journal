@@ -5,10 +5,10 @@
  * shape kept here is the desktop feed's, parameterized by which tab is active.
  */
 import { useEffect, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import type { Status } from '../api'
-import { api } from '../api'
+import { NothingYetError, api, isNotFound, visitorMessage } from '../api'
 import { useAction } from '../useAction'
 import { signOut, useAuth } from '../useAuth'
 
@@ -389,10 +389,10 @@ function fetchStatus(): Promise<Status> {
 }
 
 /**
- * "These films are made up" band, shown on every screen when the backend has no
- * TMDB token and is serving `data.rs` instead. Renders nothing in TMDB mode, and
- * nothing while the request is in flight — a band that appears a beat after the
- * page would shove the content down as you started reading it.
+ * "These films are made up" band, shown on every screen when the server is serving
+ * sample data instead of the real catalogue. Renders nothing otherwise, and nothing
+ * while the request is in flight — a band that appears a beat after the page would
+ * shove the content down as you started reading it.
  *
  * Deliberately *not* inside `TopAppBar`: that bar's height is fixed so it is
  * byte-identical on every route, and a conditional band inside it would undo
@@ -433,15 +433,18 @@ export function DemoBanner() {
         {/* `font-body-md` rather than `font-label-sm`: the label face is
             JetBrains Mono, which is right for a chip but wraps this sentence to
             four hard-to-skim lines on a phone. */}
+        {/* The fallback line said "no TMDB token", which names a credential a
+            visitor has never heard of. It says what is true of the films instead;
+            the link is where anyone curious can read why. */}
         <p className="flex-grow font-body-md text-sm">
-          {status.message ?? 'Showing demo data — no TMDB token.'}{' '}
+          {status.message ?? 'These films are made up — this site is running on sample data.'}{' '}
           <a
             href={status.docs_url}
             target="_blank"
             rel="noreferrer"
             className="font-label-sm text-label-sm text-primary underline hover:opacity-70 transition-opacity whitespace-nowrap"
           >
-            Get a token
+            Find out why
           </a>
         </p>
       </div>
@@ -475,15 +478,20 @@ export function ActionError({
   onDismiss?: () => void
   signIn?: boolean
 }) {
+  // The API's messages carry the method and path in front of the sentence. That
+  // half is ours to read, so it moves to `title` and out of the visible copy.
+  const visible = visitorMessage(message)
+
   return (
     <div
       role="status"
+      title={visible === message ? undefined : message}
       className="flex items-start gap-sm rounded-lg border border-secondary/40 bg-secondary/5 px-md py-sm font-label-sm text-label-sm text-on-surface"
     >
       <span className="material-symbols-outlined text-secondary text-lg">
         {signIn ? 'account_circle' : 'error'}
       </span>
-      <span className="flex-grow">{message}</span>
+      <span className="flex-grow">{visible}</span>
       {signIn && <SignInButton />}
       {onDismiss && (
         <button
@@ -498,16 +506,101 @@ export function ActionError({
   )
 }
 
-/** Shown when the API is unreachable — most often the backend isn't running. */
-export function ErrorNote({ error }: { error: Error }) {
+/**
+ * The illustration on the error screen: a strip of film with one blank frame.
+ *
+ * Drawn in markup rather than fetched. An error screen that loads an image can
+ * fail the same way as the thing it is reporting, and a broken picture is a poor
+ * way to say "we're on it". Decorative, so it is hidden from screen readers —
+ * the copy below carries the meaning.
+ */
+function ErrorArt() {
   return (
-    <div className="flex flex-col items-center gap-sm py-xxl text-center">
-      <span className="material-symbols-outlined text-secondary">error</span>
-      <p className="font-body-md text-body-md text-on-background">Couldn't reach the API.</p>
-      <p className="font-label-sm text-label-sm text-on-surface-variant">{error.message}</p>
-      <p className="font-label-sm text-label-sm text-outline">
-        Start it with <code>cd backend &amp;&amp; cargo run</code>
-      </p>
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 200 120"
+      className="w-40 h-auto text-outline-variant"
+      fill="none"
+      stroke="currentColor"
+    >
+      {/* The strip, with a sprocket hole every 24px down both edges. */}
+      <rect x="1" y="1" width="198" height="118" rx="8" strokeWidth="2" />
+      <path
+        strokeWidth="2"
+        d="M9 14h11v10H9zM9 38h11v10H9zM9 62h11v10H9zM9 86h11v10H9zM180 14h11v10h-11zM180 38h11v10h-11zM180 62h11v10h-11zM180 86h11v10h-11z"
+      />
+      {/* The frame with nothing in it. Dashed, so it reads as absence. */}
+      <rect x="40" y="20" width="120" height="80" rx="4" strokeWidth="2" strokeDasharray="7 6" />
+    </svg>
+  )
+}
+
+/**
+ * What a screen shows in place of its content when its first request failed.
+ *
+ * Written for a visitor. It used to print the raw message and then tell the
+ * reader to start a server from a shell, which is meaningless to anyone who
+ * didn't write this. The real message is still here, in the `title` — an
+ * attribute rather than text, so it can't leak back into the copy on screen.
+ *
+ * Three cases, because a visitor can do different things about them:
+ *  - a 404 is a dead end, so it offers the way onward and no retry;
+ *  - nothing to show yet is not a failure at all, and says so in its own words;
+ *  - anything else is worth trying again.
+ */
+export function ErrorNote({
+  error,
+  onRetry,
+  missing,
+}: {
+  error: Error
+  /** Runs the screen's request again. Without it, only the way onward is offered. */
+  onRetry?: () => void
+  /** This screen's 404 line, e.g. "This film isn't in our catalogue." */
+  missing?: string
+}) {
+  const { pathname } = useLocation()
+  const notFound = isNotFound(error)
+  const nothingYet = error instanceof NothingYetError
+
+  const heading = notFound
+    ? "We couldn't find that"
+    : nothingYet
+      ? 'Nothing here yet'
+      : 'Something went wrong'
+
+  const line = notFound
+    ? (missing ?? "That page isn't in our catalogue. It may have moved, or the link may be wrong.")
+    : nothingYet
+      ? error.message
+      : "We're having trouble connecting. Nothing you did — please try again in a moment."
+
+  const pill =
+    'font-label-sm text-label-sm uppercase tracking-wider px-4 py-2 rounded-full transition-opacity hover:opacity-80'
+
+  return (
+    <div
+      title={error.message}
+      className="flex flex-col items-center gap-md py-xxl px-margin-mobile text-center"
+    >
+      <ErrorArt />
+      <h2 className="font-headline-md text-headline-md text-on-background">{heading}</h2>
+      <p className="font-body-md text-body-md text-on-surface-variant max-w-md">{line}</p>
+      <div className="flex items-center gap-sm flex-wrap justify-center">
+        {/* No retry on a 404 or an empty site: the same request would give the same
+            answer, and a button that changes nothing is worse than no button. */}
+        {onRetry && !notFound && !nothingYet && (
+          <button onClick={onRetry} className={`${pill} bg-primary text-on-primary`}>
+            Try again
+          </button>
+        )}
+        {/* Skipped on the feed itself, where it would be a link to this page. */}
+        {pathname !== '/' && (
+          <Link to="/" className={`${pill} border border-outline-variant text-on-surface-variant`}>
+            Back to the feed
+          </Link>
+        )}
+      </div>
     </div>
   )
 }

@@ -20,11 +20,13 @@ import type {
   MovieDetail,
   PeopleResponse,
   PersonCard,
+  PersonProfile,
   Reply,
   Review,
   SearchResponse,
   SearchResult,
   User,
+  UserReview,
 } from '../api'
 import { ApiError, api } from '../api'
 import { resetAuth } from '../useAuth'
@@ -190,6 +192,47 @@ export function aPerson(overrides: Partial<PersonCard> = {}): PersonCard {
 /** All three lists in one answer, as the screen gets them. */
 export function aPeopleResponse(overrides: Partial<PeopleResponse> = {}): PeopleResponse {
   return { query: '', results: [], following: [], followers: [], ...overrides }
+}
+
+/**
+ * One person's review of one film, as a review card draws it.
+ *
+ * `poster` is optional in the API, so `poster: null` is the case a test overrides to.
+ */
+export function aUserReview(overrides: Partial<UserReview> = {}): UserReview {
+  return {
+    id: 'elena-solaris',
+    author_id: '1136406',
+    author_name: 'Elena Vasquez',
+    author_handle: '@elena',
+    author_avatar: anImage('Portrait of Elena'),
+    author_followed: false,
+    movie_id: 'solaris',
+    movie_title: 'Solaris',
+    poster: anImage('Solaris poster'),
+    rating_half_stars: 9,
+    body: 'A cold film that stays warm in the memory.',
+    written_on: '12 November 2014',
+    ...overrides,
+  }
+}
+
+/** Somebody else's page: one review, no collections, not followed. */
+export function aPersonProfile(overrides: Partial<PersonProfile> = {}): PersonProfile {
+  return {
+    id: '1136406',
+    name: 'Elena Vasquez',
+    handle: '@elena',
+    avatar: anImage('Portrait of Elena'),
+    bio: null,
+    following: false,
+    follows_you: false,
+    favorites: [],
+    watchlist: [],
+    reviews: [aUserReview()],
+    review_count: 1,
+    ...overrides,
+  }
 }
 
 /**

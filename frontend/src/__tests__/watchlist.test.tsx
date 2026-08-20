@@ -68,7 +68,16 @@ describe('the watchlist button on a poster tile', () => {
     // reads as a click that never landed.
     await waitFor(() => expect(button).toHaveAttribute('aria-pressed', 'false'))
     expect(button).toHaveAccessibleName('Add Solaris to watchlist')
-    expect(await screen.findByRole('status')).toHaveTextContent('503 Service Unavailable')
+
+    // The server's own sentence, without the method and path it arrived with — that
+    // half moves to the `title`. See `visitorMessage`.
+    const notice = await screen.findByRole('status')
+    expect(notice).toHaveTextContent('503 Service Unavailable')
+    expect(notice.textContent).not.toContain('/api/movies/solaris/watchlist')
+    expect(notice).toHaveAttribute(
+      'title',
+      'POST /api/movies/solaris/watchlist failed: 503 Service Unavailable',
+    )
   })
 
   it('offers a way out of an empty watchlist', async () => {
@@ -93,7 +102,7 @@ describe('the watchlist button on a poster tile', () => {
     renderScreen(<Collection />, at('mixtapes'))
 
     expect(await screen.findByText('No such collection.')).toBeInTheDocument()
-    // The other branch would tell you to restart a server that is running.
-    expect(screen.queryByText("Couldn't reach the API.")).not.toBeInTheDocument()
+    // The other branch would blame a connection that is working.
+    expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument()
   })
 })

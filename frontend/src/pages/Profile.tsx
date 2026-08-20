@@ -284,7 +284,7 @@ function Body({
 }
 
 export function Profile() {
-  const { data, error, loading, update } = useApi(() => api.profile())
+  const { data, error, loading, update, reload } = useApi(() => api.profile())
 
   // This page is the account's own, so a visitor without one gets a 401. That is an
   // answer, not a fault. It asks them in rather than reporting a dead API at somebody
@@ -299,7 +299,7 @@ export function Profile() {
       <DemoBanner />
       {loading && <Loading />}
       {anonymous && <SignInPrompt heading="Sign in to see your profile." />}
-      {error && !anonymous && <ErrorNote error={error} />}
+      {error && !anonymous && <ErrorNote error={error} onRetry={reload} />}
       {data && (
         <Body
           data={data}

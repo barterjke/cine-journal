@@ -25,12 +25,13 @@ import { useApi } from '../useApi'
 import { useAction } from '../useAction'
 import { ActionError, DemoBanner, ErrorNote, Loading } from '../components/Chrome'
 import { authorLabel, personPath } from '../components/People'
+import { Poster } from '../components/PosterTile'
 import { StarRating } from '../components/StarRating'
 
 export function ReviewMobile() {
   // Same two routes as the desktop screen — an id, or the newest review.
   const { id } = useParams<{ id: string }>()
-  const { data, error, loading, replace } = useApi(() => api.reviewOrNewest(id), [id])
+  const { data, error, loading, replace, reload } = useApi(() => api.reviewOrNewest(id), [id])
   const [draft, setDraft] = useState('')
 
   const postComment = useAction(async () => {
@@ -60,7 +61,7 @@ export function ReviewMobile() {
       <DemoBanner />
 
       {loading && <Loading />}
-      {error && <ErrorNote error={error} />}
+      {error && <ErrorNote error={error} onRetry={reload} />}
 
       {data && (
         <main className="flex-grow flex flex-col items-center pt-lg px-margin-mobile w-full max-w-md mx-auto">
@@ -87,10 +88,9 @@ export function ReviewMobile() {
             to={`/movie/${data.movie.id}`}
             className="w-full aspect-[2/3] rounded-lg overflow-hidden poster-shadow inner-stroke mb-lg relative bg-surface-variant block"
           >
-            <img
+            <Poster
+              image={data.movie.poster}
               className="w-full h-full object-cover absolute inset-0"
-              alt={data.movie.poster.alt}
-              src={data.movie.poster.src}
             />
           </Link>
 

@@ -15,6 +15,13 @@ interface Result<T> extends State<T> {
   update: (patch: (current: T) => T) => void
   /** Replace the loaded data outright — for endpoints that return a fresh copy. */
   replace: (next: T) => void
+  /**
+   * Run the request again. What the error screen's "Try again" button calls.
+   *
+   * A real refetch rather than a page reload: reloading throws away the app and
+   * every other screen's cached state to fix one failed call.
+   */
+  reload: () => void
 }
 
 /**
@@ -27,6 +34,9 @@ interface Result<T> extends State<T> {
  */
 export function useApi<T>(fetcher: () => Promise<T>, deps: unknown[] = []): Result<T> {
   const [state, setState] = useState<State<T>>({ data: null, error: null, loading: true })
+  // Bumped by `reload`, and a dependency of the effect below, so a retry re-runs the
+  // request without the caller having to pass anything for it.
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let active = true
@@ -51,7 +61,7 @@ export function useApi<T>(fetcher: () => Promise<T>, deps: unknown[] = []): Resu
       active = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps)
+  }, [...deps, attempt])
 
   const update = useCallback((patch: (current: T) => T) => {
     setState((prev) => (prev.data === null ? prev : { ...prev, data: patch(prev.data) }))
@@ -61,5 +71,7 @@ export function useApi<T>(fetcher: () => Promise<T>, deps: unknown[] = []): Resu
     setState({ data: next, error: null, loading: false })
   }, [])
 
-  return { ...state, update, replace }
+  const reload = useCallback(() => setAttempt((n) => n + 1), [])
+
+  return { ...state, update, replace, reload }
 }

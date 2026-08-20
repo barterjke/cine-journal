@@ -17,6 +17,7 @@ import { api } from '../api'
 import { useApi } from '../useApi'
 import { useAction } from '../useAction'
 import { ActionError, BottomNavBar, DemoBanner, ErrorNote, Loading } from '../components/Chrome'
+import { Poster } from '../components/PosterTile'
 import { StarRating } from '../components/StarRating'
 
 /**
@@ -90,12 +91,12 @@ function FeedCard({
   return (
     <article className="flex flex-col gap-sm">
       <div className="relative w-full aspect-[2/3] rounded-DEFAULT overflow-hidden poster-shadow poster-inner-stroke bg-surface-container">
-        <Link to={`/movie/${item.movie.id}`} aria-label={item.movie.title}>
-          <img
-            className="w-full h-full object-cover"
-            alt={item.movie.poster.alt}
-            src={item.movie.poster.src}
-          />
+        <Link
+          to={`/movie/${item.movie.id}`}
+          aria-label={item.movie.title}
+          className="block w-full h-full"
+        >
+          <Poster image={item.movie.poster} className="w-full h-full object-cover" />
         </Link>
         {/* Ignores pointer events so the poster stays tappable; the button
             inside opts back in. On a watchlisted film the overlay stays up. */}
@@ -160,7 +161,7 @@ function FeedCard({
 }
 
 export function FeedMobile() {
-  const { data, error, loading, update } = useApi(() => api.mobileFeed())
+  const { data, error, loading, update, reload } = useApi(() => api.mobileFeed())
 
   const watchlist = useAction(async (id: string) => {
     const target = !data?.items.find((i) => i.movie.id === id)?.on_watchlist
@@ -206,7 +207,7 @@ export function FeedMobile() {
       <DemoBanner />
 
       {loading && <Loading />}
-      {error && <ErrorNote error={error} />}
+      {error && <ErrorNote error={error} onRetry={reload} />}
 
       {data && (
         <main className="flex-grow w-full max-w-7xl mx-auto px-margin-mobile md:px-margin-desktop pt-lg md:pt-xl space-y-xl md:space-y-xxl">

@@ -37,6 +37,7 @@ import {
   TopAppBar,
 } from '../components/Chrome'
 import { ReviewCard } from '../components/People'
+import { Poster } from '../components/PosterTile'
 import { StarRating } from '../components/StarRating'
 
 /**
@@ -87,6 +88,8 @@ function useFeed() {
   const [refreshing, setRefreshing] = useState(false)
   /** Fatal: the first page failed, so there is nothing on screen to keep. */
   const [error, setError] = useState<Error | null>(null)
+  /** Bumped by `retry`, which is how the first load gets a second chance. */
+  const [attempt, setAttempt] = useState(0)
   /** A failed *append*. Recoverable — everything above it is still good. */
   const [moreError, setMoreError] = useState<string | null>(null)
 
@@ -99,7 +102,7 @@ function useFeed() {
   /** So the observer firing twice in a row can't launch two requests for one cursor. */
   const inFlight = useRef(false)
   /**
-   * Whether the first load has been started, so it happens exactly once.
+   * Which attempt has been started, so each one happens exactly once.
    *
    * StrictMode runs every effect twice in dev — mount, cleanup, mount again on the same
    * instance — and this load is two requests, so letting it run twice would quadruple
@@ -111,11 +114,11 @@ function useFeed() {
    * fake remount, so the in-flight request still has somewhere to land; and after a
    * genuine unmount these setters are no-ops.
    */
-  const started = useRef(false)
+  const started = useRef(-1)
 
   useEffect(() => {
-    if (started.current) return
-    started.current = true
+    if (started.current === attempt) return
+    started.current = attempt
 
     const accept = (page: { items: FeedItem[]; next_cursor: string | null }) => {
       setCursor(page.next_cursor)
@@ -161,7 +164,7 @@ function useFeed() {
         setRefreshing(false)
       }
     })()
-  }, [])
+  }, [attempt])
 
   const loadMore = useCallback(async () => {
     if (inFlight.current || cursor === null) return
@@ -223,6 +226,12 @@ function useFeed() {
     loadMore,
     patchWatchlist,
     onWatchlist,
+    /** Ask for the first page again. What the error screen's "Try again" calls. */
+    retry: () => {
+      setError(null)
+      setLoading(true)
+      setAttempt((n) => n + 1)
+    },
   }
 }
 
@@ -296,7 +305,7 @@ function RowPoster({ movie }: { movie: Movie }) {
       title={movie.title}
       className="w-16 md:w-24 aspect-[2/3] shrink-0 rounded bg-surface-container overflow-hidden inner-stroke hover:opacity-80 transition-opacity"
     >
-      <img className="w-full h-full object-cover" alt={movie.poster.alt} src={movie.poster.src} />
+      <Poster image={movie.poster} className="w-full h-full object-cover" />
     </Link>
   )
 }
@@ -514,7 +523,7 @@ export function Feed() {
       <AuthErrorNotice />
 
       {feed.loading && <Loading />}
-      {feed.error && <ErrorNote error={feed.error} />}
+      {feed.error && <ErrorNote error={feed.error} onRetry={feed.retry} />}
 
       {!feed.loading && !feed.error && (
         <main className="max-w-3xl mx-auto px-margin-mobile md:px-0 py-lg md:py-xl flex flex-col gap-md">

@@ -282,7 +282,7 @@ export interface SearchResult {
    * doesn't exist. The demo dataset always has one, including a real 0.0.
    */
   star_rating: number | null
-  /** `null` renders the "Poster Missing" placeholder. */
+  /** `null` draws the shared missing-poster frame — see `MissingPoster`. */
   poster: Image | null
   genres: string[]
   on_watchlist: boolean
@@ -447,6 +447,7 @@ export interface UserReview {
   author_followed: boolean
   movie_id: string
   movie_title: string
+  /** `null` draws the shared missing-poster frame — see `MissingPoster`. */
   poster: Image | null
   /**
    * `null` for prose written without a score.
@@ -600,9 +601,35 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * A request that worked but had nothing to show yet.
+ *
+ * Thrown where a screen opens on "the newest thing" and the site is still empty.
+ * That is not a fault, so the error screen prints this message as-is instead of
+ * apologising for a failure — which means the message has to be written for a
+ * visitor.
+ */
+export class NothingYetError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'NothingYetError'
+  }
+}
+
 /** Whether a thrown value is an API 404 — a real answer rather than a failure. */
 export function isNotFound(error: unknown): boolean {
   return error instanceof ApiError && error.status === 404
+}
+
+/**
+ * The half of a failure message a visitor should read.
+ *
+ * `request` puts the method and path in front of every error so a log line says
+ * which call broke. That prefix is for us; it looks like a bug report to anyone
+ * else. This drops it and leaves the server's own sentence.
+ */
+export function visitorMessage(message: string): string {
+  return message.replace(/^[A-Z]+ \/\S+ failed: /, '')
 }
 
 /**
@@ -756,7 +783,10 @@ export const api = {
     const newest = await api.reviews()
     // Thrown rather than returned as null: a screen with no loader, no error and
     // no content reads as a bug, and an empty graph is a cause worth naming.
-    if (newest.length === 0) throw new Error('No reviews to show yet.')
+    // `NothingYetError` so the screen says that instead of "something went wrong".
+    if (newest.length === 0) {
+      throw new NothingYetError('Nobody has written a review yet. Yours could be the first.')
+    }
     return newest[0]
   },
   movie: (id: string) => get<MovieDetail>(`/api/movies/${id}`),

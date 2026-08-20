@@ -45,7 +45,7 @@ import type {
   UserReview,
   WatchOption,
 } from '../api'
-import { api } from '../api'
+import { NothingYetError, api } from '../api'
 import { useApi } from '../useApi'
 import { useAction } from '../useAction'
 import {
@@ -58,6 +58,7 @@ import {
 } from '../components/Chrome'
 import { ReviewCard } from '../components/People'
 import { RatePicker } from '../components/RatePicker'
+import { Poster } from '../components/PosterTile'
 
 /**
  * Where `/movie` with no id lands in demo mode — the export's own detail page.
@@ -640,7 +641,7 @@ function CreditedNames({ fact }: { fact: DetailFact }) {
 
 export function MovieDetail() {
   const { id } = useParams()
-  const { data, error, loading, update } = useApi(async () => {
+  const { data, error, loading, update, reload } = useApi(async () => {
     if (id) return api.movie(id)
     // `/movie` with no id: the demo slug only resolves in demo mode, so fall back
     // to whatever the feed is showing first rather than to a guaranteed 404.
@@ -653,7 +654,11 @@ export function MovieDetail() {
       const page = await api.feedPage()
       const first = page.items[0]
       const filmId = first && (first.kind === 'review' ? first.movie_id : first.movie.id)
-      if (!filmId) throw new Error('No films to show yet.')
+      // `NothingYetError` so the screen says the site is empty rather than
+      // apologising for a failure that didn't happen.
+      if (!filmId) {
+        throw new NothingYetError('No films here yet. Search for one and log what you watch.')
+      }
       return api.movie(filmId)
     }
   }, [id])
@@ -752,7 +757,13 @@ export function MovieDetail() {
       <DemoBanner />
 
       {loading && <Loading />}
-      {error && <ErrorNote error={error} />}
+      {error && (
+        <ErrorNote
+          error={error}
+          onRetry={reload}
+          missing="This film isn't in our catalogue. It may have been removed, or the link may be wrong."
+        />
+      )}
 
       {data && (
         <main className="max-w-7xl mx-auto px-margin-mobile md:px-margin-desktop pt-xl">
@@ -774,10 +785,9 @@ export function MovieDetail() {
                 a third of the width; at `grid-cols-1` an uncapped 2:3 poster is
                 585px tall on a 390px screen and the title falls below the fold. */}
             <div className="flex flex-col gap-md max-w-[240px] md:max-w-none">
-              <img
+              <Poster
+                image={data.poster}
                 className="w-full h-auto rounded-lg poster-shadow inner-stroke object-cover aspect-[2/3]"
-                alt={data.poster.alt}
-                src={data.poster.src}
               />
             </div>
 

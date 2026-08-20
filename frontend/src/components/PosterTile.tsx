@@ -1,6 +1,9 @@
 /**
- * The poster card with a watchlist "+" over it, drawn by the feed and by every
- * collection grid.
+ * Everything to do with drawing a film's poster.
+ *
+ * `Poster` is the one every screen calls: it draws the image, or the placeholder
+ * when a film has no poster. `PosterTile` is the card that wraps it in a watchlist
+ * "+", drawn by the feed and by every collection grid.
  *
  * One component rather than one per screen because the button's behaviour is the part
  * that matters and it is fiddly: the scrim has to ignore pointer events so it never eats
@@ -17,8 +20,84 @@
  */
 import { Link } from 'react-router-dom'
 
-import type { Movie } from '../api'
+import type { Image, Movie } from '../api'
 import { StarRating } from './StarRating'
+
+/**
+ * The file the API sends for a film it has no poster for.
+ *
+ * Recognised here so there is only ever one missing-poster treatment on screen.
+ * A frame drawn in markup also can't 404, and can't be cached as some other
+ * film's artwork.
+ */
+const API_STAND_IN = 'img/poster-missing.svg'
+
+/** Whether we were given a real poster, rather than none or the API's stand-in. */
+export function hasPoster(image: Image | null): image is Image {
+  return image !== null && !image.src.endsWith(API_STAND_IN)
+}
+
+/**
+ * What a film with no poster gets: a plain 2:3 frame, drawn rather than loaded.
+ *
+ * Never a real film's artwork. A placeholder that looks like somebody's poster
+ * credits it to the wrong film, which is worse than showing nothing at all. And
+ * missing posters are normal, so this is meant to read as deliberate rather than
+ * broken.
+ *
+ * The frame and its caption are one `<svg>`, so both scale together — the same
+ * component works at 64px in a profile strip and full size on a film's page.
+ *
+ * `className` is the one the poster `<img>` would have worn, so the placeholder
+ * lands in the same box with the same corners. Spelled out at each call site,
+ * because Tailwind's JIT scans the source.
+ */
+export function MissingPoster({ className = 'w-full aspect-[2/3]' }: { className?: string }) {
+  return (
+    <div
+      role="img"
+      aria-label="No poster available"
+      className={`bg-surface-container-high text-outline font-label-sm overflow-hidden ${className}`}
+    >
+      <svg aria-hidden="true" className="w-full h-full" viewBox="0 0 200 300">
+        {/* A film frame, stroked to match the outlined icon set the app uses. */}
+        <g
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="4"
+          opacity="0.5"
+          transform="translate(100 130)"
+        >
+          <rect x="-34" y="-26" width="68" height="52" rx="4" />
+          <path d="M-34 -12h68M-34 12h68M-16 -26v52M16 -26v52" />
+        </g>
+        <text
+          x="100"
+          y="194"
+          fill="currentColor"
+          fontSize="14"
+          letterSpacing="1.5"
+          textAnchor="middle"
+          opacity="0.7"
+        >
+          NO POSTER
+        </text>
+      </svg>
+    </div>
+  )
+}
+
+/**
+ * A film's poster, or the placeholder when there isn't one.
+ *
+ * Every screen draws its posters through this, so a film without one looks the
+ * same everywhere. It used to be per-screen: the search grid had its own tile, a
+ * review card rendered an empty box, and the rest showed whatever the API sent.
+ */
+export function Poster({ image, className }: { image: Image | null; className: string }) {
+  if (!hasPoster(image)) return <MissingPoster className={className} />
+  return <img className={className} alt={image.alt} src={image.src} />
+}
 
 export function PosterTile({
   movie,
@@ -37,11 +116,10 @@ export function PosterTile({
   return (
     <div className="flex flex-col gap-sm group">
       <div className="aspect-[2/3] w-full rounded-lg overflow-hidden inner-stroke soft-shadow relative bg-surface-container-low">
-        <Link to={`/movie/${movie.id}`} aria-label={movie.title}>
-          <img
+        <Link to={`/movie/${movie.id}`} aria-label={movie.title} className="block w-full h-full">
+          <Poster
+            image={movie.poster}
             className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-            alt={movie.poster.alt}
-            src={movie.poster.src}
           />
         </Link>
         <div

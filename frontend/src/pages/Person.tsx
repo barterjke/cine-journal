@@ -135,7 +135,7 @@ function NotFound({ handle }: { handle: string }) {
 
 export function Person() {
   const { handle = '' } = useParams()
-  const { data, error, loading, update } = useApi(() => api.person(handle), [handle])
+  const { data, error, loading, update, reload } = useApi(() => api.person(handle), [handle])
 
   // A 404 is a real answer — this nickname doesn't exist — and deserves the empty
   // state rather than "couldn't reach the API", which would send you to restart a
@@ -150,7 +150,7 @@ export function Person() {
       <DemoBanner />
       {loading && <Loading />}
       {missing && <NotFound handle={handle} />}
-      {error && !missing && <ErrorNote error={error} />}
+      {error && !missing && <ErrorNote error={error} onRetry={reload} />}
       {data && (
         <Body
           data={data}

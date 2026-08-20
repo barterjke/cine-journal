@@ -28,8 +28,8 @@ describe('the profile page with nobody signed in', () => {
     // The bug this replaces: the API's own line, printed at somebody who has simply
     // never signed in.
     expect(screen.queryByText(/GET \/api\/profile failed/)).not.toBeInTheDocument()
-    // And not the other branch either, which would blame a server that is up.
-    expect(screen.queryByText("Couldn't reach the API.")).not.toBeInTheDocument()
+    // And not the other branch either, which would blame a connection that is fine.
+    expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument()
     // Two: the prompt's, and the app bar's.
     expect(screen.getAllByRole('button', { name: 'Sign in with Google' })).toHaveLength(2)
   })

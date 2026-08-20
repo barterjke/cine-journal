@@ -16,6 +16,7 @@ import { Link } from 'react-router-dom'
 import type { PersonCard, UserReview } from '../api'
 import { api } from '../api'
 import { useAction } from '../useAction'
+import { Poster } from './PosterTile'
 import { StarRating } from './StarRating'
 
 /** Where a person's page lives. The `@` is dropped: it's punctuation, not an id. */
@@ -169,13 +170,9 @@ export function ReviewCard({ review, showFilm = false }: { review: UserReview; s
           title={review.movie_title}
           className="w-16 aspect-[2/3] rounded bg-surface-container overflow-hidden shrink-0 inner-stroke hover:opacity-80 transition-opacity"
         >
-          {review.poster && (
-            <img
-              className="w-full h-full object-cover"
-              alt={review.poster.alt}
-              src={review.poster.src}
-            />
-          )}
+          {/* Was `{review.poster && …}`, which left an empty box on a film with no
+              poster — a different answer from every other screen's. */}
+          <Poster image={review.poster} className="w-full h-full object-cover" />
         </Link>
       ) : (
         <Link

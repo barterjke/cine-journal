@@ -95,7 +95,7 @@ export function People() {
   // typing doesn't fire a request per character.
   const [query, setQuery] = useState('')
   const [draft, setDraft] = useState('')
-  const { data, error, loading, update } = useApi(() => api.people(query), [query])
+  const { data, error, loading, update, reload } = useApi(() => api.people(query), [query])
 
   /**
    * Patch every list at once.
@@ -176,7 +176,7 @@ export function People() {
         </section>
 
         {loading && <Loading />}
-        {error && <ErrorNote error={error} />}
+        {error && <ErrorNote error={error} onRetry={reload} />}
 
         {data && (
           <div className="grid grid-cols-1 md:grid-cols-12 gap-gutter">

@@ -32,6 +32,7 @@ import {
   Loading,
   TopAppBar,
 } from '../components/Chrome'
+import { Poster } from '../components/PosterTile'
 
 const FILLED = { fontVariationSettings: "'FILL' 1" }
 const OUTLINED = { fontVariationSettings: "'FILL' 0" }
@@ -90,23 +91,12 @@ function ResultCard({
               result. It described one invented film's art direction and was always
               false for a real one, so it said nothing about any film a visitor can
               now search for. */}
-          {result.poster ? (
-            <img
-              className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-              alt={result.poster.alt}
-              src={result.poster.src}
-            />
-          ) : (
-            <div className="absolute inset-0 bg-surface-container-high flex flex-col items-center justify-center text-outline text-center p-sm">
-              <span
-                className="material-symbols-outlined text-4xl mb-2 opacity-50"
-                style={OUTLINED}
-              >
-                movie
-              </span>
-              <span className="font-label-sm text-label-sm uppercase">Poster Missing</span>
-            </div>
-          )}
+          {/* This screen used to draw its own missing-poster tile. One shared frame
+              now, so a film with no poster looks the same here as anywhere else. */}
+          <Poster
+            image={result.poster}
+            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+          />
         </Link>
         {/* Sits above the poster link so the button takes the click, not the card.
             Stays up on a logged film — otherwise the state is invisible until you
@@ -210,7 +200,7 @@ export function Search() {
   // query typed into the app bar on another screen).
   useEffect(() => setDraft(q), [q])
 
-  const { data, error, loading, update } = useApi(
+  const { data, error, loading, update, reload } = useApi(
     () => api.search({ q, genre, year, minRating, page, person }),
     [q, genre, year, minRating, page, person],
   )
@@ -246,7 +236,7 @@ export function Search() {
       <TopAppBar active="movies" />
       <DemoBanner />
 
-      {error && <ErrorNote error={error} />}
+      {error && <ErrorNote error={error} onRetry={reload} />}
 
       {!error && (
         <main className="flex-grow w-full max-w-7xl mx-auto px-margin-mobile md:px-margin-desktop py-xl flex flex-col md:flex-row gap-margin-desktop">
