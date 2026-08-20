@@ -12,6 +12,10 @@
  * The composer posts for real now. The export drew no comment thread on this
  * screen at all, so posted comments are listed under the review — a send button
  * that swallows what you typed is worse than a slightly extended layout.
+ *
+ * The thread is shared, so each row carries its real author: face, name, handle,
+ * date, all linking to that person's page. Your own rows say "You", from `is_you`.
+ * Replies are shown but not composable here — that lives on the desktop screen.
  */
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
@@ -20,7 +24,7 @@ import { api } from '../api'
 import { useApi } from '../useApi'
 import { useAction } from '../useAction'
 import { ActionError, DemoBanner, ErrorNote, Loading } from '../components/Chrome'
-import { personPath } from '../components/People'
+import { authorLabel, personPath } from '../components/People'
 import { StarRating } from '../components/StarRating'
 
 export function ReviewMobile() {
@@ -117,17 +121,21 @@ export function ReviewMobile() {
                 )}
               </div>
             </div>
-            <div className="flex flex-col items-end">
-              <StarRating
-                halfStars={data.rating_half_stars}
-                color="text-tertiary"
-                showEmpty={false}
-                className="gap-0"
-              />
-              <span className="font-label-sm text-label-sm text-on-surface-variant mt-xs">
-                {data.rating_half_stars / 2} / 5
-              </span>
-            </div>
+            {/* No score, nothing here. `null / 2` is 0 in JavaScript, so the old form
+                printed "0 / 5" at a review its author never rated. */}
+            {data.rating_half_stars !== null && (
+              <div className="flex flex-col items-end">
+                <StarRating
+                  halfStars={data.rating_half_stars}
+                  color="text-tertiary"
+                  showEmpty={false}
+                  className="gap-0"
+                />
+                <span className="font-label-sm text-label-sm text-on-surface-variant mt-xs">
+                  {data.rating_half_stars / 2} / 5
+                </span>
+              </div>
+            )}
           </div>
 
           <hr className="w-full border-t border-surface-variant my-md" />
@@ -149,21 +157,64 @@ export function ReviewMobile() {
               <div className="flex flex-col gap-md">
                 {data.comments.map((comment) => (
                   <div key={comment.id} className="flex gap-sm">
-                    <img
-                      className="w-8 h-8 rounded-full object-cover flex-shrink-0 border border-surface-variant"
-                      alt={comment.author_avatar.alt}
-                      src={comment.author_avatar.src}
-                    />
-                    <div>
-                      <div className="flex items-baseline gap-sm">
-                        <span className="font-label-sm text-label-sm font-bold text-on-surface">
-                          {comment.author_name}
-                        </span>
+                    {/* The face leads to its owner's page, as the author's does above.
+                        Yours too — the avatar and the handle are real either way. */}
+                    <Link
+                      to={personPath(comment.author_handle)}
+                      className="shrink-0 active:opacity-70"
+                    >
+                      <img
+                        className="w-8 h-8 rounded-full object-cover border border-surface-variant"
+                        alt={comment.author_avatar.alt}
+                        src={comment.author_avatar.src}
+                      />
+                    </Link>
+                    <div className="min-w-0">
+                      <div className="flex items-baseline gap-sm flex-wrap">
+                        <Link
+                          to={personPath(comment.author_handle)}
+                          className="font-label-sm text-label-sm font-bold text-on-surface active:opacity-70"
+                        >
+                          {authorLabel(comment)}
+                        </Link>
+                        <Link
+                          to={personPath(comment.author_handle)}
+                          className="font-label-sm text-label-sm text-on-surface-variant active:opacity-70"
+                        >
+                          {comment.author_handle}
+                        </Link>
                         <span className="font-label-sm text-label-sm text-outline">
                           {comment.timestamp}
                         </span>
                       </div>
                       <p className="font-body-md text-body-md text-on-surface">{comment.body}</p>
+                      {/* Replies are read-only here; the desktop screen is where you
+                          post one. Without them a thread lost half of itself. */}
+                      {comment.replies.map((reply) => (
+                        <div
+                          key={reply.id}
+                          className="mt-sm pl-md border-l border-surface-variant"
+                        >
+                          <div className="flex items-baseline gap-sm flex-wrap">
+                            <Link
+                              to={personPath(reply.author_handle)}
+                              className="font-label-sm text-label-sm font-bold text-on-surface active:opacity-70"
+                            >
+                              {authorLabel(reply)}
+                            </Link>
+                            <Link
+                              to={personPath(reply.author_handle)}
+                              className="font-label-sm text-label-sm text-on-surface-variant active:opacity-70"
+                            >
+                              {reply.author_handle}
+                            </Link>
+                            <span className="font-label-sm text-label-sm text-outline">
+                              {reply.timestamp}
+                            </span>
+                          </div>
+                          <p className="font-body-md text-body-md text-on-surface">{reply.body}</p>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}
@@ -177,7 +228,11 @@ export function ReviewMobile() {
       <div className="fixed bottom-0 left-0 w-full bg-surface/90 backdrop-blur-md border-t border-surface-variant p-margin-mobile z-50">
         {postComment.error && (
           <div className="max-w-md mx-auto w-full mb-sm">
-            <ActionError message={postComment.error} onDismiss={postComment.clearError} />
+            <ActionError
+              message={postComment.error}
+              onDismiss={postComment.clearError}
+              signIn={postComment.signInRequired}
+            />
           </div>
         )}
         <form

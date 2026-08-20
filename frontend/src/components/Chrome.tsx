@@ -5,7 +5,7 @@
  * shape kept here is the desktop feed's, parameterized by which tab is active.
  */
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import type { Status } from '../api'
 import { api } from '../api'
@@ -206,6 +206,52 @@ export function SignInPrompt({ heading }: { heading: string }) {
       <div className="pt-sm">
         <SignInButton />
       </div>
+    </div>
+  )
+}
+
+/**
+ * What a sign-in that didn't finish says, per slug.
+ *
+ * The backend sends the browser back to `/?auth_error=<slug>` instead of answering
+ * with JSON, so a cancelled or expired sign-in lands on the feed rather than on a
+ * page of raw `{"error":…}`.
+ */
+const AUTH_ERRORS: Record<string, string> = {
+  cancelled: "Sign-in cancelled. You're still signed out.",
+  expired: 'That sign-in took too long and expired. Please try again.',
+  denied: "Google didn't grant access, so you're still signed out.",
+  failed: 'Sign-in failed. Please try again.',
+}
+
+/**
+ * For a slug this build doesn't know. The set can grow on the server first, and
+ * printing the slug itself would be showing the reader a variable name.
+ */
+const AUTH_ERROR_FALLBACK = "Sign-in didn't finish. Please try again."
+
+/**
+ * The notice for a failed sign-in, drawn on the feed when `?auth_error=` is set.
+ *
+ * The URL is the only state. Dismissing drops the parameter, so the notice can't
+ * come back on a refresh — and it is a `replace`, so Back doesn't return to it
+ * either. `ActionError` is the app's notice, reused rather than restyled here.
+ */
+export function AuthErrorNotice() {
+  const [params, setParams] = useSearchParams()
+  const slug = params.get('auth_error')
+
+  if (slug === null) return null
+
+  const dismiss = () => {
+    const next = new URLSearchParams(params)
+    next.delete('auth_error')
+    setParams(next, { replace: true })
+  }
+
+  return (
+    <div className="max-w-3xl mx-auto px-margin-mobile md:px-0 pt-lg">
+      <ActionError message={AUTH_ERRORS[slug] ?? AUTH_ERROR_FALLBACK} onDismiss={dismiss} signIn />
     </div>
   )
 }

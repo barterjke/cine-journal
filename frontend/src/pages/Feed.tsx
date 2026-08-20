@@ -29,6 +29,7 @@ import { api } from '../api'
 import { useAction } from '../useAction'
 import {
   ActionError,
+  AuthErrorNotice,
   BottomNavBar,
   DemoBanner,
   ErrorNote,
@@ -508,6 +509,9 @@ export function Feed() {
     <div className="bg-background text-on-background min-h-screen font-body-md text-body-md overflow-x-hidden pb-24 md:pb-0 selection:bg-primary-container selection:text-on-primary-container">
       <TopAppBar active="feed" />
       <DemoBanner />
+      {/* Google sends a failed sign-in back here, not to the API. Above the feed's own
+          states, because it is about the visitor rather than about the request. */}
+      <AuthErrorNotice />
 
       {feed.loading && <Loading />}
       {feed.error && <ErrorNote error={feed.error} />}

@@ -24,6 +24,16 @@ export function personPath(handle: string): string {
 }
 
 /**
+ * What to call the author of a comment or a reply.
+ *
+ * The server always sends the real name, so "You" is derived here. Shared by both
+ * review screens so they can't label the same row differently.
+ */
+export function authorLabel(author: { author_name: string; is_you: boolean }): string {
+  return author.is_you ? 'You' : author.author_name
+}
+
+/**
  * Follow / Following, as a toggle.
  *
  * Optimistic, like the watchlist button: the state flips immediately and reverts
@@ -197,12 +207,16 @@ export function ReviewCard({ review, showFilm = false }: { review: UserReview; s
               {review.author_name}
             </Link>
           )}
-          <StarRating
-            halfStars={review.rating_half_stars}
-            size="text-sm"
-            showEmpty={false}
-            className="shrink-0"
-          />
+          {/* No score, no stars. A film written about but never rated is not a film
+              rated zero. */}
+          {review.rating_half_stars !== null && (
+            <StarRating
+              halfStars={review.rating_half_stars}
+              size="text-sm"
+              showEmpty={false}
+              className="shrink-0"
+            />
+          )}
           {/* Why this review sorted where it did, on the screen that sorts by it. */}
           {!showFilm && review.author_followed && (
             <span className="font-label-sm text-label-sm text-primary">Following</span>

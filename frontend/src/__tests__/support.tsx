@@ -14,11 +14,14 @@ import { vi } from 'vitest'
 
 import type {
   Collection,
+  Comment,
   Image,
   Movie,
   MovieDetail,
   PeopleResponse,
   PersonCard,
+  Reply,
+  Review,
   SearchResponse,
   SearchResult,
   User,
@@ -187,4 +190,65 @@ export function aPerson(overrides: Partial<PersonCard> = {}): PersonCard {
 /** All three lists in one answer, as the screen gets them. */
 export function aPeopleResponse(overrides: Partial<PeopleResponse> = {}): PeopleResponse {
   return { query: '', results: [], following: [], followers: [], ...overrides }
+}
+
+/**
+ * One reply, by somebody other than the viewer.
+ *
+ * `is_you` defaults to false, and `author_name` is the real name either way — the
+ * server never sends "You", so a test for that word overrides the flag, not the name.
+ */
+export function aReply(overrides: Partial<Reply> = {}): Reply {
+  return {
+    id: 'reply-1',
+    author_id: 'account-1002',
+    author_name: 'Theo Marchetti',
+    author_handle: '@theo',
+    author_avatar: anImage('Portrait of Theo'),
+    is_you: false,
+    timestamp: 'August 19, 2026',
+    body: 'The ending gets me every time.',
+    ...overrides,
+  }
+}
+
+/** One comment by somebody else: nobody has liked it, and it has no replies. */
+export function aComment(overrides: Partial<Comment> = {}): Comment {
+  return {
+    id: 'comment-1',
+    author_id: 'account-1001',
+    author_name: 'Nadia Halim',
+    author_handle: '@nadia',
+    author_avatar: anImage('Portrait of Nadia'),
+    is_you: false,
+    timestamp: 'August 20, 2026',
+    body: 'Fifty years on and it still lands.',
+    like_count: null,
+    replies: [],
+    liked: false,
+    ...overrides,
+  }
+}
+
+/** One review in full, scored, with an empty thread. */
+export function aReview(overrides: Partial<Review> = {}): Review {
+  return {
+    id: 'elena-solaris',
+    movie: aMovie(),
+    backdrop: null,
+    director: 'Andrei Tarkovsky',
+    genres: ['Sci-Fi'],
+    author_id: '1136406',
+    author_name: 'Elena Vasquez',
+    author_handle: '@elena',
+    author_avatar: anImage('Portrait of Elena'),
+    author_followed: false,
+    watched_on: 'Reviewed on March 15, 2024',
+    rating_half_stars: 9,
+    paragraphs: ['A cold film that stays warm in the memory.'],
+    like_count: null,
+    comments: [],
+    liked: false,
+    ...overrides,
+  }
 }

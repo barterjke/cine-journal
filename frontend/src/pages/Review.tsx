@@ -12,13 +12,19 @@
  *
  * The export's REPLY button sat beside LIKE REVIEW with no target; here it
  * focuses the composer, and each comment gets its own inline Reply.
+ *
+ * The thread is shared. Every reader gets the same comments with their real
+ * authors, so each row draws that person's face, name and handle, and links to
+ * their page. Your own rows say "You" — derived from `is_you`, not from the name
+ * the server sent, which is always the real one.
  */
 import { useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
-import type { Comment, Review as ReviewData } from '../api'
+import type { Comment, Reply, Review as ReviewData } from '../api'
 import { api } from '../api'
 import { useApi } from '../useApi'
+import type { ActionState } from '../useAction'
 import { useAction } from '../useAction'
 import {
   ActionError,
@@ -28,8 +34,43 @@ import {
   Loading,
   TopAppBar,
 } from '../components/Chrome'
-import { FollowButton, personPath } from '../components/People'
+import { authorLabel, FollowButton, personPath } from '../components/People'
 import { StarRating } from '../components/StarRating'
+
+/** One reply, indented under its comment. No likes and no replies of its own. */
+function ReplyBlock({ reply }: { reply: Reply }) {
+  const page = personPath(reply.author_handle)
+
+  return (
+    <div className="mt-4 flex space-x-4">
+      <Link to={page} className="flex-shrink-0 hover:opacity-80 transition-opacity">
+        <img
+          className="w-8 h-8 rounded-full object-cover shadow-sm border border-[#F2F2F7]"
+          alt={reply.author_avatar.alt}
+          src={reply.author_avatar.src}
+        />
+      </Link>
+      <div>
+        <div className="flex items-baseline space-x-2 mb-1 flex-wrap">
+          <Link
+            to={page}
+            className="font-label-sm text-label-sm font-bold text-on-background hover:text-primary transition-colors"
+          >
+            {authorLabel(reply)}
+          </Link>
+          <Link
+            to={page}
+            className="font-label-sm text-label-sm text-on-surface-variant hover:text-primary transition-colors"
+          >
+            {reply.author_handle}
+          </Link>
+          <span className="font-label-sm text-label-sm text-outline">{reply.timestamp}</span>
+        </div>
+        <p className="font-body-md text-body-md text-on-background">{reply.body}</p>
+      </div>
+    </div>
+  )
+}
 
 function CommentBlock({
   comment,
@@ -55,21 +96,34 @@ function CommentBlock({
     setOpen(false)
   }
 
+  const page = personPath(comment.author_handle)
+
   return (
     <div className="flex space-x-4">
-      <img
-        className="w-10 h-10 rounded-full object-cover shadow-sm border border-[#F2F2F7] flex-shrink-0"
-        alt={comment.author_avatar.alt}
-        src={comment.author_avatar.src}
-      />
+      {/* The face links to its owner's page, as the author's does above. Yours does
+          too: the avatar and the handle are real either way. */}
+      <Link to={page} className="flex-shrink-0 hover:opacity-80 transition-opacity">
+        <img
+          className="w-10 h-10 rounded-full object-cover shadow-sm border border-[#F2F2F7]"
+          alt={comment.author_avatar.alt}
+          src={comment.author_avatar.src}
+        />
+      </Link>
       <div className="flex-grow">
-        <div className="flex items-baseline space-x-2 mb-1">
-          <span className="font-label-sm text-label-sm font-bold text-on-background">
-            {comment.author_name}
-          </span>
-          <span className="font-label-sm text-label-sm text-on-surface-variant">
-            {comment.timestamp}
-          </span>
+        <div className="flex items-baseline space-x-2 mb-1 flex-wrap">
+          <Link
+            to={page}
+            className="font-label-sm text-label-sm font-bold text-on-background hover:text-primary transition-colors"
+          >
+            {authorLabel(comment)}
+          </Link>
+          <Link
+            to={page}
+            className="font-label-sm text-label-sm text-on-surface-variant hover:text-primary transition-colors"
+          >
+            {comment.author_handle}
+          </Link>
+          <span className="font-label-sm text-label-sm text-outline">{comment.timestamp}</span>
         </div>
         <p className="font-body-md text-body-md text-on-background mb-2">{comment.body}</p>
 
@@ -88,8 +142,8 @@ function CommentBlock({
             >
               favorite
             </span>
-            {/* The export hid the count on comments that had none; a liked
-                comment always has at least one, so it shows then. */}
+            {/* How many people liked it, not whether you did — the total already
+                counts your own like. Nothing at all when nobody has. */}
             {comment.like_count !== null && <span>{comment.like_count}</span>}
           </button>
           <button
@@ -106,6 +160,7 @@ function CommentBlock({
             <input
               autoFocus
               className="flex-grow bg-surface-container-low border-none rounded-lg px-3 py-2 font-body-md text-body-md text-on-background focus:ring-1 focus:ring-primary placeholder:text-on-surface-variant"
+              // The real name, not "You": "Reply to You…" reads as a typo.
               placeholder={`Reply to ${comment.author_name}…`}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -124,22 +179,10 @@ function CommentBlock({
           </div>
         )}
 
+        {/* Same byline as the comment above, one size down. A reply has an author and
+            a date of its own now, so both are drawn. */}
         {comment.replies.map((reply) => (
-          <div key={reply.id} className="mt-4 flex space-x-4">
-            <img
-              className="w-8 h-8 rounded-full object-cover shadow-sm border border-[#F2F2F7] flex-shrink-0"
-              alt={reply.author_avatar.alt}
-              src={reply.author_avatar.src}
-            />
-            <div>
-              <div className="flex items-baseline space-x-2 mb-1">
-                <span className="font-label-sm text-label-sm font-bold text-on-background">
-                  {reply.author_name}
-                </span>
-              </div>
-              <p className="font-body-md text-body-md text-on-background">{reply.body}</p>
-            </div>
-          </div>
+          <ReplyBlock key={reply.id} reply={reply} />
         ))}
       </div>
     </div>
@@ -209,8 +252,8 @@ export function Review() {
       ),
     })
 
-    // A comment with no count shows 1 once liked, and none again once unliked —
-    // matching how the backend hydrates it.
+    // Optimistic: the shared total moves by one, which is what the write will
+    // return. Back to none when the last like goes.
     update(
       setLike(
         !previous.liked,
@@ -245,8 +288,12 @@ export function Review() {
     await postReply.run(commentId, body)
   }
 
-  const actionError =
-    likeReview.error ?? likeComment.error ?? postComment.error ?? postReply.error
+  // One notice for the four writes. The first one holding an error is what it is
+  // about, so its flags are the ones to pass on — a 401 then offers a sign-in.
+  const writes: ActionState[] = [likeReview, likeComment, postComment, postReply]
+  const failed = writes.find((write) => write.error !== null)
+  const actionError = failed?.error ?? null
+  const actionSignInRequired = failed?.signInRequired ?? false
   const clearActionError = () => {
     likeReview.clearError()
     likeComment.clearError()
@@ -372,12 +419,16 @@ export function Review() {
                   </div>
                 </div>
                 <div className="flex items-center gap-md shrink-0">
-                  <StarRating
-                    halfStars={data.rating_half_stars}
-                    color="text-primary"
-                    showEmpty={false}
-                    className="gap-0"
-                  />
+                  {/* Nothing where the stars would be when there is no score. Five
+                      empty glyphs would claim they rated it zero. */}
+                  {data.rating_half_stars !== null && (
+                    <StarRating
+                      halfStars={data.rating_half_stars}
+                      color="text-primary"
+                      showEmpty={false}
+                      className="gap-0"
+                    />
+                  )}
                   {/* The same button their page draws — following someone whose
                       review you just read shouldn't require going there first. */}
                   <FollowButton
@@ -399,7 +450,11 @@ export function Review() {
 
               {actionError && (
                 <div className="mb-lg">
-                  <ActionError message={actionError} onDismiss={clearActionError} />
+                  <ActionError
+                    message={actionError}
+                    onDismiss={clearActionError}
+                    signIn={actionSignInRequired}
+                  />
                 </div>
               )}
 

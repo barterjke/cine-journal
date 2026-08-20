@@ -67,7 +67,10 @@ export interface Story {
 export interface MobileFeedItem {
   id: string
   movie: Movie
-  /** "Elena rated it", or "Because you liked Interstellar". */
+  /**
+   * "Elena rated it", "Elena reviewed it" for a review with no score, or "Because you
+   * liked Interstellar". Printed as-is.
+   */
   subtitle: string
   /** The author's stars where this is somebody's review; `null` for a suggestion. */
   rating_half_stars: number | null
@@ -76,21 +79,59 @@ export interface MobileFeedItem {
   on_watchlist: boolean
 }
 
+/**
+ * One reply under a comment. Same author fields as `Comment`, and nothing else:
+ * replies carry no likes and no replies of their own.
+ */
 export interface Reply {
   id: string
+  /** What the follow button posts to. */
+  author_id: string
+  /** Always the real name. Print "You" from `is_you` instead — never from here. */
   author_name: string
+  /** "@sam". `personPath` drops the sigil. */
+  author_handle: string
   author_avatar: Image
+  /**
+   * Whether the viewer wrote it.
+   *
+   * The one thing the client can't work out: the session cookie is HttpOnly, so the
+   * browser never learns its own account id.
+   */
+  is_you: boolean
+  /** Pre-formatted, e.g. "August 20, 2026". */
+  timestamp: string
   body: string
 }
 
+/**
+ * One comment on a review, with its replies.
+ *
+ * Shared content, not a per-viewer list. Everybody sees the same thread with real
+ * authors on it, so the author fields are always usable — the avatar and handle link
+ * to a page even on the viewer's own row.
+ */
 export interface Comment {
   id: string
+  author_id: string
+  /** Always the real name, as on `Reply`. */
   author_name: string
+  author_handle: string
   author_avatar: Image
+  is_you: boolean
+  /** Pre-formatted, e.g. "August 20, 2026". */
   timestamp: string
   body: string
+  /**
+   * How many people liked it, or `null` for none.
+   *
+   * A shared total with the viewer's own like already in it. Render it as-is; adding
+   * `liked` on top would count that person twice.
+   */
   like_count: number | null
+  /** Oldest first, as the thread draws them. */
   replies: Reply[]
+  /** Whether *the viewer* liked it. */
   liked: boolean
 }
 
@@ -113,7 +154,8 @@ export interface Review {
   author_avatar: Image
   author_followed: boolean
   watched_on: string
-  rating_half_stars: number
+  /** `null` for prose written without a score — see `UserReview`. Draws no stars. */
+  rating_half_stars: number | null
   paragraphs: string[]
   like_count: number | null
   comments: Comment[]
@@ -406,7 +448,13 @@ export interface UserReview {
   movie_id: string
   movie_title: string
   poster: Image | null
-  rating_half_stars: number
+  /**
+   * `null` for prose written without a score.
+   *
+   * A rating and a review are separate things here: clearing your score must not
+   * delete what you wrote, so a review can exist with no number beside it.
+   */
+  rating_half_stars: number | null
   body: string
   /** Pre-formatted, e.g. "12 November 2014". */
   written_on: string
