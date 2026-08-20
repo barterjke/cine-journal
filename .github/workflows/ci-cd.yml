@@ -1,7 +1,7 @@
-# Test both halves of CinéJournal, then deploy them.
+# Test both halves of CinéJournal, then deploy them to the one VM.
 #
 #   pull request     ->  test-backend, test-frontend
-#   push to main     ->  tests, then deploy-api + deploy-frontend
+#   push to main     ->  tests, then two images, then one deploy
 #   manual dispatch  ->  same as push to main
 #
 # One workflow, not two chained by `workflow_run`. A `workflow_run` status is reported
@@ -31,6 +31,7 @@ concurrency:
 env:
   # Lowercase: registries reject uppercase path components.
   IMAGE: ghcr.io/barterjke/cine-journal-api
+  WEB_IMAGE: ghcr.io/barterjke/cine-journal-web
 
 jobs:
   # ---------------------------------------------------------------- the gates
@@ -103,37 +104,51 @@ jobs:
           npm run test
 
       # Typechecking is not building: `tsc --noEmit` never resolves asset imports, so a
-      # broken bundle can typecheck clean and fail on Vercel after the API has shipped.
+      # broken bundle can typecheck clean and then fail inside the web image build,
+      # after the API has already shipped. Fail here instead, on the runner.
       - name: Build
         working-directory: frontend
         run: npm run build
 
   # ---------------------------------------------------------------- the deploys
   #
-  # `needs:` alone is not enough — a PR run satisfies it. Hence the `if:` on both.
+  # `needs:` alone is not enough — a PR run satisfies it. Hence the `if:` on both of
+  # the jobs that start a chain: build-image and build-web-image. Everything
+  # downstream of them inherits the gate.
 
-  deploy-api:
-    name: Deploy API to Oracle Cloud
+  # Both architectures, because which one you get on the Always Free tier is not a
+  # choice you fully control: A1.Flex (arm64) is often out of capacity, and the fallback
+  # E2.1.Micro is amd64. A single-arch image on the wrong shape fails as
+  # `exec format error` after a successful pull, which reads as a corrupt binary.
+  #
+  # Each arch builds on its own native runner rather than one runner with QEMU.
+  # Emulating rustc plus rusqlite's bundled SQLite turns a ~6 minute build into most of
+  # an hour; native and in parallel, both finish in about the time one used to.
+  build-image:
+    name: Build ${{ matrix.arch }} image
     needs: [test-backend, test-frontend]
     if: >-
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    # Native arm64, free for public repos. The alternative is `ubuntu-latest` plus
-    # docker/setup-qemu-action@v3, which emulates rustc and turns a ~6 min build into
-    # most of an hour. See docs/ci-cd.md.
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       # Lets the run's own GITHUB_TOKEN push to GHCR. No PAT needed.
       packages: write
+    strategy:
+      # One arch failing shouldn't cancel the other — the logs of the survivor are
+      # usually what tells you whether the cause was arch-specific.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
     steps:
       - uses: actions/checkout@v4
-
-      # `latest` moves, so it can only say what is newest. The sha tag is what rollback
-      # needs.
-      - name: Name this build
-        id: build
-        run: echo "tag=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -146,21 +161,158 @@ jobs:
       # Context is the repo root, not backend/: the API serves /img from
       # ../reference/cine-journal/img, which a backend/ context cannot COPY.
       #
-      # The gha layer cache only helps if backend/Dockerfile builds dependencies in a
-      # layer the source doesn't invalidate (it does — see its dummy-main.rs step).
-      - name: Build and push the arm64 image
+      # Pushed by digest with no tag. Tagging here would have the two jobs race, each
+      # overwriting the other's tag with a single-arch image — the exact bug this job
+      # exists to fix. `publish-image` attaches the tags once both digests exist.
+      #
+      # The cache scope is per-arch. Sharing one scope would have each arch evicting the
+      # other's layers on every run.
+      - name: Build and push by digest
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: backend/Dockerfile
-          platforms: linux/arm64
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          provenance: false
+
+      - name: Hand the digest to publish-image
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          printf '%s' '${{ steps.push.outputs.digest }}' > "/tmp/digests/${{ matrix.arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/${{ matrix.arch }}
+          retention-days: 1
+
+  # Turns the two per-arch digests into one manifest list, so `docker pull` resolves to
+  # whichever arch is asking. Until this runs the tags don't move, which means a failed
+  # build leaves the previous good image in place rather than a half-published one.
+  publish-image:
+    name: Publish the multi-arch tag
+    needs: build-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # `latest` moves, so it can only say what is newest. The sha tag is what rollback
+      # needs.
+      - name: Name this build
+        id: tag
+        run: echo "tag=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Create the manifest list
+        run: |
+          set -euo pipefail
+          refs=()
+          for f in /tmp/digests/*; do
+            refs+=("${IMAGE}@$(cat "$f")")
+          done
+          # Guard against publishing a one-arch manifest if a matrix leg was skipped:
+          # that would silently reintroduce the exec format error.
+          [ "${#refs[@]}" -eq 2 ] || { echo "::error::expected 2 arch digests, got ${#refs[@]} — refusing to publish a single-arch tag"; exit 1; }
+          docker buildx imagetools create \
+            -t "${IMAGE}:${{ steps.tag.outputs.tag }}" \
+            -t "${IMAGE}:latest" \
+            "${refs[@]}"
+          docker buildx imagetools inspect "${IMAGE}:${{ steps.tag.outputs.tag }}"
+
+  # The frontend image: nginx plus the built Vite bundle. Nothing like the API's
+  # matrix, because there is nothing arch-specific to build.
+  #
+  # One `build-push-action` for both arches, and no `setup-qemu-action`, because
+  # neither is needed here:
+  #   - frontend/Dockerfile pins the node stage to --platform=$BUILDPLATFORM, so
+  #     `npm ci && npm run build` runs natively and produces the same static files
+  #     whichever arch is being targeted.
+  #   - the nginx stage has no RUN, only COPY, so buildkit never executes an
+  #     arm64 binary on an amd64 runner.
+  # Add a RUN to that stage and this job needs docker/setup-qemu-action@v3.
+  build-web-image:
+    name: Build the web image
+    needs: [test-backend, test-frontend]
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same expression as publish-image, on the same commit, so both images end up
+      # with the same sha tag. Each is only ever used with its own image anyway.
+      - name: Name this build
+        id: tag
+        run: echo "tag=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tagged directly, unlike the API: one job means no race between two jobs
+      # overwriting each other's tag, so there is nothing for a manifest-merge step
+      # to fix.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.IMAGE }}:${{ steps.build.outputs.tag }}
-            ${{ env.IMAGE }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ env.WEB_IMAGE }}:${{ steps.tag.outputs.tag }}
+            ${{ env.WEB_IMAGE }}:latest
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
           provenance: false
+
+  # One deploy for the whole stack, since Caddy fronts both images. `needs:` both image
+  # jobs, so a bundle never ships against an API that didn't build — a mixed state that
+  # was unavoidable while the two halves deployed to two providers.
+  deploy:
+    name: Deploy to Oracle Cloud
+    needs: [publish-image, build-web-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      TAG: ${{ needs.publish-image.outputs.tag }}
+      WEB_TAG: ${{ needs.build-web-image.outputs.tag }}
+    steps:
 
       - name: Set up the SSH key
         env:
@@ -214,6 +366,52 @@ jobs:
           echo "checkout now at $(git rev-parse --short HEAD)"
           REMOTE
 
+      # Config lives in GitHub rather than by hand on the VM, so a rebuilt instance needs
+      # only `git clone` plus a deploy. Oracle stops idle Always Free instances and ARM
+      # capacity churns, so rebuilding is likely enough to plan for.
+      #
+      # Skipped entirely when API_DOMAIN or ACME_EMAIL is unset, which leaves a hand-made
+      # .env alone — that is still a supported way to run.
+      #
+      # The file content goes over stdin, never in the ssh command string: argv is visible
+      # in the VM's process list. `umask 077` so it lands 600, and write-then-rename so a
+      # dropped connection can't leave a half-written .env that compose would read.
+      - name: Write .env on the VM
+        env:
+          HOST: ${{ secrets.OCI_HOST }}
+          USER_NAME: ${{ secrets.OCI_USER }}
+          PORT: ${{ vars.SSH_PORT || '22' }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || 'cine-journal' }}
+          API_DOMAIN: ${{ vars.API_DOMAIN }}
+          ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
+          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${API_DOMAIN:-}" ] || [ -z "${ACME_EMAIL:-}" ]; then
+            echo "::notice::API_DOMAIN variable or ACME_EMAIL secret is unset — leaving the VM's own .env in place. See DEPLOY.md Part 3."
+            exit 0
+          fi
+          # Not fatal: no token is demo mode, which is a legitimate way to deploy.
+          if [ -z "${TMDB_TOKEN:-}" ]; then
+            echo "::warning::TMDB_TOKEN is unset — the API will serve the invented dataset behind a banner."
+          fi
+          # Also not fatal. With these empty the API boots with sign-in off: reads public,
+          # every write 401. Warn, because on a multi-user site that is the whole app
+          # read-only, and nothing on the page explains why writing fails.
+          if [ -z "${GOOGLE_CLIENT_ID:-}" ] || [ -z "${GOOGLE_CLIENT_SECRET:-}" ]; then
+            echo "::warning::GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET unset — sign-in is disabled, so every write returns 401. See DEPLOY.md."
+          fi
+          # PUBLIC_URL is derived, not configured: the OAuth redirect URI is built from it
+          # and has to match the Google console exactly. One less value to get wrong.
+          printf 'API_DOMAIN=%s\nACME_EMAIL=%s\nTMDB_TOKEN=%s\nPUBLIC_URL=https://%s\nGOOGLE_CLIENT_ID=%s\nGOOGLE_CLIENT_SECRET=%s\n' \
+            "$API_DOMAIN" "$ACME_EMAIL" "${TMDB_TOKEN:-}" "$API_DOMAIN" \
+            "${GOOGLE_CLIENT_ID:-}" "${GOOGLE_CLIENT_SECRET:-}" |
+            ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                -o ConnectTimeout=15 -p "$PORT" "$USER_NAME@$HOST" \
+                "cd '$DEPLOY_PATH' && umask 077 && cat > .env.new && mv .env.new .env && echo 'wrote .env'"
+
       # The token goes over stdin, so it never appears in the VM's process list, and it
       # expires when this job ends. Nothing long-lived is stored on the box.
       - name: Log the VM in to GHCR
@@ -235,20 +433,19 @@ jobs:
           USER_NAME: ${{ secrets.OCI_USER }}
           PORT: ${{ vars.SSH_PORT || '22' }}
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH || 'cine-journal' }}
-          TAG: ${{ steps.build.outputs.tag }}
         run: |
           set -euo pipefail
           # Script on stdin via `bash -s`, so quoting is handled once.
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
               -o ConnectTimeout=15 -p "$PORT" "$USER_NAME@$HOST" \
-              "API_TAG='$TAG' DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
+              "API_TAG='$TAG' WEB_TAG='$WEB_TAG' DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$DEPLOY_PATH"
 
-          # docker-compose.yml reads `${API_TAG:-latest}`. Exported because compose reads
-          # the environment. (DEPLOY.md calls it API_IMAGE_TAG; compose decides, and it
-          # says API_TAG.)
-          export API_TAG
+          # docker-compose.yml reads `${API_TAG:-latest}` and `${WEB_TAG:-latest}`.
+          # Exported because compose reads the environment. Unset means `latest`, with no
+          # error, so a typo in either name looks like a deploy that did nothing.
+          export API_TAG WEB_TAG
 
           # DEPLOY.md keeps the variables in .env.deploy, which compose does not
           # auto-load — only .env. Both layouts are in circulation, so handle either.
@@ -259,20 +456,39 @@ jobs:
           elif [ -f .env ]; then
             echo "--- using .env"
           else
-            echo "::error::neither .env.deploy nor .env exists in $PWD, so API_DOMAIN and TMDB_TOKEN are unset and compose will refuse to start. See DEPLOY.md Part 3."
+            echo "::error::neither .env.deploy nor .env exists in $PWD, so API_DOMAIN is unset and compose will refuse to start. Set the API_DOMAIN variable and the ACME_EMAIL secret so the deploy writes it, or create it by hand — see DEPLOY.md Part 3."
             exit 1
           fi
 
-          echo "--- deploying $API_TAG"
+          echo "--- deploying api=$API_TAG web=$WEB_TAG"
+          # No service names: pulls api and web together, so both are local before
+          # anything restarts.
           "${compose[@]}" pull
           # `--remove-orphans`: a service dropped from compose would otherwise keep
           # running and holding its port.
           #
           # `--wait` makes the compose healthchecks the deploy's gate, so this step is
-          # green only once the API answers /api/health. 330s against the healthcheck's
-          # 300s start_period, which covers a first boot re-seeding from TMDB.
+          # green only once the API answers /api/health and nginx answers /healthz.
+          # 330s against the API healthcheck's 300s start_period, which covers a first
+          # boot re-seeding from TMDB. web is up in seconds.
           "${compose[@]}" up -d --remove-orphans --wait --wait-timeout 330
           "${compose[@]}" ps
+
+          # Caddy must be recreated, not reloaded, and `up -d` above won't do it: the
+          # service definition is unchanged, so compose leaves the container alone even
+          # though the Caddyfile it mounts is different.
+          #
+          # Reloading is not enough either. `Caddyfile` is a single-file bind mount, and
+          # `git reset --hard` replaces the file rather than editing it — new inode. Docker
+          # mounted the old inode, so the container keeps reading the file that used to be
+          # at that path, and `caddy reload` re-reads the stale copy and reports success.
+          # That cost an afternoon: routing changes on disk, old routes serving, nothing
+          # in any log saying so.
+          #
+          # Recreating re-resolves the mount. Certificates live in the caddy_data volume,
+          # so nothing is re-issued; the blip is about a second.
+          "${compose[@]}" up -d --force-recreate caddy
+          echo "--- caddy recreated against the current Caddyfile"
 
           # Every deploy leaves the old image behind, and the Always Free boot volume is
           # small. Untagged parents only, so a rollback target survives.
@@ -301,6 +517,34 @@ jobs:
           echo "::error::$HEALTH_URL never answered. The new image is running but unhealthy — see the rollback section of docs/ci-cd.md."
           exit 1
 
+      # Separate from the check above, because they fail for different reasons: the API
+      # answering proves Caddy, DNS and the certificate, so a failure here is web or
+      # Caddy's catch-all route, not the network.
+      #
+      # Uses API_DOMAIN — the site and the API are one origin now, so there is no second
+      # hostname to configure.
+      - name: Smoke-test the site
+        env:
+          API_DOMAIN: ${{ vars.API_DOMAIN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$API_DOMAIN" ]; then
+            echo "::warning::repository variable API_DOMAIN is not set, so nothing checked that the site serves. See docs/ci-cd.md."
+            exit 0
+          fi
+          # Greps for the mount point rather than just a 200: Caddy's own error pages are
+          # 200-adjacent HTML, and so is nginx's default index.
+          for attempt in $(seq 1 10); do
+            if curl -fsS --max-time 10 "https://$API_DOMAIN/" | grep -q 'id="root"'; then
+              echo "site serving after ${attempt} attempt(s)"
+              exit 0
+            fi
+            echo "no bundle yet (attempt ${attempt}/10)"
+            sleep 6
+          done
+          echo "::error::https://$API_DOMAIN/ did not serve the bundle. Check 'docker compose logs web' on the VM, and the handle blocks in Caddyfile."
+          exit 1
+
       # `always()`: a failure above should not leave a credential file on the VM.
       - name: Log the VM out of GHCR
         if: always()
@@ -315,71 +559,16 @@ jobs:
                 'docker logout ghcr.io' || true
           fi
 
-      # In the run summary so the tag is findable later, when you need it to roll back.
+      # In the run summary so the tags are findable later, when you need them to roll
+      # back. Both images, because a rollback is usually only one of them.
       - name: Record what shipped
         if: always()
         run: |
           {
-            echo "### API"
+            echo "### Deployed"
             echo
-            echo "- image: \`${IMAGE}:${{ steps.build.outputs.tag }}\`"
+            echo "- api: \`${IMAGE}:${TAG}\`"
+            echo "- web: \`${WEB_IMAGE}:${WEB_TAG}\`"
             echo "- commit: ${{ github.sha }}"
-            echo "- roll back with: \`API_TAG=<previous-tag> docker compose up -d\` on the VM"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  deploy-frontend:
-    name: Deploy frontend to Vercel
-    needs: [test-backend, test-frontend]
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    # Every vercel command reads these from the environment.
-    env:
-      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install the Vercel CLI
-        run: |
-          set -euo pipefail
-          [ -n "${VERCEL_TOKEN:-}" ] || { echo "::error::secret VERCEL_TOKEN is not set — see docs/ci-cd.md"; exit 1; }
-          [ -n "${VERCEL_ORG_ID:-}" ] || { echo "::error::secret VERCEL_ORG_ID is not set — see docs/ci-cd.md"; exit 1; }
-          [ -n "${VERCEL_PROJECT_ID:-}" ] || { echo "::error::secret VERCEL_PROJECT_ID is not set — see docs/ci-cd.md"; exit 1; }
-          # Unpinned: the CLI talks to a hosted API, so an old CLI breaks more often than
-          # a new one. Pin a major here if that changes.
-          npm install --global vercel@latest
-
-      # Runs in frontend/, so the project's Root Directory in the Vercel dashboard must
-      # be empty. Set it to `frontend` too and the CLI looks for frontend/frontend.
-      - name: Pull the project settings
-        working-directory: frontend
-        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
-
-      # Build on the runner so the deployed bundle is the one CI verified, and a build
-      # failure lands in this log. `deploy --prebuilt` then only uploads.
-      - name: Build
-        working-directory: frontend
-        run: vercel build --prod --token="$VERCEL_TOKEN"
-
-      - name: Deploy
-        id: deploy
-        working-directory: frontend
-        run: |
-          set -euo pipefail
-          url=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")
-          echo "url=$url" >> "$GITHUB_OUTPUT"
-          {
-            echo "### Frontend"
-            echo
-            echo "- deployment: $url"
-            echo "- commit: ${{ github.sha }}"
+            echo "- roll back with: \`API_TAG=<previous-tag> WEB_TAG=<previous-tag> docker compose up -d\` on the VM"
           } >> "$GITHUB_STEP_SUMMARY"

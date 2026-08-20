@@ -11,6 +11,15 @@
 !.env.example
 !.env.deploy.example
 
+# SSH keys. The OCI console downloads the instance key pair as
+# `ssh-key-<date>.key` and `.key.pub`. The repo is public, so match by pattern
+# rather than by name — the next key you download is covered too.
+*.key
+*.pem
+*.pub
+id_rsa*
+id_ed25519*
+
 # The visitor's own likes, ratings, watchlist and comments, plus the seeded
 # social layer. Local state, not source — recreated on first run.
 *.db

@@ -1,17 +1,22 @@
 //! SQLite persistence.
 //!
-//! Two unrelated things live here, for one reason each:
+//! Three things live here:
 //!
-//! - **The social layer** — friends, the stories rail, live-discussion rooms.
-//!   TMDB has none of it: `/3/movie/{id}/reviews` returns flat prose with no
-//!   reply threads, and there is no notion of a friend. It has to come from
-//!   somewhere, and the export's cast of people is the obvious somewhere.
-//! - **The visitor's own deltas** — watchlist, ratings, likes, posted comments
-//!   and replies. Previously a `RwLock<Store>` that died on every `cargo run`.
+//! - **The social layer** — the people, their reviews, their taste. TMDB has none
+//!   of it: `/3/movie/{id}/reviews` returns flat prose with no reply threads, and
+//!   there is no notion of a friend. It has to come from somewhere, and the
+//!   export's cast of people is the obvious somewhere.
+//! - **Each user's own deltas** — watchlist, ratings, likes, posted comments and
+//!   replies. Every one of those tables is keyed on `user_id`, and that key is the
+//!   only thing keeping one person's screen out of another's. See `PER_USER_TABLES`.
+//! - **Accounts and sessions.** An account is a `people` row with a `google_sub`,
+//!   so it has a page and a nickname like anyone else; a session is a row in
+//!   `sessions` naming an opaque token. `auth` drives both.
 //!
-//! `hydrate` is untouched by this: `load_store` rebuilds the same `state::Store`
-//! it has always taken, so the three-layer split (content / deltas / fold) holds
-//! and all of `hydrate`'s tests still exercise the same shape.
+//! `hydrate` is untouched by all of this: `load_store` rebuilds the same
+//! `state::Store` it has always taken, so the three-layer split (content / deltas /
+//! fold) holds and all of `hydrate`'s tests still exercise the same shape. What
+//! changed is that the snapshot is now one person's rather than everyone's.
 //!
 //! The *export's* social rows carry **no film ids**. Which film a rail entry is
 //! about is decided at request time by pairing template *i* with trending film
@@ -34,6 +39,7 @@ use std::collections::BTreeMap;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::auth::random_token;
 use crate::models::Image;
 use crate::state::{PostedComment, PostedReply, Store};
 
@@ -41,6 +47,40 @@ use crate::state::{PostedComment, PostedReply, Store};
 /// from `backend/`). Override with `DATABASE_PATH`, and `:memory:` works for a
 /// throwaway run.
 pub const DEFAULT_PATH: &str = "cine-journal.db";
+
+/// The account that inherits every row written before sign-in existed.
+///
+/// The app used to have one visitor and one row set. Those rows are somebody's
+/// watchlist and somebody's ratings, so `migrate` gives them an owner rather than
+/// deleting them. It is an ordinary `people` row — it has a page at
+/// `/api/people/alexm_cinema` and can be followed — but it has no `google_sub`, so
+/// nobody can sign in as it. To hand its rows to a real account, run
+/// `UPDATE <table> SET user_id = '<account id>' WHERE user_id = 'user-legacy-visitor'`
+/// over the per-user tables (`PER_USER_TABLES`, plus `comments` and `replies`).
+pub const LEGACY_USER_ID: &str = "user-legacy-visitor";
+
+/// The user id that owns nothing — an anonymous reader.
+///
+/// Every per-user query takes an id, and a reader with no session still has to be
+/// answered. No account can hold this value (ids are minted with a prefix), so the
+/// personal tables read back empty for it and reads need no second code path.
+pub const ANONYMOUS: &str = "";
+
+/// How long a session lives, in days.
+///
+/// Long enough that signing in feels like staying signed in, short enough that a
+/// leaked cookie stops working. The row is what grants access, so shortening this
+/// takes effect immediately rather than after old tokens expire.
+const SESSION_DAYS: u32 = 30;
+
+/// How long a pending OAuth `state` value is accepted, in minutes.
+///
+/// The consent screen is a few clicks. Anything older is a stale tab or a replay,
+/// and either way the sign-in should be restarted rather than completed.
+const STATE_MINUTES: u32 = 10;
+
+/// How many suffixed nicknames to try before falling back to a random one.
+const HANDLE_TRIES: u32 = 50;
 
 pub type Result<T> = rusqlite::Result<T>;
 
@@ -57,8 +97,18 @@ pub fn open(path: &str) -> Result<Connection> {
 
 /// Apply the schema and seed the social content. Idempotent: safe on every start.
 pub fn prepare(conn: &Connection) -> Result<()> {
-    conn.execute_batch(
-        "PRAGMA foreign_keys = ON;
+    conn.execute_batch(SCHEMA)?;
+    // The per-user tables come from one list, because `migrate` rebuilds them from
+    // the same strings — see `adopt_pre_account_rows`.
+    for table in &PER_USER_TABLES {
+        conn.execute_batch(table.create)?;
+    }
+    migrate(conn)
+}
+
+/// Everything that is not per-user: people, their seeded content, sessions, and the
+/// two posting tables whose ids the frontend holds.
+const SCHEMA: &str = "PRAGMA foreign_keys = ON;
          PRAGMA journal_mode = WAL;
 
          -- The app's users. Seeded once from `content::harvest_graph`, then
@@ -75,15 +125,34 @@ pub fn prepare(conn: &Connection) -> Result<()> {
          -- described actions nothing recorded. Anyone on screen is now somebody the
          -- visitor follows, and the rails come from what those people wrote.
          --
-         -- `follows_visitor` is stored rather than derived: with one visitor
-         -- nobody can really press follow on you, so this is seeded (a little
-         -- under half of them) and thereafter left alone. It is the one field
-         -- here that describes something that did not happen, and it is a
-         -- column rather than a hash so a test can set it.
+         -- `follows_visitor` is stored rather than derived: it is seeded on a
+         -- little under half of the harvested people and thereafter left alone,
+         -- so it now means 'follows whoever is signed in'. Real accounts have it
+         -- at 0 and follow each other through `follows` instead, which is why
+         -- `USER_SELECT` reads both.
          --
-         -- `unseen`, `in_stories` and `position` are likewise vestigial, kept
-         -- because SQLite has no DROP COLUMN before 3.35 and rewriting the table
-         -- would risk a visitor's own follows for tidiness. Nothing reads them.
+         -- Sign-in added five columns. A real account is a `people` row like any
+         -- other — it has a page, a nickname and an avatar, and it can be
+         -- followed — and these are what make it reachable:
+         --
+         --   `google_sub`     Google's stable subject id, the login key. UNIQUE
+         --                    through `people_by_google_sub`, since ADD COLUMN
+         --                    cannot carry the constraint. NULL for seeded people,
+         --                    and NULLs do not collide in a SQLite unique index.
+         --   `email`          What Google reported. Never used as a key: Google
+         --                    lets an address move between accounts, `sub` does not.
+         --   `is_account`     1 for a real account, 0 for a seeded person. This is
+         --                    what keeps `needs_graph_seed` from thinking a sign-up
+         --                    was the harvest.
+         --   `joined_at`      When the account was created, for 'Cinephile since'.
+         --                    NULL for the legacy visitor, whose rows predate this.
+         --   `starter_follow` Whether a new account starts out following them. Set
+         --                    by the seed, read by `grant_starter_follows`, so a
+         --                    fresh sign-in opens on a feed rather than a blank.
+         --
+         -- `unseen`, `in_stories` and `position` are vestigial, kept because SQLite
+         -- has no DROP COLUMN before 3.35 and rewriting the table would risk a
+         -- visitor's own follows for tidiness. Nothing reads them.
          CREATE TABLE IF NOT EXISTS people (
              id            TEXT PRIMARY KEY,
              name          TEXT NOT NULL,
@@ -95,16 +164,41 @@ pub fn prepare(conn: &Connection) -> Result<()> {
              handle        TEXT UNIQUE,
              bio           TEXT,
              is_user       INTEGER NOT NULL DEFAULT 0,
-             follows_visitor INTEGER NOT NULL DEFAULT 0
+             follows_visitor INTEGER NOT NULL DEFAULT 0,
+             google_sub    TEXT,
+             email         TEXT,
+             is_account    INTEGER NOT NULL DEFAULT 0,
+             joined_at     TEXT,
+             starter_follow INTEGER NOT NULL DEFAULT 0
          );
 
-         -- Who the visitor follows. One row per follow, written by the button;
-         -- deleting the row unfollows. Not symmetric with `follows_visitor`:
-         -- that one is about them, this one is the visitor's own action, and
-         -- conflating the two would make an unfollow silently rewrite history.
-         CREATE TABLE IF NOT EXISTS follows (
-             person_id  TEXT PRIMARY KEY REFERENCES people(id),
-             followed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+         -- A signed-in browser, by opaque token.
+         --
+         -- A table rather than a signed cookie, so logging out can revoke: deleting
+         -- the row ends the session everywhere, which a self-contained token cannot
+         -- do without a blocklist that is this table under another name.
+         --
+         -- `expires_at` is written as `datetime('now', '+N days')`, the same format
+         -- CURRENT_TIMESTAMP produces, so the lookups can compare it as a string.
+         CREATE TABLE IF NOT EXISTS sessions (
+             token      TEXT PRIMARY KEY,
+             user_id    TEXT NOT NULL REFERENCES people(id),
+             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+             expires_at TEXT NOT NULL
+         );
+
+         CREATE INDEX IF NOT EXISTS sessions_by_user ON sessions(user_id);
+
+         -- Pending OAuth `state` values — the CSRF check.
+         --
+         -- Written when a sign-in starts, deleted when the callback presents it.
+         -- The delete is the check: a state that was already spent, was never
+         -- issued, or was issued too long ago deletes nothing, and the callback
+         -- refuses. Stored server-side rather than in a cookie so a state cannot be
+         -- forged by anyone who can set cookies for this host.
+         CREATE TABLE IF NOT EXISTS auth_states (
+             state      TEXT PRIMARY KEY,
+             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
          );
 
          -- A user's review of one specific film.
@@ -145,77 +239,27 @@ pub fn prepare(conn: &Connection) -> Result<()> {
              PRIMARY KEY (person_id, movie_id)
          );
 
-         -- The visitor's own state. Was state::Store, in memory.
-         CREATE TABLE IF NOT EXISTS watchlist (
-             movie_id TEXT PRIMARY KEY,
-             added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-         );
-
-         -- Films the visitor marked as favourites, by pressing the heart on a
-         -- film's page.
-         --
-         -- A separate table from `ratings` rather than the visitor's highest-rated
-         -- films, which is what the profile's Favorite Films strip used to mean.
-         -- Those are different statements: a five-star rating says the film is
-         -- good, a favourite says it is *yours*, and deriving one from the other
-         -- made the strip change behind your back every time you rated something.
-         CREATE TABLE IF NOT EXISTS favorites (
-             movie_id TEXT PRIMARY KEY,
-             added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-         );
-
-         -- The visitor's own prose about a film. One review per film, which is
-         -- what the PK enforces — writing again edits what's there.
-         --
-         -- Not a column on `ratings`, because the two are independent: clearing a
-         -- rating must not delete what you wrote, and you can write about a film
-         -- without scoring it. `user_reviews` is the other people's equivalent; it
-         -- is keyed on `people(id)` and the visitor has no row there (see
-         -- `models::Profile`), so this is the visitor-shaped copy of it — the same
-         -- split `watchlist` and `ratings` already have.
-         CREATE TABLE IF NOT EXISTS visitor_reviews (
-             movie_id   TEXT PRIMARY KEY,
-             body       TEXT NOT NULL,
-             written_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-         );
-
-         -- Editable scalars belonging to the visitor — at present just their bio.
-         --
-         -- A key/value table rather than a one-row `visitor` table with a column
-         -- per field: the rest of their identity (name, handle, avatar, the joined
-         -- line) is still the export's, held in `hydrate` as constants, and a table
-         -- with one editable column and four decorative ones would imply an account
-         -- system that still doesn't exist.
+         -- Vestigial. It held the one visitor's bio under a single key; a bio now
+         -- lives on the account's own `people` row, because an account is a person.
+         -- The table stays so `migrate` can read the old value out of it, and the
+         -- row stays after that rather than being deleted.
          CREATE TABLE IF NOT EXISTS settings (
              key   TEXT PRIMARY KEY,
              value TEXT NOT NULL
-         );
-
-         -- `rated_at` orders the profile's Recent Reviews tile. Nullable rather
-         -- than NOT NULL DEFAULT CURRENT_TIMESTAMP, because SQLite ADD COLUMN only
-         -- accepts a constant default — and this column arrived after the table
-         -- did, so `migrate` has to add it to databases already on disk. Rows
-         -- written before it exist sort last; `set_rating` stamps every new one.
-         CREATE TABLE IF NOT EXISTS ratings (
-             movie_id   TEXT PRIMARY KEY,
-             half_stars INTEGER NOT NULL,
-             rated_at   TEXT
-         );
-
-         CREATE TABLE IF NOT EXISTS liked_reviews (
-             review_id TEXT PRIMARY KEY
-         );
-
-         CREATE TABLE IF NOT EXISTS liked_comments (
-             comment_id TEXT PRIMARY KEY
          );
 
          -- `id` is the AUTOINCREMENT rowid rendered as 'comment-<n>'. It replaces
          -- the in-memory counter, whose ids restarted at 1 on every boot and
          -- would now collide with rows already on disk. AUTOINCREMENT (rather
          -- than a plain rowid) never reuses a number even after a delete.
+         --
+         -- These two are the only per-user tables `migrate` does not rebuild: the
+         -- frontend holds their ids, so the rowid has to survive, and a plain
+         -- `user_id` column is enough because the id already keys the row. The
+         -- default is there for the ADD COLUMN path and never used by a write.
          CREATE TABLE IF NOT EXISTS comments (
              id         INTEGER PRIMARY KEY AUTOINCREMENT,
+             user_id    TEXT NOT NULL DEFAULT '',
              review_id  TEXT NOT NULL,
              body       TEXT NOT NULL,
              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -223,6 +267,7 @@ pub fn prepare(conn: &Connection) -> Result<()> {
 
          CREATE TABLE IF NOT EXISTS replies (
              id         INTEGER PRIMARY KEY AUTOINCREMENT,
+             user_id    TEXT NOT NULL DEFAULT '',
              review_id  TEXT NOT NULL,
              comment_id TEXT NOT NULL,
              body       TEXT NOT NULL,
@@ -230,19 +275,130 @@ pub fn prepare(conn: &Connection) -> Result<()> {
          );
 
          CREATE INDEX IF NOT EXISTS comments_by_review ON comments(review_id);
-         CREATE INDEX IF NOT EXISTS replies_by_comment ON replies(review_id, comment_id);",
-    )?;
+         CREATE INDEX IF NOT EXISTS replies_by_comment ON replies(review_id, comment_id);";
 
-    migrate(conn)
+/// One table that used to hold the single visitor's rows and now holds everybody's.
+///
+/// `user_id` is part of the primary key, and that is the point: two people have to
+/// be able to watchlist the same film. SQLite cannot add a column to a primary key,
+/// so `adopt_pre_account_rows` rebuilds these tables on a database already on disk
+/// rather than altering them.
+struct PerUser {
+    name: &'static str,
+    /// The current definition. Used by `prepare` and by the rebuild, so the fresh
+    /// shape and the migrated shape cannot drift apart.
+    create: &'static str,
+    /// The columns the pre-accounts version had, for the rebuild's copy.
+    carried: &'static str,
 }
+
+/// Every table keyed on the person who wrote its rows.
+const PER_USER_TABLES: [PerUser; 7] = [
+    // The visitor's own state. Was `state::Store`, in memory.
+    PerUser {
+        name: "watchlist",
+        create: "CREATE TABLE IF NOT EXISTS watchlist (
+                     user_id  TEXT NOT NULL,
+                     movie_id TEXT NOT NULL,
+                     added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                     PRIMARY KEY (user_id, movie_id)
+                 )",
+        carried: "movie_id, added_at",
+    },
+    // Films marked as favourites, by pressing the heart on a film's page.
+    //
+    // A separate table from `ratings` rather than somebody's highest-rated films,
+    // which is what the profile's Favorite Films strip used to mean. Those are
+    // different statements: a five-star rating says the film is good, a favourite
+    // says it is *yours*, and deriving one from the other made the strip change
+    // behind your back every time you rated something.
+    PerUser {
+        name: "favorites",
+        create: "CREATE TABLE IF NOT EXISTS favorites (
+                     user_id  TEXT NOT NULL,
+                     movie_id TEXT NOT NULL,
+                     added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                     PRIMARY KEY (user_id, movie_id)
+                 )",
+        carried: "movie_id, added_at",
+    },
+    // `rated_at` orders the profile's Recent Reviews tile. Nullable rather than
+    // NOT NULL DEFAULT CURRENT_TIMESTAMP, because SQLite ADD COLUMN only accepts a
+    // constant default — and this column arrived after the table did, so `migrate`
+    // has to add it to databases already on disk. Rows written before it existed
+    // sort last; `set_rating` stamps every new one.
+    PerUser {
+        name: "ratings",
+        create: "CREATE TABLE IF NOT EXISTS ratings (
+                     user_id    TEXT NOT NULL,
+                     movie_id   TEXT NOT NULL,
+                     half_stars INTEGER NOT NULL,
+                     rated_at   TEXT,
+                     PRIMARY KEY (user_id, movie_id)
+                 )",
+        carried: "movie_id, half_stars, rated_at",
+    },
+    // A signed-in person's own prose about a film. One review per film per person,
+    // which is what the PK enforces — writing again edits what's there.
+    //
+    // Not a column on `ratings`, because the two are independent: clearing a rating
+    // must not delete what you wrote, and you can write about a film without
+    // scoring it. `user_reviews` is the seeded people's equivalent, keyed on
+    // `people(id)`; this is the accounts' copy of it. The name is the old one, kept
+    // because renaming it would buy nothing and cost a second migration.
+    PerUser {
+        name: "visitor_reviews",
+        create: "CREATE TABLE IF NOT EXISTS visitor_reviews (
+                     user_id    TEXT NOT NULL,
+                     movie_id   TEXT NOT NULL,
+                     body       TEXT NOT NULL,
+                     written_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                     PRIMARY KEY (user_id, movie_id)
+                 )",
+        carried: "movie_id, body, written_at",
+    },
+    PerUser {
+        name: "liked_reviews",
+        create: "CREATE TABLE IF NOT EXISTS liked_reviews (
+                     user_id   TEXT NOT NULL,
+                     review_id TEXT NOT NULL,
+                     PRIMARY KEY (user_id, review_id)
+                 )",
+        carried: "review_id",
+    },
+    PerUser {
+        name: "liked_comments",
+        create: "CREATE TABLE IF NOT EXISTS liked_comments (
+                     user_id    TEXT NOT NULL,
+                     comment_id TEXT NOT NULL,
+                     PRIMARY KEY (user_id, comment_id)
+                 )",
+        carried: "comment_id",
+    },
+    // Who one account follows. One row per follow, written by the button; deleting
+    // the row unfollows. Not symmetric with `people.follows_visitor`: that one is
+    // about them, this one is somebody's own action, and conflating the two would
+    // make an unfollow silently rewrite history.
+    PerUser {
+        name: "follows",
+        create: "CREATE TABLE IF NOT EXISTS follows (
+                     user_id     TEXT NOT NULL,
+                     person_id   TEXT NOT NULL REFERENCES people(id),
+                     followed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                     PRIMARY KEY (user_id, person_id)
+                 )",
+        carried: "person_id, followed_at",
+    },
+];
 
 /// Bring a database created by an earlier version up to the current schema.
 ///
 /// `CREATE TABLE IF NOT EXISTS` is a no-op on a table that already exists, so a
 /// column added to one of the definitions above never reaches a file already on
-/// disk. There is no migration framework here on purpose — one visitor, one file,
-/// and deleting it is a documented way to start over — but silently serving a
-/// profile that can't read its own ratings is worse than four lines of this.
+/// disk. There is no migration framework here on purpose — but silently serving a
+/// profile that can't read its own ratings is worse than a few lines of this.
+///
+/// Order matters. `rated_at` is added before the rebuild below copies it.
 fn migrate(conn: &Connection) -> Result<()> {
     if !has_column(conn, "ratings", "rated_at")? {
         conn.execute_batch("ALTER TABLE ratings ADD COLUMN rated_at TEXT")?;
@@ -259,7 +415,175 @@ fn migrate(conn: &Connection) -> Result<()> {
              CREATE UNIQUE INDEX IF NOT EXISTS people_by_handle ON people(handle);",
         )?;
     }
+    // Sign-in's five columns.
+    if !has_column(conn, "people", "google_sub")? {
+        conn.execute_batch(
+            "ALTER TABLE people ADD COLUMN google_sub TEXT;
+             ALTER TABLE people ADD COLUMN email TEXT;
+             ALTER TABLE people ADD COLUMN is_account INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE people ADD COLUMN joined_at TEXT;
+             ALTER TABLE people ADD COLUMN starter_follow INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    // Here rather than in `SCHEMA`, because it has to run after the ALTER above: on a
+    // database that already had `people`, the column does not exist until then. Same
+    // trick `handle` uses — ADD COLUMN cannot carry a UNIQUE constraint, so the index
+    // carries it, which is the same guarantee under a different name.
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS people_by_google_sub ON people(google_sub)",
+    )?;
+
+    adopt_pre_account_rows(conn)
+}
+
+/// Give the pre-accounts rows an owner.
+///
+/// Before sign-in there was one visitor, so `watchlist` was keyed on `movie_id`
+/// alone. Two people now have to be able to watchlist the same film, which means
+/// `user_id` has to join the primary key, which SQLite cannot do in place — so each
+/// of these tables is rebuilt and its rows copied across to `LEGACY_USER_ID`.
+/// Copied, not dropped: those rows are a real person's watchlist.
+///
+/// A fresh database never reaches the body: `prepare` has just created every table
+/// with `user_id` in it, so nothing is pending and no legacy account is invented.
+fn adopt_pre_account_rows(conn: &Connection) -> Result<()> {
+    let mut pending: Vec<&PerUser> = Vec::new();
+    for table in &PER_USER_TABLES {
+        if !has_column(conn, table.name, "user_id")? {
+            pending.push(table);
+        }
+    }
+    let stamp_posts = !has_column(conn, "comments", "user_id")?;
+    if pending.is_empty() && !stamp_posts {
+        return Ok(());
+    }
+
+    // All of it or none of it. SQLite's DDL is transactional, and the alternative is a
+    // process killed between the rename and the copy leaving somebody's watchlist in a
+    // table called `watchlist_pre_accounts` that nothing reads. Dropping the guard
+    // without committing rolls the whole thing back.
+    let conn = conn.unchecked_transaction()?;
+
+    // Only when there is something to adopt. A database that had the old schema but
+    // no rows in it gains no account, so the migration invents no people.
+    let adopting = pre_account_rows(&conn, &pending)?;
+    if adopting {
+        ensure_legacy_account(&conn)?;
+    }
+
+    for table in &pending {
+        conn.execute_batch(&format!(
+            "ALTER TABLE {name} RENAME TO {name}_pre_accounts;
+             {create};
+             INSERT INTO {name} (user_id, {carried})
+                 SELECT '{LEGACY_USER_ID}', {carried} FROM {name}_pre_accounts;
+             DROP TABLE {name}_pre_accounts;",
+            name = table.name,
+            create = table.create,
+            carried = table.carried,
+        ))?;
+    }
+
+    if stamp_posts {
+        conn.execute_batch(
+            "ALTER TABLE comments ADD COLUMN user_id TEXT NOT NULL DEFAULT '';
+             ALTER TABLE replies  ADD COLUMN user_id TEXT NOT NULL DEFAULT '';",
+        )?;
+        for table in ["comments", "replies"] {
+            conn.execute(
+                &format!("UPDATE {table} SET user_id = ?1 WHERE user_id = ''"),
+                [LEGACY_USER_ID],
+            )?;
+        }
+    }
+
+    if !adopting {
+        return conn.commit();
+    }
+
+    // Whoever the visitor followed becomes the starter set every new account gets,
+    // so a database with a graph in it still opens on a feed after somebody signs
+    // in for the first time.
+    conn.execute(
+        "UPDATE people SET starter_follow = 1
+         WHERE id IN (SELECT person_id FROM follows WHERE user_id = ?1)",
+        [LEGACY_USER_ID],
+    )?;
+    // And their bio moves onto their own `people` row, which is where a bio lives
+    // now. The `settings` row is left behind rather than deleted.
+    conn.execute(
+        "UPDATE people SET bio = (SELECT value FROM settings WHERE key = ?2)
+         WHERE id = ?1 AND EXISTS(SELECT 1 FROM settings WHERE key = ?2)",
+        params![LEGACY_USER_ID, BIO_KEY],
+    )?;
+    conn.commit()
+}
+
+/// Whether a pre-accounts database holds any of the single visitor's rows.
+///
+/// `comments`, `replies` and `settings` are counted too even though they are not
+/// rebuilt: a database whose only content is a posted comment still has data worth
+/// an owner.
+fn pre_account_rows(conn: &Connection, pending: &[&PerUser]) -> Result<bool> {
+    let names = pending.iter().map(|table| table.name).chain(["comments", "replies", "settings"]);
+    for name in names {
+        let rows: i64 =
+            conn.query_row(&format!("SELECT COUNT(*) FROM {name}"), [], |row| row.get(0))?;
+        if rows > 0 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Create the account the pre-accounts rows belong to, if it isn't there.
+///
+/// It wears the export's identity, because that is whose profile those rows were
+/// shown under: the name, nickname and avatar `hydrate` has always printed. No
+/// `google_sub`, so it is unreachable by sign-in — see `LEGACY_USER_ID`.
+fn ensure_legacy_account(conn: &Connection) -> Result<()> {
+    let present: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM people WHERE id = ?1)",
+        [LEGACY_USER_ID],
+        |row| row.get(0),
+    )?;
+    if present {
+        return Ok(());
+    }
+
+    let avatar = crate::hydrate::visitor_avatar();
+    let handle = unique_handle(conn, crate::hydrate::VISITOR_HANDLE)?;
+    conn.execute(
+        // `position` is written because a database created by an earlier build
+        // declares it NOT NULL with no default.
+        "INSERT INTO people
+             (id, name, avatar_src, avatar_alt, position, handle, is_user, is_account)
+         VALUES (?1, ?2, ?3, ?4, 0, ?5, 1, 1)",
+        params![LEGACY_USER_ID, crate::hydrate::VISITOR_NAME, avatar.src, avatar.alt, handle],
+    )?;
     Ok(())
+}
+
+/// A nickname nobody has yet.
+///
+/// `people.handle` is unique because it addresses a page, and two Google accounts
+/// can easily want the same one. The wanted nickname wins if it is free, otherwise
+/// a number is appended — "@sam", "@sam2", "@sam3". The random fallback exists so
+/// this cannot fail on a server with fifty Sams.
+fn unique_handle(conn: &Connection, wanted: &str) -> Result<String> {
+    let base = format!("@{}", wanted.trim_start_matches('@'));
+    for attempt in 1..=HANDLE_TRIES {
+        let candidate = if attempt == 1 { base.clone() } else { format!("{base}{attempt}") };
+        let taken: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM people WHERE handle = ?1)",
+            [&candidate],
+            |row| row.get(0),
+        )?;
+        if !taken {
+            return Ok(candidate);
+        }
+    }
+    Ok(format!("{base}-{}", random_token(4)))
 }
 
 /// Whether a table already has a column. The table name is interpolated because
@@ -269,6 +593,209 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
     let names: Vec<String> =
         stmt.query_map([], |row| row.get::<_, String>(1))?.collect::<Result<_>>()?;
     Ok(names.iter().any(|name| name == column))
+}
+
+// --- Accounts and sessions ----------------------------------------------------
+
+/// One account, as `/api/auth/me` and the profile header draw it.
+///
+/// A thin read of the account's own `people` row. Everything on it is either
+/// Google's (name, avatar) or the user's own (nickname, bio). No email: it is stored
+/// so an operator can tell two accounts apart, and read by nothing, because no screen
+/// shows it and a browser has no use for it.
+#[derive(Debug, Clone)]
+pub struct AccountRow {
+    pub id: String,
+    pub name: String,
+    pub handle: String,
+    pub avatar: Image,
+    pub bio: Option<String>,
+    /// When the account was created. `None` for the legacy visitor, whose rows
+    /// predate sign-in and who therefore has no join date to claim.
+    pub joined_at: Option<String>,
+}
+
+const ACCOUNT_SELECT: &str =
+    "SELECT id, name, handle, avatar_src, avatar_alt, bio, joined_at FROM people";
+
+fn account_from_row(row: &rusqlite::Row) -> Result<AccountRow> {
+    Ok(AccountRow {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        // Every account is written with one, so a NULL here would be a bug rather
+        // than a state to render.
+        handle: row.get::<_, Option<String>>("handle")?.unwrap_or_default(),
+        avatar: Image::new(
+            &row.get::<_, String>("avatar_src")?,
+            &row.get::<_, String>("avatar_alt")?,
+        ),
+        bio: row.get("bio")?,
+        joined_at: row.get("joined_at")?,
+    })
+}
+
+/// One account by id.
+pub fn account(conn: &Connection, id: &str) -> Result<Option<AccountRow>> {
+    let mut stmt = conn.prepare(&format!("{ACCOUNT_SELECT} WHERE id = ?1 AND is_account = 1"))?;
+    stmt.query_row([id], account_from_row).optional()
+}
+
+/// Whose session this token is, or `None` for a token that is unknown or expired.
+///
+/// Expiry is checked in the query rather than after it, so an expired row reads as
+/// no session at all and the request is anonymous.
+pub fn session_account(conn: &Connection, token: &str) -> Result<Option<AccountRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT p.id AS id, p.name AS name, p.handle AS handle,
+                p.avatar_src AS avatar_src, p.avatar_alt AS avatar_alt,
+                p.bio AS bio, p.joined_at AS joined_at
+         FROM sessions s JOIN people p ON p.id = s.user_id
+         WHERE s.token = ?1 AND s.expires_at > datetime('now')",
+    )?;
+    stmt.query_row([token], account_from_row).optional()
+}
+
+/// Start a session for one account.
+///
+/// Expired rows are cleared on the way in. That is the only sweep there is: nothing
+/// runs on a timer, and sign-in is the moment a sweep is both cheap and certain to
+/// happen. An expired row is inert until then, because `session_account` filters it.
+pub fn create_session(conn: &Connection, token: &str, user_id: &str) -> Result<()> {
+    conn.execute("DELETE FROM sessions WHERE expires_at <= datetime('now')", [])?;
+    conn.execute(
+        "INSERT INTO sessions (token, user_id, expires_at)
+         VALUES (?1, ?2, datetime('now', ?3))",
+        params![token, user_id, format!("+{SESSION_DAYS} days")],
+    )?;
+    Ok(())
+}
+
+/// End one session. `true` when a row was really removed.
+///
+/// This is what makes logout a revocation rather than a suggestion: the token stops
+/// working for every browser holding it, not just the one that cleared its cookie.
+pub fn delete_session(conn: &Connection, token: &str) -> Result<bool> {
+    Ok(conn.execute("DELETE FROM sessions WHERE token = ?1", [token])? > 0)
+}
+
+/// Remember a `state` value so the callback can prove it issued it.
+pub fn remember_auth_state(conn: &Connection, state: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM auth_states WHERE created_at <= datetime('now', ?1)",
+        [format!("-{STATE_MINUTES} minutes")],
+    )?;
+    conn.execute("INSERT OR REPLACE INTO auth_states (state) VALUES (?1)", [state])?;
+    Ok(())
+}
+
+/// Spend a `state` value. `false` means the callback must be refused.
+///
+/// The delete *is* the check, and it is atomic, so a state cannot be spent twice —
+/// a replayed callback finds nothing to delete. `false` covers all three failures
+/// worth refusing: never issued, already used, and older than `STATE_MINUTES`.
+pub fn consume_auth_state(conn: &Connection, state: &str) -> Result<bool> {
+    let spent = conn.execute(
+        "DELETE FROM auth_states
+         WHERE state = ?1 AND created_at > datetime('now', ?2)",
+        params![state, format!("-{STATE_MINUTES} minutes")],
+    )?;
+    Ok(spent > 0)
+}
+
+/// What Google told us about somebody signing in.
+///
+/// Built by `auth` from the userinfo response. `db` does no networking, so this is
+/// the shape the two agree on — the same arrangement `SeedUser` has.
+#[derive(Debug, Clone)]
+pub struct GoogleAccount {
+    /// Google's `sub`: stable, and the only field safe to key on. An email address
+    /// can move between Google accounts; a `sub` cannot.
+    pub sub: String,
+    pub email: Option<String>,
+    pub name: String,
+    pub avatar: Image,
+    /// The nickname to try first, derived from the Google profile. Made unique here.
+    pub handle: String,
+}
+
+/// Find or create the account behind a Google profile.
+///
+/// On every sign-in the name, avatar and email are refreshed, because Google owns
+/// those. The nickname and the bio are not: the user may have been followed under
+/// that nickname, and the bio is something they wrote.
+///
+/// A new account starts out following whoever the seed marked `starter_follow`, so
+/// the first screen after sign-in has something on it rather than being the empty
+/// state.
+pub fn upsert_google_account(conn: &Connection, profile: &GoogleAccount) -> Result<AccountRow> {
+    let existing: Option<String> = conn
+        .query_row("SELECT id FROM people WHERE google_sub = ?1", [&profile.sub], |row| row.get(0))
+        .optional()?;
+
+    let id = match existing {
+        Some(id) => {
+            conn.execute(
+                "UPDATE people
+                    SET name = ?2, avatar_src = ?3, avatar_alt = ?4, email = ?5
+                  WHERE id = ?1",
+                params![
+                    id,
+                    profile.name,
+                    profile.avatar.src,
+                    profile.avatar.alt,
+                    profile.email
+                ],
+            )?;
+            id
+        }
+        None => {
+            let id = account_id(&profile.sub);
+            let handle = unique_handle(conn, &profile.handle)?;
+            conn.execute(
+                "INSERT INTO people
+                     (id, name, avatar_src, avatar_alt, position, handle, is_user,
+                      google_sub, email, is_account, joined_at)
+                 VALUES (?1, ?2, ?3, ?4, 0, ?5, 1, ?6, ?7, 1, CURRENT_TIMESTAMP)",
+                params![
+                    id,
+                    profile.name,
+                    profile.avatar.src,
+                    profile.avatar.alt,
+                    handle,
+                    profile.sub,
+                    profile.email
+                ],
+            )?;
+            grant_starter_follows(conn, &id)?;
+            id
+        }
+    };
+
+    // Read back rather than assemble from `profile`: the nickname and bio come from
+    // the row, and the row is what every other screen will show.
+    account(conn, &id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
+}
+
+/// The account id minted for one Google subject.
+///
+/// Prefixed, so it can never collide with a seeded `user-...` id or with
+/// `ANONYMOUS`. Filtered down to ASCII alphanumerics because this string ends up in
+/// URLs and in Redis keys — see `cache::feed_key`.
+fn account_id(sub: &str) -> String {
+    let clean: String = sub.chars().filter(char::is_ascii_alphanumeric).take(64).collect();
+    format!("account-{clean}")
+}
+
+/// Follow, for one account, everybody the seed marked as a starting friend.
+///
+/// Returns how many rows it wrote. `INSERT OR IGNORE`, so calling it twice is a
+/// no-op rather than an error.
+pub fn grant_starter_follows(conn: &Connection, user_id: &str) -> Result<usize> {
+    conn.execute(
+        "INSERT OR IGNORE INTO follows (user_id, person_id)
+         SELECT ?1, id FROM people WHERE starter_follow = 1 AND id <> ?1",
+        [user_id],
+    )
 }
 
 // --- Seeding ------------------------------------------------------------------
@@ -287,7 +814,9 @@ pub struct SeedUser {
     pub avatar: Image,
     pub bio: Option<String>,
     pub follows_visitor: bool,
-    /// Whether the visitor already follows them, so the app has friends on first run.
+    /// Whether a new account starts out following them, so the app has friends on
+    /// first sign-in. Stored on `people.starter_follow` rather than written as a
+    /// follow row, because the seed runs before anybody has an account.
     pub followed_by_visitor: bool,
     /// `(movie_id, half_stars, body, created_at)`.
     pub reviews: Vec<(String, u8, String, String)>,
@@ -306,9 +835,16 @@ pub struct SeedUser {
 /// Asked *before* the harvest, not just inside it: the harvest is a dozen HTTP
 /// calls, and every restart after the first would otherwise make all of them only
 /// for `seed_graph` to discard the results.
+///
+/// Real accounts are excluded, which matters twice: the first person to sign in must
+/// not suppress the seed, and a database migrated from before sign-in must not be
+/// re-seeded because it gained a legacy account.
 pub fn needs_graph_seed(conn: &Connection) -> Result<bool> {
-    let users: i64 =
-        conn.query_row("SELECT COUNT(*) FROM people WHERE is_user = 1", [], |row| row.get(0))?;
+    let users: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM people WHERE is_user = 1 AND is_account = 0",
+        [],
+        |row| row.get(0),
+    )?;
     Ok(users == 0)
 }
 
@@ -318,8 +854,12 @@ pub fn needs_graph_seed(conn: &Connection) -> Result<bool> {
 /// is applied before the TMDB client exists. Guarded on `is_user` rather than on
 /// `people` being non-empty, because a database written by an earlier build already
 /// holds the export's eleven decorative rows and would otherwise never seed. Once
-/// anyone is in there the graph is the visitor's, and seeding again would talk over
+/// anyone is in there the graph is the users', and seeding again would talk over
 /// their follows — so this is one shot, and returns `Ok(0)` afterwards.
+///
+/// It writes no `follows` rows: there is nobody to own one yet. `starter_follow`
+/// records who a new account should follow, and `grant_starter_follows` writes the
+/// rows once there is an account to write them for.
 ///
 /// `INSERT OR IGNORE` on every row, for collisions *within* one list rather than
 /// across runs: ids come from slugified TMDB nicknames, and two distinct
@@ -342,8 +882,8 @@ pub fn seed_graph(conn: &Connection, users: &[SeedUser]) -> Result<usize> {
             // below on a foreign key. Which is exactly what it did.
             "INSERT OR IGNORE INTO people
                  (id, name, avatar_src, avatar_alt, position,
-                  handle, bio, is_user, follows_visitor)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8)",
+                  handle, bio, is_user, follows_visitor, starter_follow)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9)",
             params![
                 user.id,
                 user.name,
@@ -353,14 +893,9 @@ pub fn seed_graph(conn: &Connection, users: &[SeedUser]) -> Result<usize> {
                 format!("@{}", user.handle.trim_start_matches('@')),
                 user.bio,
                 user.follows_visitor,
+                user.followed_by_visitor,
             ],
         )?;
-        if user.followed_by_visitor {
-            conn.execute(
-                "INSERT OR IGNORE INTO follows (person_id) VALUES (?1)",
-                params![user.id],
-            )?;
-        }
         for (movie_id, half_stars, body, created_at) in &user.reviews {
             conn.execute(
                 "INSERT OR IGNORE INTO user_reviews
@@ -472,7 +1007,7 @@ pub fn derive_taste(
         reviews.iter().filter(|(_, stars, _, _)| *stars >= FAVORITE_FLOOR).collect();
     // Highest first; `reviews` is already newest-first, and a stable sort keeps that
     // as the tiebreak, so two 9s come back most-recently-written first.
-    best.sort_by(|a, b| b.1.cmp(&a.1));
+    best.sort_by_key(|b| std::cmp::Reverse(b.1));
     let favorites: Vec<String> =
         best.into_iter().take(TASTE_FAVORITES).map(|(id, _, _, _)| id.clone()).collect();
 
@@ -653,25 +1188,26 @@ pub struct FollowRow {
     pub review_count: u32,
 }
 
-/// The profile's "Following" list: the people the visitor really follows, newest
+/// The profile's "Following" list: the people one account really follows, newest
 /// first.
 ///
-/// Only `follows` rows. It used to also list everyone on the export's stories and
-/// activity rails, on the reasoning that the rails were the only friends the app
-/// had — but now that following is a real, clickable act, a profile counting twelve
-/// while the friend directory counts five is just a lie about the same fact. Those
-/// rails are gone entirely, and the feed's rails are built from this same list.
-pub fn following(conn: &Connection) -> Result<Vec<FollowRow>> {
+/// Only `follows` rows, and only this account's. It used to also list everyone on
+/// the export's stories and activity rails, on the reasoning that the rails were the
+/// only friends the app had — but now that following is a real, clickable act, a
+/// profile counting twelve while the friend directory counts five is just a lie
+/// about the same fact. Those rails are gone entirely, and the feed's rails are
+/// built from this same list.
+pub fn following(conn: &Connection, user_id: &str) -> Result<Vec<FollowRow>> {
     let mut stmt = conn.prepare(
         "SELECT p.id AS id, p.name AS name, p.avatar_src AS avatar_src,
                 p.avatar_alt AS avatar_alt, p.handle AS handle, p.bio AS bio,
                 (SELECT COUNT(*) FROM user_reviews r WHERE r.person_id = p.id)
                     AS review_count
          FROM people p
-         JOIN follows f ON f.person_id = p.id
+         JOIN follows f ON f.person_id = p.id AND f.user_id = ?1
          ORDER BY f.followed_at DESC, p.name",
     )?;
-    let rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map([user_id], |row| {
         Ok(FollowRow {
             id: row.get("id")?,
             name: row.get("name")?,
@@ -698,18 +1234,39 @@ pub struct UserRow {
     pub following: bool,
     pub follows_you: bool,
     pub review_count: u32,
+    /// Whether this is a real account rather than a seeded person. It decides which
+    /// tables their favourites and watchlist come from: an account writes to
+    /// `favorites` and `watchlist`, a seeded person was filled into `user_favorites`
+    /// and `user_watchlist` by the harvest.
+    pub is_account: bool,
 }
 
 /// The columns every user query selects, and the joins that compute the two
 /// relationship flags. Shared as a string because four queries differ only in
 /// their `WHERE` and `ORDER BY`, and a divergence between them would show up as
 /// a follow button that disagrees with itself between two screens.
+///
+/// `?1` is the account asking. Every query built from this reserves it, so their own
+/// parameters start at `?2`. An anonymous reader passes `ANONYMOUS`, which matches
+/// no row, so both flags come back false rather than showing somebody else's graph.
+///
+/// `follows_you` is two things at once, and has to be. A seeded person carries a
+/// static `follows_visitor` flag, since nobody could really press follow on you when
+/// there was one visitor; a real account follows you by writing a row. Reading only
+/// the flag would make one account's follow invisible to the other. Both halves are
+/// gated on there *being* somebody asking (`?1 <> ''`, which is `ANONYMOUS`) —
+/// otherwise the seeded flag would tell a signed-out reader that eight people follow
+/// them.
 const USER_SELECT: &str = "SELECT p.id AS id, p.name AS name, p.handle AS handle,
             p.avatar_src AS avatar_src, p.avatar_alt AS avatar_alt, p.bio AS bio,
-            p.follows_visitor AS follows_visitor,
-            f.person_id IS NOT NULL AS following,
+            p.is_account AS is_account,
+            f.user_id IS NOT NULL AS following,
+            (?1 <> '' AND (p.follows_visitor = 1
+                           OR EXISTS(SELECT 1 FROM follows b
+                                     WHERE b.user_id = p.id
+                                       AND b.person_id = ?1))) AS follows_you,
             (SELECT COUNT(*) FROM user_reviews r WHERE r.person_id = p.id) AS review_count
-     FROM people p LEFT JOIN follows f ON f.person_id = p.id";
+     FROM people p LEFT JOIN follows f ON f.person_id = p.id AND f.user_id = ?1";
 
 fn user_from_row(row: &rusqlite::Row) -> Result<UserRow> {
     Ok(UserRow {
@@ -719,8 +1276,9 @@ fn user_from_row(row: &rusqlite::Row) -> Result<UserRow> {
         avatar: Image::new(&row.get::<_, String>("avatar_src")?, &row.get::<_, String>("avatar_alt")?),
         bio: row.get("bio")?,
         following: row.get("following")?,
-        follows_you: row.get("follows_visitor")?,
+        follows_you: row.get("follows_you")?,
         review_count: row.get("review_count")?,
+        is_account: row.get("is_account")?,
     })
 }
 
@@ -732,53 +1290,66 @@ fn user_from_row(row: &rusqlite::Row) -> Result<UserRow> {
 /// of rows, not thousands.
 ///
 /// An empty query lists everyone, so the screen opens on a browsable directory
-/// rather than a blank slate.
-pub fn search_people(conn: &Connection, query: &str) -> Result<Vec<UserRow>> {
+/// rather than a blank slate. The asker is excluded, because a row offering to
+/// follow yourself is a button that cannot do anything.
+pub fn search_people(conn: &Connection, user_id: &str, query: &str) -> Result<Vec<UserRow>> {
     // `_` and `%` in a user's query would otherwise act as wildcards, so "a_b"
     // would match "axb". ESCAPE makes them literal.
     let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
     let pattern = format!("%{}%", escaped.trim_start_matches('@'));
     let mut stmt = conn.prepare(&format!(
         "{USER_SELECT}
-         WHERE p.is_user = 1
-           AND (?1 = '' OR p.handle LIKE ?2 ESCAPE '\\' OR p.name LIKE ?2 ESCAPE '\\')
+         WHERE p.is_user = 1 AND p.id <> ?1
+           AND (?2 = '' OR p.handle LIKE ?3 ESCAPE '\\' OR p.name LIKE ?3 ESCAPE '\\')
          ORDER BY following DESC, review_count DESC, p.name"
     ))?;
-    let rows = stmt.query_map(params![query.trim(), pattern], user_from_row)?.collect();
+    let rows =
+        stmt.query_map(params![user_id, query.trim(), pattern], user_from_row)?.collect();
     rows
 }
 
 /// One user by nickname, with or without the leading `@`.
-pub fn person_by_handle(conn: &Connection, handle: &str) -> Result<Option<UserRow>> {
+pub fn person_by_handle(
+    conn: &Connection,
+    user_id: &str,
+    handle: &str,
+) -> Result<Option<UserRow>> {
     let handle = format!("@{}", handle.trim_start_matches('@'));
-    let mut stmt = conn.prepare(&format!("{USER_SELECT} WHERE p.handle = ?1"))?;
-    let row = stmt.query_row(params![handle], user_from_row).optional()?;
+    let mut stmt = conn.prepare(&format!("{USER_SELECT} WHERE p.handle = ?2"))?;
+    let row = stmt.query_row(params![user_id, handle], user_from_row).optional()?;
     Ok(row)
 }
 
 /// One user by id — what the follow endpoint takes, since a button knows the id.
-pub fn person_by_id(conn: &Connection, id: &str) -> Result<Option<UserRow>> {
-    let mut stmt = conn.prepare(&format!("{USER_SELECT} WHERE p.id = ?1 AND p.is_user = 1"))?;
-    let row = stmt.query_row(params![id], user_from_row).optional()?;
+pub fn person_by_id(conn: &Connection, user_id: &str, id: &str) -> Result<Option<UserRow>> {
+    let mut stmt = conn.prepare(&format!("{USER_SELECT} WHERE p.id = ?2 AND p.is_user = 1"))?;
+    let row = stmt.query_row(params![user_id, id], user_from_row).optional()?;
     Ok(row)
 }
 
-/// The users the visitor follows, most recently followed first.
-pub fn followed_users(conn: &Connection) -> Result<Vec<UserRow>> {
+/// The users one account follows, most recently followed first.
+pub fn followed_users(conn: &Connection, user_id: &str) -> Result<Vec<UserRow>> {
     let mut stmt = conn.prepare(&format!(
-        "{USER_SELECT} WHERE f.person_id IS NOT NULL ORDER BY f.followed_at DESC, p.name"
+        "{USER_SELECT} WHERE f.user_id IS NOT NULL ORDER BY f.followed_at DESC, p.name"
     ))?;
-    let rows = stmt.query_map([], user_from_row)?.collect();
+    let rows = stmt.query_map([user_id], user_from_row)?.collect();
     rows
 }
 
-/// The users who follow the visitor.
-pub fn followers(conn: &Connection) -> Result<Vec<UserRow>> {
+/// The users who follow one account — the seeded people who follow everybody, plus
+/// the real accounts that wrote a row.
+pub fn followers(conn: &Connection, user_id: &str) -> Result<Vec<UserRow>> {
     let mut stmt = conn.prepare(&format!(
-        "{USER_SELECT} WHERE p.follows_visitor = 1 AND p.is_user = 1
+        // The `follows_you` expression again rather than the alias: SQLite would
+        // accept the alias here, but only SQLite would.
+        "{USER_SELECT}
+         WHERE p.is_user = 1 AND p.id <> ?1
+           AND ?1 <> '' AND (p.follows_visitor = 1
+                             OR EXISTS(SELECT 1 FROM follows b
+                                       WHERE b.user_id = p.id AND b.person_id = ?1))
          ORDER BY following DESC, p.name"
     ))?;
-    let rows = stmt.query_map([], user_from_row)?.collect();
+    let rows = stmt.query_map([user_id], user_from_row)?.collect();
     rows
 }
 
@@ -787,27 +1358,41 @@ pub fn followers(conn: &Connection) -> Result<Vec<UserRow>> {
 /// `target` makes it idempotent, as `set_watchlist` is: the button sends the state
 /// it wants rather than "flip it", so a double-tap or a retried request can't land
 /// the UI and the DB on opposite answers. Pass `None` to toggle.
-pub fn set_follow(conn: &Connection, person_id: &str, target: Option<bool>) -> Result<Option<bool>> {
-    if person_by_id(conn, person_id)?.is_none() {
+///
+/// Following yourself is `None` rather than a row: a self-edge would put you in your
+/// own feed and your own follower list.
+pub fn set_follow(
+    conn: &Connection,
+    user_id: &str,
+    person_id: &str,
+    target: Option<bool>,
+) -> Result<Option<bool>> {
+    if user_id == person_id || person_by_id(conn, user_id, person_id)?.is_none() {
         return Ok(None);
     }
     let now: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM follows WHERE person_id = ?1)",
-        params![person_id],
+        "SELECT EXISTS(SELECT 1 FROM follows WHERE user_id = ?1 AND person_id = ?2)",
+        params![user_id, person_id],
         |row| row.get(0),
     )?;
     let next = target.unwrap_or(!now);
     if next {
-        conn.execute("INSERT OR IGNORE INTO follows (person_id) VALUES (?1)", params![person_id])?;
+        conn.execute(
+            "INSERT OR IGNORE INTO follows (user_id, person_id) VALUES (?1, ?2)",
+            params![user_id, person_id],
+        )?;
     } else {
-        conn.execute("DELETE FROM follows WHERE person_id = ?1", params![person_id])?;
+        conn.execute(
+            "DELETE FROM follows WHERE user_id = ?1 AND person_id = ?2",
+            params![user_id, person_id],
+        )?;
     }
     Ok(Some(next))
 }
 
-/// How many people the visitor follows.
-pub fn follow_count(conn: &Connection) -> Result<u32> {
-    conn.query_row("SELECT COUNT(*) FROM follows", [], |row| row.get(0))
+/// How many people one account follows.
+pub fn follow_count(conn: &Connection, user_id: &str) -> Result<u32> {
+    conn.query_row("SELECT COUNT(*) FROM follows WHERE user_id = ?1", [user_id], |row| row.get(0))
 }
 
 /// One seeded review, with its author's details joined in.
@@ -838,14 +1423,16 @@ fn review_from_row(row: &rusqlite::Row) -> Result<UserReviewRow> {
     })
 }
 
+/// As `USER_SELECT`: `?1` is the account asking, and every query below starts its
+/// own parameters at `?2`.
 const REVIEW_SELECT: &str = "SELECT r.person_id AS person_id, p.name AS name, p.handle AS handle,
             p.avatar_src AS avatar_src, p.avatar_alt AS avatar_alt,
-            f.person_id IS NOT NULL AS followed,
+            f.user_id IS NOT NULL AS followed,
             r.movie_id AS movie_id, r.half_stars AS half_stars,
             r.body AS body, r.created_at AS created_at
      FROM user_reviews r
      JOIN people p ON p.id = r.person_id
-     LEFT JOIN follows f ON f.person_id = r.person_id";
+     LEFT JOIN follows f ON f.person_id = r.person_id AND f.user_id = ?1";
 
 /// The reviews of one film, **the people the visitor follows first**.
 ///
@@ -854,21 +1441,29 @@ const REVIEW_SELECT: &str = "SELECT r.person_id AS person_id, p.name AS name, p.
 /// what you see is someone recommending the film rather than the most recent
 /// passer-by. `person_id` breaks the final tie, since `created_at` is seeded at
 /// one-day resolution.
-pub fn reviews_for_movie(conn: &Connection, movie_id: &str) -> Result<Vec<UserReviewRow>> {
+pub fn reviews_for_movie(
+    conn: &Connection,
+    user_id: &str,
+    movie_id: &str,
+) -> Result<Vec<UserReviewRow>> {
     let mut stmt = conn.prepare(&format!(
-        "{REVIEW_SELECT} WHERE r.movie_id = ?1
+        "{REVIEW_SELECT} WHERE r.movie_id = ?2
          ORDER BY followed DESC, r.half_stars DESC, r.created_at DESC, r.person_id"
     ))?;
-    let rows = stmt.query_map(params![movie_id], review_from_row)?.collect();
+    let rows = stmt.query_map(params![user_id, movie_id], review_from_row)?.collect();
     rows
 }
 
 /// One person's reviews, newest first.
-pub fn reviews_by_person(conn: &Connection, person_id: &str) -> Result<Vec<UserReviewRow>> {
+pub fn reviews_by_person(
+    conn: &Connection,
+    user_id: &str,
+    person_id: &str,
+) -> Result<Vec<UserReviewRow>> {
     let mut stmt = conn.prepare(&format!(
-        "{REVIEW_SELECT} WHERE r.person_id = ?1 ORDER BY r.created_at DESC, r.movie_id"
+        "{REVIEW_SELECT} WHERE r.person_id = ?2 ORDER BY r.created_at DESC, r.movie_id"
     ))?;
-    let rows = stmt.query_map(params![person_id], review_from_row)?.collect();
+    let rows = stmt.query_map(params![user_id, person_id], review_from_row)?.collect();
     rows
 }
 
@@ -885,21 +1480,28 @@ pub fn review_id(person_id: &str, movie_id: &str) -> String {
 /// `dune-part-two`), so no split position is knowable from the id alone. Matching
 /// the concatenation lets the primary key decide, which is the only authority that
 /// can.
-pub fn review_by_id(conn: &Connection, review_id: &str) -> Result<Option<UserReviewRow>> {
+pub fn review_by_id(
+    conn: &Connection,
+    user_id: &str,
+    review_id: &str,
+) -> Result<Option<UserReviewRow>> {
     let mut stmt =
-        conn.prepare(&format!("{REVIEW_SELECT} WHERE r.person_id || '-' || r.movie_id = ?1"))?;
-    stmt.query_row(params![review_id], review_from_row).optional()
+        conn.prepare(&format!("{REVIEW_SELECT} WHERE r.person_id || '-' || r.movie_id = ?2"))?;
+    stmt.query_row(params![user_id, review_id], review_from_row).optional()
 }
 
-/// The newest reviews across the whole graph, **the people the visitor follows
+/// The newest reviews across the whole graph, **the people this account follows
 /// first** — what the review screen opens on when no id names one.
-pub fn recent_reviews(conn: &Connection, limit: u32) -> Result<Vec<UserReviewRow>> {
+///
+/// Public content: it is every user's reviews, not one account's, so this is also
+/// what an anonymous reader's feed is built from.
+pub fn recent_reviews(conn: &Connection, user_id: &str, limit: u32) -> Result<Vec<UserReviewRow>> {
     let mut stmt = conn.prepare(&format!(
         "{REVIEW_SELECT}
          ORDER BY followed DESC, r.created_at DESC, r.half_stars DESC, r.person_id, r.movie_id
-         LIMIT ?1"
+         LIMIT ?2"
     ))?;
-    let rows = stmt.query_map(params![limit], review_from_row)?.collect();
+    let rows = stmt.query_map(params![user_id, limit], review_from_row)?.collect();
     rows
 }
 
@@ -909,14 +1511,18 @@ pub fn recent_reviews(conn: &Connection, limit: u32) -> Result<Vec<UserReviewRow
 /// says these are your friends' reviews, so a stranger's appearing there because the
 /// graph was thin would make the heading a lie. An empty result is the honest answer
 /// for someone who follows nobody, and the screen says so.
-pub fn reviews_from_followed(conn: &Connection, limit: u32) -> Result<Vec<UserReviewRow>> {
+pub fn reviews_from_followed(
+    conn: &Connection,
+    user_id: &str,
+    limit: u32,
+) -> Result<Vec<UserReviewRow>> {
     let mut stmt = conn.prepare(&format!(
         "{REVIEW_SELECT}
-         WHERE f.person_id IS NOT NULL
+         WHERE f.user_id IS NOT NULL
          ORDER BY r.created_at DESC, r.half_stars DESC, r.person_id, r.movie_id
-         LIMIT ?1"
+         LIMIT ?2"
     ))?;
-    let rows = stmt.query_map(params![limit], review_from_row)?.collect();
+    let rows = stmt.query_map(params![user_id, limit], review_from_row)?.collect();
     rows
 }
 
@@ -938,19 +1544,23 @@ pub struct StoryRow {
 /// it used to be and which meant the circles on screen had no relationship to
 /// anyone you'd actually chosen. People with something to show come first, because a
 /// rail of dimmed unlinked circles is the one arrangement that teaches nothing.
-pub fn followed_with_newest_review(conn: &Connection, limit: u32) -> Result<Vec<StoryRow>> {
+pub fn followed_with_newest_review(
+    conn: &Connection,
+    user_id: &str,
+    limit: u32,
+) -> Result<Vec<StoryRow>> {
     let mut stmt = conn.prepare(
         "SELECT p.id AS id, p.name AS name, p.handle AS handle,
                 p.avatar_src AS avatar_src, p.avatar_alt AS avatar_alt,
                 (SELECT r.person_id || '-' || r.movie_id FROM user_reviews r
                  WHERE r.person_id = p.id
                  ORDER BY r.created_at DESC, r.movie_id LIMIT 1) AS newest_review
-         FROM people p JOIN follows f ON f.person_id = p.id
+         FROM people p JOIN follows f ON f.person_id = p.id AND f.user_id = ?1
          WHERE p.is_user = 1
          ORDER BY newest_review IS NULL, f.followed_at DESC, p.name
-         LIMIT ?1",
+         LIMIT ?2",
     )?;
-    let rows = stmt.query_map(params![limit], |row| {
+    let rows = stmt.query_map(params![user_id, limit], |row| {
         Ok(StoryRow {
             id: row.get("id")?,
             name: row.get("name")?,
@@ -986,16 +1596,18 @@ pub fn watchlist_by_person(conn: &Connection, person_id: &str) -> Result<Vec<Str
 // so any such count is 0 or 1, and a person's page printing "1 followers" would be
 // dressing up `follows_visitor` as a statistic. See `models::PersonProfile`.
 
-/// The visitor's watchlist, **most recently added first** — the order the profile
+/// One account's watchlist, **most recently added first** — the order the profile
 /// grid wants, and the reverse of `load_store`'s.
 ///
 /// `movie_id` breaks the tie because `added_at` has one-second resolution, so two
 /// films logged in the same second would otherwise come back in an arbitrary
 /// order that flips between requests.
-pub fn watchlist_recent_first(conn: &Connection) -> Result<Vec<String>> {
-    let mut stmt =
-        conn.prepare("SELECT movie_id FROM watchlist ORDER BY added_at DESC, movie_id DESC")?;
-    let ids = stmt.query_map([], |row| row.get(0))?.collect();
+pub fn watchlist_recent_first(conn: &Connection, user_id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT movie_id FROM watchlist WHERE user_id = ?1
+         ORDER BY added_at DESC, movie_id DESC",
+    )?;
+    let ids = stmt.query_map([user_id], |row| row.get(0))?.collect();
     ids
 }
 
@@ -1021,16 +1633,17 @@ pub struct JournalRow {
 /// film to the top exactly as re-rating it does. `rated_at` is NULL for rows written
 /// before that column existed; `COALESCE` to the empty string makes those sort last
 /// rather than dropping the row.
-pub fn journal_recent_first(conn: &Connection) -> Result<Vec<JournalRow>> {
+pub fn journal_recent_first(conn: &Connection, user_id: &str) -> Result<Vec<JournalRow>> {
     let mut stmt = conn.prepare(
         "SELECT ids.movie_id AS movie_id, r.half_stars AS half_stars, v.body AS body,
                 MAX(COALESCE(r.rated_at, ''), COALESCE(v.written_at, '')) AS logged_at
-         FROM (SELECT movie_id FROM ratings UNION SELECT movie_id FROM visitor_reviews) ids
-         LEFT JOIN ratings r ON r.movie_id = ids.movie_id
-         LEFT JOIN visitor_reviews v ON v.movie_id = ids.movie_id
+         FROM (SELECT movie_id FROM ratings WHERE user_id = ?1
+               UNION SELECT movie_id FROM visitor_reviews WHERE user_id = ?1) ids
+         LEFT JOIN ratings r ON r.movie_id = ids.movie_id AND r.user_id = ?1
+         LEFT JOIN visitor_reviews v ON v.movie_id = ids.movie_id AND v.user_id = ?1
          ORDER BY logged_at DESC, ids.movie_id DESC",
     )?;
-    let rows = stmt.query_map([], |row| {
+    let rows = stmt.query_map([user_id], |row| {
         Ok(JournalRow {
             movie_id: row.get("movie_id")?,
             half_stars: row.get("half_stars")?,
@@ -1040,12 +1653,14 @@ pub fn journal_recent_first(conn: &Connection) -> Result<Vec<JournalRow>> {
     rows.collect()
 }
 
-/// The visitor's favourite films, most recently added first — the same order the
+/// One account's favourite films, most recently added first — the same order the
 /// watchlist strip beside it uses.
-pub fn favorites_recent_first(conn: &Connection) -> Result<Vec<String>> {
-    let mut stmt =
-        conn.prepare("SELECT movie_id FROM favorites ORDER BY added_at DESC, movie_id DESC")?;
-    let ids = stmt.query_map([], |row| row.get(0))?.collect();
+pub fn favorites_recent_first(conn: &Connection, user_id: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT movie_id FROM favorites WHERE user_id = ?1
+         ORDER BY added_at DESC, movie_id DESC",
+    )?;
+    let ids = stmt.query_map([user_id], |row| row.get(0))?.collect();
     ids
 }
 
@@ -1054,116 +1669,139 @@ pub fn favorites_recent_first(conn: &Connection) -> Result<Vec<String>> {
 /// Idempotent on a stated target, as `set_watchlist` is — and for the same reason:
 /// the heart sends the state it wants, so a double-tap can't land the button and the
 /// row on opposite answers.
-pub fn set_favorite(conn: &Connection, movie_id: &str, target: Option<bool>) -> Result<bool> {
+pub fn set_favorite(
+    conn: &Connection,
+    user_id: &str,
+    movie_id: &str,
+    target: Option<bool>,
+) -> Result<bool> {
     let present: bool = conn
-        .query_row("SELECT 1 FROM favorites WHERE movie_id = ?1", [movie_id], |_| Ok(()))
+        .query_row(
+            "SELECT 1 FROM favorites WHERE user_id = ?1 AND movie_id = ?2",
+            [user_id, movie_id],
+            |_| Ok(()),
+        )
         .optional()?
         .is_some();
 
     let target = target.unwrap_or(!present);
     if target {
-        conn.execute("INSERT OR IGNORE INTO favorites (movie_id) VALUES (?1)", [movie_id])?;
+        conn.execute(
+            "INSERT OR IGNORE INTO favorites (user_id, movie_id) VALUES (?1, ?2)",
+            [user_id, movie_id],
+        )?;
     } else {
-        conn.execute("DELETE FROM favorites WHERE movie_id = ?1", [movie_id])?;
+        conn.execute(
+            "DELETE FROM favorites WHERE user_id = ?1 AND movie_id = ?2",
+            [user_id, movie_id],
+        )?;
     }
     Ok(target)
 }
 
-/// Write or rewrite the visitor's review of a film. An empty body deletes it, which
+/// Write or rewrite one account's review of a film. An empty body deletes it, which
 /// is how the composer clears one.
 ///
 /// `written_at` is refreshed on a rewrite, so an edited review moves to the top of
 /// the profile: the writing is the event, exactly as `set_rating` treats the rating.
-pub fn set_visitor_review(conn: &Connection, movie_id: &str, body: &str) -> Result<Option<String>> {
+pub fn set_user_review(
+    conn: &Connection,
+    user_id: &str,
+    movie_id: &str,
+    body: &str,
+) -> Result<Option<String>> {
     let body = body.trim();
     if body.is_empty() {
-        conn.execute("DELETE FROM visitor_reviews WHERE movie_id = ?1", [movie_id])?;
+        conn.execute(
+            "DELETE FROM visitor_reviews WHERE user_id = ?1 AND movie_id = ?2",
+            [user_id, movie_id],
+        )?;
         return Ok(None);
     }
     conn.execute(
-        "INSERT INTO visitor_reviews (movie_id, body, written_at)
-         VALUES (?1, ?2, CURRENT_TIMESTAMP)
-         ON CONFLICT(movie_id) DO UPDATE
+        "INSERT INTO visitor_reviews (user_id, movie_id, body, written_at)
+         VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+         ON CONFLICT(user_id, movie_id) DO UPDATE
              SET body = excluded.body, written_at = excluded.written_at",
-        params![movie_id, body],
+        params![user_id, movie_id, body],
     )?;
     Ok(Some(body.to_string()))
 }
 
-/// The `settings` key the visitor's bio is stored under.
+/// The `settings` key the one visitor's bio used to be stored under. Read once by
+/// `adopt_pre_account_rows`, which moves the value onto their `people` row.
 const BIO_KEY: &str = "visitor_bio";
 
-/// The visitor's bio, or `None` if they've never edited it — in which case the
-/// caller uses `hydrate::VISITOR_BIO`, the export's own line. Storing the default
-/// eagerly would make "never edited" and "edited back to the original" the same
-/// state, and the second one should stick even if the constant later changes.
-pub fn visitor_bio(conn: &Connection) -> Result<Option<String>> {
-    conn.query_row("SELECT value FROM settings WHERE key = ?1", [BIO_KEY], |row| row.get(0))
-        .optional()
-}
-
-/// Store the visitor's bio. An empty string clears it, restoring the export's line.
-pub fn set_visitor_bio(conn: &Connection, bio: &str) -> Result<Option<String>> {
+/// Store one account's bio. An empty string clears it, restoring the default.
+///
+/// It lives on `people.bio`, the same column a seeded person's harvested line does,
+/// because an account *is* a person now: somebody else opening your page reads it
+/// through the same query as anybody else's, and `account` reads it back for the
+/// owner. `None` — never written, or written back to blank — is what lets the caller
+/// supply a default; storing the default eagerly would make "never edited" and
+/// "edited back to the original" the same state.
+pub fn set_user_bio(conn: &Connection, user_id: &str, bio: &str) -> Result<Option<String>> {
     let bio = bio.trim();
-    if bio.is_empty() {
-        conn.execute("DELETE FROM settings WHERE key = ?1", [BIO_KEY])?;
-        return Ok(None);
-    }
-    conn.execute(
-        "INSERT INTO settings (key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![BIO_KEY, bio],
-    )?;
-    Ok(Some(bio.to_string()))
+    let stored = (!bio.is_empty()).then(|| bio.to_string());
+    conn.execute("UPDATE people SET bio = ?2 WHERE id = ?1", params![user_id, stored])?;
+    Ok(stored)
 }
 
 // --- The visitor's state ------------------------------------------------------
 
-/// Rebuild the whole `Store` from disk.
+/// Rebuild one account's whole `Store` from disk.
 ///
 /// One snapshot per request, which is what keeps `hydrate` unchanged: it takes a
-/// `&Store` and has no idea a database exists. The tables hold a handful of rows
-/// for a single visitor, so reading all of them is cheaper than the six
-/// finer-grained queries that would replace it.
-pub fn load_store(conn: &Connection) -> Result<Store> {
+/// `&Store` and has no idea a database exists. Every query is scoped to `user_id`,
+/// which is the only thing keeping one person's watchlist out of another's screen.
+/// Pass `ANONYMOUS` and every one of them comes back empty.
+pub fn load_store(conn: &Connection, user_id: &str) -> Result<Store> {
     let mut store = Store::default();
 
-    let mut stmt = conn.prepare("SELECT movie_id FROM watchlist ORDER BY added_at, movie_id")?;
-    for id in stmt.query_map([], |row| row.get::<_, String>(0))? {
+    let mut stmt = conn.prepare(
+        "SELECT movie_id FROM watchlist WHERE user_id = ?1 ORDER BY added_at, movie_id",
+    )?;
+    for id in stmt.query_map([user_id], |row| row.get::<_, String>(0))? {
         store.watchlist.insert(id?);
     }
 
-    let mut stmt = conn.prepare("SELECT movie_id FROM favorites ORDER BY added_at, movie_id")?;
-    for id in stmt.query_map([], |row| row.get::<_, String>(0))? {
+    let mut stmt = conn.prepare(
+        "SELECT movie_id FROM favorites WHERE user_id = ?1 ORDER BY added_at, movie_id",
+    )?;
+    for id in stmt.query_map([user_id], |row| row.get::<_, String>(0))? {
         store.favorites.insert(id?);
     }
 
-    let mut stmt = conn.prepare("SELECT movie_id, half_stars FROM ratings")?;
-    for row in stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u8>(1)?)))? {
+    let mut stmt = conn.prepare("SELECT movie_id, half_stars FROM ratings WHERE user_id = ?1")?;
+    for row in
+        stmt.query_map([user_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u8>(1)?)))?
+    {
         let (id, half_stars) = row?;
         store.ratings.insert(id, half_stars);
     }
 
-    let mut stmt = conn.prepare("SELECT movie_id, body FROM visitor_reviews")?;
-    for row in stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))? {
+    let mut stmt = conn.prepare("SELECT movie_id, body FROM visitor_reviews WHERE user_id = ?1")?;
+    for row in
+        stmt.query_map([user_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+    {
         let (id, body) = row?;
         store.written_reviews.insert(id, body);
     }
 
-    let mut stmt = conn.prepare("SELECT review_id FROM liked_reviews")?;
-    for id in stmt.query_map([], |row| row.get::<_, String>(0))? {
+    let mut stmt = conn.prepare("SELECT review_id FROM liked_reviews WHERE user_id = ?1")?;
+    for id in stmt.query_map([user_id], |row| row.get::<_, String>(0))? {
         store.liked_reviews.insert(id?);
     }
 
-    let mut stmt = conn.prepare("SELECT comment_id FROM liked_comments")?;
-    for id in stmt.query_map([], |row| row.get::<_, String>(0))? {
+    let mut stmt = conn.prepare("SELECT comment_id FROM liked_comments WHERE user_id = ?1")?;
+    for id in stmt.query_map([user_id], |row| row.get::<_, String>(0))? {
         store.liked_comments.insert(id?);
     }
 
     let mut stmt =
-        conn.prepare("SELECT review_id, id, body FROM comments ORDER BY id")?;
+        conn.prepare("SELECT review_id, id, body FROM comments WHERE user_id = ?1 ORDER BY id")?;
     let mut posted: BTreeMap<String, Vec<PostedComment>> = BTreeMap::new();
-    for row in stmt.query_map([], |row| {
+    for row in stmt.query_map([user_id], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?))
     })? {
         let (review_id, id, body) = row?;
@@ -1171,10 +1809,11 @@ pub fn load_store(conn: &Connection) -> Result<Store> {
     }
     store.posted_comments = posted;
 
-    let mut stmt =
-        conn.prepare("SELECT review_id, comment_id, id, body FROM replies ORDER BY id")?;
+    let mut stmt = conn.prepare(
+        "SELECT review_id, comment_id, id, body FROM replies WHERE user_id = ?1 ORDER BY id",
+    )?;
     let mut replies: BTreeMap<(String, String), Vec<PostedReply>> = BTreeMap::new();
-    for row in stmt.query_map([], |row| {
+    for row in stmt.query_map([user_id], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
@@ -1186,6 +1825,14 @@ pub fn load_store(conn: &Connection) -> Result<Store> {
         replies.entry((review_id, parent)).or_default().push(PostedReply { id: reply_id(id), body });
     }
     store.posted_replies = replies;
+
+    // The face on the comments they posted. Read here rather than passed in, so
+    // `hydrate` keeps taking nothing but a `&Store` — see `state::Store::avatar`.
+    store.avatar = conn
+        .query_row("SELECT avatar_src, avatar_alt FROM people WHERE id = ?1", [user_id], |row| {
+            Ok(Image::new(&row.get::<_, String>(0)?, &row.get::<_, String>(1)?))
+        })
+        .optional()?;
 
     Ok(store)
 }
@@ -1199,10 +1846,20 @@ fn reply_id(rowid: i64) -> String {
     format!("reply-{rowid}")
 }
 
-/// Add, remove, or toggle a film on the watchlist. Returns the resulting state.
-pub fn set_watchlist(conn: &Connection, movie_id: &str, target: Option<bool>) -> Result<bool> {
+/// Add, remove, or toggle a film on one account's watchlist. Returns the resulting
+/// state.
+pub fn set_watchlist(
+    conn: &Connection,
+    user_id: &str,
+    movie_id: &str,
+    target: Option<bool>,
+) -> Result<bool> {
     let present: bool = conn
-        .query_row("SELECT 1 FROM watchlist WHERE movie_id = ?1", [movie_id], |_| Ok(()))
+        .query_row(
+            "SELECT 1 FROM watchlist WHERE user_id = ?1 AND movie_id = ?2",
+            [user_id, movie_id],
+            |_| Ok(()),
+        )
         .optional()?
         .is_some();
 
@@ -1210,83 +1867,125 @@ pub fn set_watchlist(conn: &Connection, movie_id: &str, target: Option<bool>) ->
     if target {
         // Idempotent, so a double-click can't desync the button from the store —
         // and `added_at` keeps its original value rather than jumping.
-        conn.execute("INSERT OR IGNORE INTO watchlist (movie_id) VALUES (?1)", [movie_id])?;
+        conn.execute(
+            "INSERT OR IGNORE INTO watchlist (user_id, movie_id) VALUES (?1, ?2)",
+            [user_id, movie_id],
+        )?;
     } else {
-        conn.execute("DELETE FROM watchlist WHERE movie_id = ?1", [movie_id])?;
+        conn.execute(
+            "DELETE FROM watchlist WHERE user_id = ?1 AND movie_id = ?2",
+            [user_id, movie_id],
+        )?;
     }
     Ok(target)
 }
 
-/// Set the visitor's rating; `0` clears it, which is how the UI un-rates a film.
-pub fn set_rating(conn: &Connection, movie_id: &str, half_stars: u8) -> Result<Option<u8>> {
+/// Set one account's rating; `0` clears it, which is how the UI un-rates a film.
+pub fn set_rating(
+    conn: &Connection,
+    user_id: &str,
+    movie_id: &str,
+    half_stars: u8,
+) -> Result<Option<u8>> {
     if half_stars == 0 {
-        conn.execute("DELETE FROM ratings WHERE movie_id = ?1", [movie_id])?;
+        conn.execute(
+            "DELETE FROM ratings WHERE user_id = ?1 AND movie_id = ?2",
+            [user_id, movie_id],
+        )?;
         return Ok(None);
     }
     // Re-rating a film moves it to the top of the profile's "Recent Reviews",
     // which is what "recent" has to mean — the *rating* is the event, not the row.
     conn.execute(
-        "INSERT INTO ratings (movie_id, half_stars, rated_at)
-         VALUES (?1, ?2, CURRENT_TIMESTAMP)
-         ON CONFLICT(movie_id) DO UPDATE
+        "INSERT INTO ratings (user_id, movie_id, half_stars, rated_at)
+         VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+         ON CONFLICT(user_id, movie_id) DO UPDATE
              SET half_stars = excluded.half_stars, rated_at = excluded.rated_at",
-        params![movie_id, half_stars],
+        params![user_id, movie_id, half_stars],
     )?;
     Ok(Some(half_stars))
 }
 
-/// Toggle a like. Returns whether it is now liked.
-pub fn toggle_review_like(conn: &Connection, review_id: &str) -> Result<bool> {
-    let removed = conn.execute("DELETE FROM liked_reviews WHERE review_id = ?1", [review_id])?;
+/// Toggle one account's like on a review. Returns whether it is now liked.
+pub fn toggle_review_like(conn: &Connection, user_id: &str, review_id: &str) -> Result<bool> {
+    let removed = conn.execute(
+        "DELETE FROM liked_reviews WHERE user_id = ?1 AND review_id = ?2",
+        [user_id, review_id],
+    )?;
     if removed > 0 {
         return Ok(false);
     }
-    conn.execute("INSERT INTO liked_reviews (review_id) VALUES (?1)", [review_id])?;
+    conn.execute(
+        "INSERT INTO liked_reviews (user_id, review_id) VALUES (?1, ?2)",
+        [user_id, review_id],
+    )?;
     Ok(true)
 }
 
-pub fn toggle_comment_like(conn: &Connection, comment_id: &str) -> Result<bool> {
-    let removed = conn.execute("DELETE FROM liked_comments WHERE comment_id = ?1", [comment_id])?;
+pub fn toggle_comment_like(conn: &Connection, user_id: &str, comment_id: &str) -> Result<bool> {
+    let removed = conn.execute(
+        "DELETE FROM liked_comments WHERE user_id = ?1 AND comment_id = ?2",
+        [user_id, comment_id],
+    )?;
     if removed > 0 {
         return Ok(false);
     }
-    conn.execute("INSERT INTO liked_comments (comment_id) VALUES (?1)", [comment_id])?;
+    conn.execute(
+        "INSERT INTO liked_comments (user_id, comment_id) VALUES (?1, ?2)",
+        [user_id, comment_id],
+    )?;
     Ok(true)
 }
 
 /// Store a comment and return its wire id.
-pub fn add_comment(conn: &Connection, review_id: &str, body: &str) -> Result<String> {
+pub fn add_comment(
+    conn: &Connection,
+    user_id: &str,
+    review_id: &str,
+    body: &str,
+) -> Result<String> {
     conn.execute(
-        "INSERT INTO comments (review_id, body) VALUES (?1, ?2)",
-        params![review_id, body],
+        "INSERT INTO comments (user_id, review_id, body) VALUES (?1, ?2, ?3)",
+        params![user_id, review_id, body],
     )?;
     Ok(comment_id(conn.last_insert_rowid()))
 }
 
 pub fn add_reply(
     conn: &Connection,
+    user_id: &str,
     review_id: &str,
     comment_id: &str,
     body: &str,
 ) -> Result<String> {
     conn.execute(
-        "INSERT INTO replies (review_id, comment_id, body) VALUES (?1, ?2, ?3)",
-        params![review_id, comment_id, body],
+        "INSERT INTO replies (user_id, review_id, comment_id, body) VALUES (?1, ?2, ?3, ?4)",
+        params![user_id, review_id, comment_id, body],
     )?;
     Ok(reply_id(conn.last_insert_rowid()))
 }
 
-/// Whether the visitor posted this comment — needed before accepting a reply to
+/// Whether this account posted this comment — needed before accepting a reply to
 /// it or a like on it, since it isn't in the upstream content.
-pub fn comment_exists(conn: &Connection, review_id: &str, comment_id: &str) -> Result<bool> {
+///
+/// Scoped to the account, not just to the review. A thread only ever shows the
+/// comments you wrote (see `hydrate::review`), so somebody else's comment is not
+/// something you can see, and letting you reply to it would file the reply under a
+/// comment that never appears on your screen.
+pub fn comment_exists(
+    conn: &Connection,
+    user_id: &str,
+    review_id: &str,
+    comment_id: &str,
+) -> Result<bool> {
     let rowid = match comment_id.strip_prefix("comment-").and_then(|n| n.parse::<i64>().ok()) {
         Some(rowid) => rowid,
         None => return Ok(false),
     };
     Ok(conn
         .query_row(
-            "SELECT 1 FROM comments WHERE id = ?1 AND review_id = ?2",
-            params![rowid, review_id],
+            "SELECT 1 FROM comments WHERE id = ?1 AND review_id = ?2 AND user_id = ?3",
+            params![rowid, review_id, user_id],
             |_| Ok(()),
         )
         .optional()?
@@ -1299,6 +1998,31 @@ mod tests {
 
     fn db() -> Connection {
         open(":memory:").expect("in-memory database")
+    }
+
+    /// The account every test below acts as.
+    ///
+    /// Its id is derived from the Google subject, so it is knowable in advance and a
+    /// test can name it without threading a variable through every assertion.
+    const ME: &str = "account-1001";
+
+    /// Sign somebody in.
+    ///
+    /// Through `upsert_google_account`, the same path a real callback takes, rather
+    /// than a hand-written INSERT — so a change to account creation is felt by the
+    /// tests that depend on having an account.
+    fn sign_in(conn: &Connection, sub: &str, handle: &str) -> AccountRow {
+        upsert_google_account(
+            conn,
+            &GoogleAccount {
+                sub: sub.into(),
+                email: Some(format!("{handle}@example.com")),
+                name: format!("{handle} the viewer"),
+                avatar: Image::new("img/avatar-test.jpg", "A test avatar."),
+                handle: handle.into(),
+            },
+        )
+        .expect("an account")
     }
 
     /// A fresh database has no people at all now — the eleven decorative rows the
@@ -1324,18 +2048,18 @@ mod tests {
     #[test]
     fn the_feed_rails_are_the_follow_graph() {
         let conn = db();
-        assert!(reviews_from_followed(&conn, 10).unwrap().is_empty());
-        assert!(followed_with_newest_review(&conn, 10).unwrap().is_empty());
+        assert!(reviews_from_followed(&conn, ME, 10).unwrap().is_empty());
+        assert!(followed_with_newest_review(&conn, ME, 10).unwrap().is_empty());
 
-        seed_graph(&conn, &demo_graph()).unwrap();
+        let conn = graph();
 
-        // `demo_graph` has the visitor following some but not all of its cast, and
+        // `demo_graph` marks some but not all of its cast as starter follows, and
         // only the followed ones may appear.
         let followed: Vec<String> =
-            following(&conn).unwrap().into_iter().map(|row| row.id).collect();
+            following(&conn, ME).unwrap().into_iter().map(|row| row.id).collect();
         assert!(!followed.is_empty(), "the demo graph seeds some follows");
 
-        let reviews = reviews_from_followed(&conn, 50).unwrap();
+        let reviews = reviews_from_followed(&conn, ME, 50).unwrap();
         assert!(!reviews.is_empty());
         for review in &reviews {
             assert!(
@@ -1352,7 +2076,7 @@ mod tests {
 
         // A story circle per followed person, people with something to open first,
         // and `Image::new` has made the avatar path servable.
-        let stories = followed_with_newest_review(&conn, 50).unwrap();
+        let stories = followed_with_newest_review(&conn, ME, 50).unwrap();
         assert_eq!(stories.len(), followed.len());
         assert!(stories[0].newest_review.is_some());
         assert!(stories[0].avatar.src.starts_with('/') || stories[0].avatar.src.contains("://"));
@@ -1365,83 +2089,82 @@ mod tests {
         }
         // The id a circle opens is a review that really exists.
         let review_id = stories[0].newest_review.clone().unwrap();
-        assert!(review_by_id(&conn, &review_id).unwrap().is_some());
+        assert!(review_by_id(&conn, ME, &review_id).unwrap().is_some());
     }
 
     /// The "Following" list's subtitle is built from these two, so both have to
     /// survive the round trip.
     #[test]
     fn following_carries_a_bio_and_a_live_review_count() {
-        let conn = db();
-        seed_graph(&conn, &demo_graph()).unwrap();
+        let conn = graph();
 
-        let rows = following(&conn).unwrap();
+        let rows = following(&conn, ME).unwrap();
         let row = rows.iter().find(|r| r.review_count > 0).expect("someone reviewed something");
         assert!(row.handle.as_deref().unwrap_or_default().starts_with('@'));
         assert!(row.bio.is_some());
 
         let counted: u32 =
-            reviews_by_person(&conn, &row.id).unwrap().len().try_into().unwrap();
+            reviews_by_person(&conn, ME, &row.id).unwrap().len().try_into().unwrap();
         assert_eq!(row.review_count, counted);
     }
 
     #[test]
     fn watchlist_toggles_and_is_idempotent_when_told_the_target() {
         let conn = db();
-        assert!(set_watchlist(&conn, "157336-interstellar", None).unwrap());
-        assert!(!set_watchlist(&conn, "157336-interstellar", None).unwrap());
+        assert!(set_watchlist(&conn, ME, "157336-interstellar", None).unwrap());
+        assert!(!set_watchlist(&conn, ME, "157336-interstellar", None).unwrap());
 
         // Stating the target twice must not flip it — that's what protects a
         // double-click from desyncing the button.
-        assert!(set_watchlist(&conn, "x", Some(true)).unwrap());
-        assert!(set_watchlist(&conn, "x", Some(true)).unwrap());
-        assert!(!set_watchlist(&conn, "x", Some(false)).unwrap());
-        assert!(!set_watchlist(&conn, "x", Some(false)).unwrap());
+        assert!(set_watchlist(&conn, ME, "x", Some(true)).unwrap());
+        assert!(set_watchlist(&conn, ME, "x", Some(true)).unwrap());
+        assert!(!set_watchlist(&conn, ME, "x", Some(false)).unwrap());
+        assert!(!set_watchlist(&conn, ME, "x", Some(false)).unwrap());
 
-        assert_eq!(load_store(&conn).unwrap().watchlist.len(), 0);
+        assert_eq!(load_store(&conn, ME).unwrap().watchlist.len(), 0);
     }
 
     #[test]
     fn ratings_round_trip_and_zero_clears() {
         let conn = db();
-        assert_eq!(set_rating(&conn, "m", 7).unwrap(), Some(7));
-        assert_eq!(load_store(&conn).unwrap().ratings.get("m"), Some(&7));
+        assert_eq!(set_rating(&conn, ME, "m", 7).unwrap(), Some(7));
+        assert_eq!(load_store(&conn, ME).unwrap().ratings.get("m"), Some(&7));
 
         // Re-rating replaces rather than conflicting.
-        assert_eq!(set_rating(&conn, "m", 9).unwrap(), Some(9));
-        assert_eq!(load_store(&conn).unwrap().ratings.get("m"), Some(&9));
+        assert_eq!(set_rating(&conn, ME, "m", 9).unwrap(), Some(9));
+        assert_eq!(load_store(&conn, ME).unwrap().ratings.get("m"), Some(&9));
 
-        assert_eq!(set_rating(&conn, "m", 0).unwrap(), None);
-        assert!(load_store(&conn).unwrap().ratings.is_empty());
+        assert_eq!(set_rating(&conn, ME, "m", 0).unwrap(), None);
+        assert!(load_store(&conn, ME).unwrap().ratings.is_empty());
     }
 
     #[test]
     fn likes_toggle() {
         let conn = db();
-        assert!(toggle_review_like(&conn, "r").unwrap());
-        assert!(load_store(&conn).unwrap().liked_reviews.contains("r"));
-        assert!(!toggle_review_like(&conn, "r").unwrap());
-        assert!(load_store(&conn).unwrap().liked_reviews.is_empty());
+        assert!(toggle_review_like(&conn, ME, "r").unwrap());
+        assert!(load_store(&conn, ME).unwrap().liked_reviews.contains("r"));
+        assert!(!toggle_review_like(&conn, ME, "r").unwrap());
+        assert!(load_store(&conn, ME).unwrap().liked_reviews.is_empty());
 
-        assert!(toggle_comment_like(&conn, "comment-1").unwrap());
-        assert!(load_store(&conn).unwrap().liked_comments.contains("comment-1"));
+        assert!(toggle_comment_like(&conn, ME, "comment-1").unwrap());
+        assert!(load_store(&conn, ME).unwrap().liked_comments.contains("comment-1"));
     }
 
     /// The ids `hydrate` and the frontend exchange, rebuilt from rowids.
     #[test]
     fn posted_comments_and_replies_reload_with_their_ids() {
         let conn = db();
-        let first = add_comment(&conn, "review-a", "Mine").unwrap();
-        let second = add_comment(&conn, "review-a", "Also mine").unwrap();
-        let elsewhere = add_comment(&conn, "review-b", "Different review").unwrap();
+        let first = add_comment(&conn, ME, "review-a", "Mine").unwrap();
+        let second = add_comment(&conn, ME, "review-a", "Also mine").unwrap();
+        let elsewhere = add_comment(&conn, ME, "review-b", "Different review").unwrap();
         assert_eq!(first, "comment-1");
         assert_eq!(second, "comment-2");
         assert_eq!(elsewhere, "comment-3");
 
-        let reply = add_reply(&conn, "review-a", &first, "A follow-up").unwrap();
+        let reply = add_reply(&conn, ME, "review-a", &first, "A follow-up").unwrap();
         assert_eq!(reply, "reply-1");
 
-        let store = load_store(&conn).unwrap();
+        let store = load_store(&conn, ME).unwrap();
         let on_a = &store.posted_comments["review-a"];
         assert_eq!(on_a.len(), 2);
         assert_eq!(on_a[0].id, "comment-1");
@@ -1460,34 +2183,37 @@ mod tests {
     #[test]
     fn comment_ids_do_not_restart_after_a_reload() {
         let conn = db();
-        add_comment(&conn, "r", "one").unwrap();
-        add_comment(&conn, "r", "two").unwrap();
+        add_comment(&conn, ME, "r", "one").unwrap();
+        add_comment(&conn, ME, "r", "two").unwrap();
 
         // Reopening the same connection is as close as an in-memory database gets
         // to a restart; AUTOINCREMENT keeps its high-water mark in the file.
-        let third = add_comment(&conn, "r", "three").unwrap();
+        let third = add_comment(&conn, ME, "r", "three").unwrap();
         assert_eq!(third, "comment-3");
 
         // Even after a delete, the number is not reused — that's AUTOINCREMENT
         // rather than a bare rowid.
         conn.execute("DELETE FROM comments WHERE id = 3", []).unwrap();
-        assert_eq!(add_comment(&conn, "r", "four").unwrap(), "comment-4");
+        assert_eq!(add_comment(&conn, ME, "r", "four").unwrap(), "comment-4");
     }
 
     #[test]
     fn comment_existence_is_scoped_to_the_review() {
         let conn = db();
-        let id = add_comment(&conn, "review-a", "Mine").unwrap();
-        assert!(comment_exists(&conn, "review-a", &id).unwrap());
-        assert!(!comment_exists(&conn, "review-b", &id).unwrap());
+        let id = add_comment(&conn, ME, "review-a", "Mine").unwrap();
+        assert!(comment_exists(&conn, ME, "review-a", &id).unwrap());
+        assert!(!comment_exists(&conn, ME, "review-b", &id).unwrap());
         // A malformed or upstream id is simply not ours.
-        assert!(!comment_exists(&conn, "review-a", "comment-marcus").unwrap());
-        assert!(!comment_exists(&conn, "review-a", "nonsense").unwrap());
+        assert!(!comment_exists(&conn, ME, "review-a", "comment-marcus").unwrap());
+        assert!(!comment_exists(&conn, ME, "review-a", "nonsense").unwrap());
+        // And it is not somebody else's, either: a thread only shows your own
+        // comments, so another account cannot reply to or like this one.
+        assert!(!comment_exists(&conn, "account-2002", "review-a", &id).unwrap());
     }
 
     #[test]
     fn an_empty_database_loads_an_empty_store() {
-        let store = load_store(&db()).unwrap();
+        let store = load_store(&db(), ME).unwrap();
         assert!(store.watchlist.is_empty());
         assert!(store.ratings.is_empty());
         assert!(store.liked_reviews.is_empty());
@@ -1505,11 +2231,11 @@ mod tests {
         // second tie — and the id breaks the tie deterministically rather than
         // letting the order flip between requests.
         for id in ["a-film", "b-film", "c-film"] {
-            set_watchlist(&conn, id, Some(true)).unwrap();
+            set_watchlist(&conn, ME, id, Some(true)).unwrap();
         }
-        assert_eq!(watchlist_recent_first(&conn).unwrap(), ["c-film", "b-film", "a-film"]);
+        assert_eq!(watchlist_recent_first(&conn, ME).unwrap(), ["c-film", "b-film", "a-film"]);
         // `load_store`'s order is unchanged, which is what keeps `hydrate` honest.
-        let store: Vec<String> = load_store(&conn).unwrap().watchlist.into_iter().collect();
+        let store: Vec<String> = load_store(&conn, ME).unwrap().watchlist.into_iter().collect();
         assert_eq!(store, ["a-film", "b-film", "c-film"]);
     }
 
@@ -1519,16 +2245,16 @@ mod tests {
         let conn = db();
         // Same second for all three, so the id tiebreak decides the initial order —
         // deterministic rather than whatever SQLite feels like.
-        set_rating(&conn, "middling", 6).unwrap();
-        set_rating(&conn, "great", 10).unwrap();
-        set_rating(&conn, "good", 8).unwrap();
+        set_rating(&conn, ME, "middling", 6).unwrap();
+        set_rating(&conn, ME, "great", 10).unwrap();
+        set_rating(&conn, ME, "good", 8).unwrap();
         assert_eq!(
-            journal_recent_first(&conn).unwrap().iter().map(|r| r.movie_id.as_str()).collect::<Vec<_>>(),
+            journal_recent_first(&conn, ME).unwrap().iter().map(|r| r.movie_id.as_str()).collect::<Vec<_>>(),
             ["middling", "great", "good"]
         );
 
-        set_rating(&conn, "middling", 7).unwrap();
-        let recent = journal_recent_first(&conn).unwrap();
+        set_rating(&conn, ME, "middling", 7).unwrap();
+        let recent = journal_recent_first(&conn, ME).unwrap();
         assert_eq!(recent[0].movie_id, "middling");
         assert_eq!(recent[0].half_stars, Some(7));
         assert_eq!(recent[0].body, None, "a rating alone carries no prose");
@@ -1538,25 +2264,25 @@ mod tests {
     #[test]
     fn favouriting_toggles_and_is_idempotent_when_told_the_target() {
         let conn = db();
-        assert!(favorites_recent_first(&conn).unwrap().is_empty());
+        assert!(favorites_recent_first(&conn, ME).unwrap().is_empty());
 
-        assert!(set_favorite(&conn, "le-souffle", Some(true)).unwrap());
+        assert!(set_favorite(&conn, ME, "le-souffle", Some(true)).unwrap());
         // Twice is still favourited, and still one row — the PK sees to that.
-        assert!(set_favorite(&conn, "le-souffle", Some(true)).unwrap());
-        assert_eq!(favorites_recent_first(&conn).unwrap(), ["le-souffle"]);
+        assert!(set_favorite(&conn, ME, "le-souffle", Some(true)).unwrap());
+        assert_eq!(favorites_recent_first(&conn, ME).unwrap(), ["le-souffle"]);
 
-        assert!(!set_favorite(&conn, "le-souffle", Some(false)).unwrap());
-        assert!(!set_favorite(&conn, "le-souffle", Some(false)).unwrap());
-        assert!(favorites_recent_first(&conn).unwrap().is_empty());
+        assert!(!set_favorite(&conn, ME, "le-souffle", Some(false)).unwrap());
+        assert!(!set_favorite(&conn, ME, "le-souffle", Some(false)).unwrap());
+        assert!(favorites_recent_first(&conn, ME).unwrap().is_empty());
 
         // No body toggles.
-        assert!(set_favorite(&conn, "le-souffle", None).unwrap());
-        assert!(!set_favorite(&conn, "le-souffle", None).unwrap());
+        assert!(set_favorite(&conn, ME, "le-souffle", None).unwrap());
+        assert!(!set_favorite(&conn, ME, "le-souffle", None).unwrap());
 
         // And it left the neighbouring tables alone: a favourite is not a rating
         // and not a watchlist entry, which is the whole reason it has its own table.
-        set_favorite(&conn, "le-souffle", Some(true)).unwrap();
-        let store = load_store(&conn).unwrap();
+        set_favorite(&conn, ME, "le-souffle", Some(true)).unwrap();
+        let store = load_store(&conn, ME).unwrap();
         assert!(store.favorites.contains("le-souffle"));
         assert!(store.ratings.is_empty() && store.watchlist.is_empty());
     }
@@ -1565,9 +2291,9 @@ mod tests {
     fn favourites_read_back_newest_first() {
         let conn = db();
         for id in ["a-film", "b-film", "c-film"] {
-            set_favorite(&conn, id, Some(true)).unwrap();
+            set_favorite(&conn, ME, id, Some(true)).unwrap();
         }
-        assert_eq!(favorites_recent_first(&conn).unwrap(), ["c-film", "b-film", "a-film"]);
+        assert_eq!(favorites_recent_first(&conn, ME).unwrap(), ["c-film", "b-film", "a-film"]);
     }
 
     /// Writing, rewriting and clearing. Blank deletes rather than storing an empty
@@ -1575,21 +2301,21 @@ mod tests {
     #[test]
     fn a_written_review_can_be_edited_and_cleared() {
         let conn = db();
-        assert_eq!(set_visitor_review(&conn, "le-souffle", "  First pass.  ").unwrap(),
+        assert_eq!(set_user_review(&conn, ME, "le-souffle", "  First pass.  ").unwrap(),
                    Some("First pass.".into()), "the body is trimmed on the way in");
 
-        let journal = journal_recent_first(&conn).unwrap();
+        let journal = journal_recent_first(&conn, ME).unwrap();
         assert_eq!(journal.len(), 1);
         assert_eq!(journal[0].body.as_deref(), Some("First pass."));
         assert_eq!(journal[0].half_stars, None, "prose without a score is allowed");
 
-        assert_eq!(set_visitor_review(&conn, "le-souffle", "Second thoughts.").unwrap(),
+        assert_eq!(set_user_review(&conn, ME, "le-souffle", "Second thoughts.").unwrap(),
                    Some("Second thoughts.".into()));
-        assert_eq!(journal_recent_first(&conn).unwrap().len(), 1, "editing wrote a second row");
+        assert_eq!(journal_recent_first(&conn, ME).unwrap().len(), 1, "editing wrote a second row");
 
-        assert_eq!(set_visitor_review(&conn, "le-souffle", "   ").unwrap(), None);
-        assert!(journal_recent_first(&conn).unwrap().is_empty());
-        assert!(load_store(&conn).unwrap().written_reviews.is_empty());
+        assert_eq!(set_user_review(&conn, ME, "le-souffle", "   ").unwrap(), None);
+        assert!(journal_recent_first(&conn, ME).unwrap().is_empty());
+        assert!(load_store(&conn, ME).unwrap().written_reviews.is_empty());
     }
 
     /// A rating and a review of the same film are one journal entry, and clearing
@@ -1597,25 +2323,25 @@ mod tests {
     #[test]
     fn a_rating_and_a_review_of_one_film_are_one_entry() {
         let conn = db();
-        set_rating(&conn, "le-souffle", 9).unwrap();
-        set_visitor_review(&conn, "le-souffle", "Worth the hype.").unwrap();
+        set_rating(&conn, ME, "le-souffle", 9).unwrap();
+        set_user_review(&conn, ME, "le-souffle", "Worth the hype.").unwrap();
 
-        let journal = journal_recent_first(&conn).unwrap();
+        let journal = journal_recent_first(&conn, ME).unwrap();
         assert_eq!(journal.len(), 1, "the union double-counted the film");
         assert_eq!(journal[0].half_stars, Some(9));
         assert_eq!(journal[0].body.as_deref(), Some("Worth the hype."));
 
         // Clearing the rating must not delete what was written about it.
-        set_rating(&conn, "le-souffle", 0).unwrap();
-        let after = journal_recent_first(&conn).unwrap();
+        set_rating(&conn, ME, "le-souffle", 0).unwrap();
+        let after = journal_recent_first(&conn, ME).unwrap();
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].half_stars, None);
         assert_eq!(after[0].body.as_deref(), Some("Worth the hype."));
 
         // And the other way round.
-        set_rating(&conn, "le-souffle", 6).unwrap();
-        set_visitor_review(&conn, "le-souffle", "").unwrap();
-        let last = journal_recent_first(&conn).unwrap();
+        set_rating(&conn, ME, "le-souffle", 6).unwrap();
+        set_user_review(&conn, ME, "le-souffle", "").unwrap();
+        let last = journal_recent_first(&conn, ME).unwrap();
         assert_eq!(last.len(), 1);
         assert_eq!(last[0].half_stars, Some(6));
         assert_eq!(last[0].body, None);
@@ -1628,44 +2354,246 @@ mod tests {
         // Written far enough apart to beat CURRENT_TIMESTAMP's one-second floor,
         // which is why these go in by hand rather than through the setters.
         conn.execute_batch(
-            "INSERT INTO ratings (movie_id, half_stars, rated_at)
-                 VALUES ('rated-today', 8, '2026-08-04 10:00:00');
-             INSERT INTO visitor_reviews (movie_id, body, written_at)
-                 VALUES ('written-later', 'Still thinking about it.', '2026-08-04 11:00:00');",
+            "INSERT INTO ratings (user_id, movie_id, half_stars, rated_at)
+                 VALUES ('account-1001', 'rated-today', 8, '2026-08-04 10:00:00');
+             INSERT INTO visitor_reviews (user_id, movie_id, body, written_at)
+                 VALUES ('account-1001', 'written-later', 'Still thinking about it.',
+                         '2026-08-04 11:00:00');",
         )
         .unwrap();
         let ids: Vec<String> =
-            journal_recent_first(&conn).unwrap().into_iter().map(|r| r.movie_id).collect();
+            journal_recent_first(&conn, ME).unwrap().into_iter().map(|r| r.movie_id).collect();
         assert_eq!(ids, ["written-later", "rated-today"]);
 
         // Now rewrite the older film's review: the film moves to the front even
         // though its rating is untouched and older than the other entry.
-        set_visitor_review(&conn, "rated-today", "Came back to it.").unwrap();
+        set_user_review(&conn, ME, "rated-today", "Came back to it.").unwrap();
         let after: Vec<String> =
-            journal_recent_first(&conn).unwrap().into_iter().map(|r| r.movie_id).collect();
+            journal_recent_first(&conn, ME).unwrap().into_iter().map(|r| r.movie_id).collect();
         assert_eq!(after, ["rated-today", "written-later"]);
     }
 
-    /// The bio is the one identity field the visitor owns. `None` means untouched,
-    /// which is what lets `content` supply the export's line.
+    /// The bio is the one identity field a user owns — Google supplies the rest.
+    /// `None` means untouched, which is what lets `content` supply the default.
     #[test]
     fn the_bio_is_stored_and_clearing_it_restores_the_default() {
         let conn = db();
-        assert_eq!(visitor_bio(&conn).unwrap(), None, "an untouched bio is absent, not blank");
+        let bio = |conn: &Connection| account(conn, ME).unwrap().unwrap().bio;
+        sign_in(&conn, "1001", "testviewer");
+        assert_eq!(bio(&conn), None, "an untouched bio is absent, not blank");
 
-        assert_eq!(set_visitor_bio(&conn, "  Watches too much. ").unwrap(),
+        assert_eq!(set_user_bio(&conn, ME, "  Watches too much. ").unwrap(),
                    Some("Watches too much.".into()));
-        assert_eq!(visitor_bio(&conn).unwrap(), Some("Watches too much.".into()));
+        assert_eq!(bio(&conn), Some("Watches too much.".into()));
 
-        // Editing replaces rather than accumulating: it's a key/value row.
-        set_visitor_bio(&conn, "Second draft.").unwrap();
-        assert_eq!(visitor_bio(&conn).unwrap(), Some("Second draft.".into()));
+        // Editing replaces rather than accumulating: it's one column on one row.
+        set_user_bio(&conn, ME, "Second draft.").unwrap();
+        assert_eq!(bio(&conn), Some("Second draft.".into()));
         let rows: i64 =
-            conn.query_row("SELECT COUNT(*) FROM settings", [], |r| r.get(0)).unwrap();
+            conn.query_row("SELECT COUNT(*) FROM people WHERE id = ?1", [ME], |r| r.get(0))
+                .unwrap();
         assert_eq!(rows, 1);
 
-        assert_eq!(set_visitor_bio(&conn, "  ").unwrap(), None);
-        assert_eq!(visitor_bio(&conn).unwrap(), None);
+        assert_eq!(set_user_bio(&conn, ME, "  ").unwrap(), None);
+        assert_eq!(bio(&conn), None);
+
+        // And it is the *account's* bio: another sign-in must not see it.
+        set_user_bio(&conn, ME, "Mine alone.").unwrap();
+        let other = sign_in(&conn, "2002", "someoneelse");
+        assert_eq!(other.bio, None);
+    }
+
+    // --- Accounts, sessions and CSRF ------------------------------------------
+
+    /// Sign-in mints one account per Google subject, and signing in again finds the
+    /// same row rather than making a second one.
+    #[test]
+    fn signing_in_twice_is_the_same_account() {
+        let conn = graph();
+        let first = sign_in(&conn, "1001", "testviewer");
+        assert_eq!(first.id, ME);
+
+        let again = sign_in(&conn, "1001", "adifferentnickname");
+        assert_eq!(again.id, first.id);
+        // The nickname is theirs, not Google's: people may be following it, so a
+        // second sign-in must not rename them.
+        assert_eq!(again.handle, first.handle);
+
+        let accounts: i64 = conn
+            .query_row("SELECT COUNT(*) FROM people WHERE is_account = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(accounts, 1);
+    }
+
+    /// Two Google accounts wanting the same nickname both get one, because a
+    /// nickname addresses a page and the column is unique.
+    #[test]
+    fn nicknames_are_made_unique_on_collision() {
+        let conn = db();
+        let first = sign_in(&conn, "1001", "sam");
+        let second = sign_in(&conn, "2002", "sam");
+        let third = sign_in(&conn, "3003", "sam");
+
+        assert_eq!(first.handle, "@sam");
+        assert_eq!(second.handle, "@sam2");
+        assert_eq!(third.handle, "@sam3");
+        // All three are reachable, which is the point of making them differ.
+        for handle in [&first.handle, &second.handle, &third.handle] {
+            assert!(person_by_handle(&conn, ME, handle).unwrap().is_some(), "{handle}");
+        }
+    }
+
+    /// A new account opens on the seed's friends rather than an empty feed.
+    #[test]
+    fn a_new_account_starts_out_following_the_starter_set() {
+        let conn = graph();
+        let expected = GRAPH.iter().filter(|user| user.followed).count();
+        assert_eq!(follow_count(&conn, ME).unwrap() as usize, expected);
+
+        // The same set for the next person to sign in — it comes off `people`, not
+        // off somebody else's follow rows.
+        let other = sign_in(&conn, "2002", "someoneelse");
+        assert_eq!(follow_count(&conn, &other.id).unwrap() as usize, expected);
+
+        // Granting twice writes nothing new.
+        assert_eq!(grant_starter_follows(&conn, ME).unwrap(), 0);
+    }
+
+    /// The whole point of a session row: what one account has is not what another
+    /// has, and neither is what an anonymous reader has.
+    #[test]
+    fn two_accounts_do_not_share_a_watchlist() {
+        let conn = graph();
+        let other = sign_in(&conn, "2002", "someoneelse").id;
+
+        set_watchlist(&conn, ME, "le-souffle", Some(true)).unwrap();
+        set_rating(&conn, ME, "le-souffle", 9).unwrap();
+        set_favorite(&conn, ME, "le-souffle", Some(true)).unwrap();
+        set_user_review(&conn, ME, "le-souffle", "Mine.").unwrap();
+        toggle_review_like(&conn, ME, "user-elenarostova-dune-part-two").unwrap();
+        add_comment(&conn, ME, "user-elenarostova-dune-part-two", "Mine too.").unwrap();
+
+        set_watchlist(&conn, &other, "red-shift", Some(true)).unwrap();
+
+        let mine = load_store(&conn, ME).unwrap();
+        let theirs = load_store(&conn, &other).unwrap();
+        let nobodys = load_store(&conn, ANONYMOUS).unwrap();
+
+        assert_eq!(mine.watchlist.iter().map(String::as_str).collect::<Vec<_>>(), ["le-souffle"]);
+        assert_eq!(theirs.watchlist.iter().map(String::as_str).collect::<Vec<_>>(), ["red-shift"]);
+        assert!(nobodys.watchlist.is_empty());
+
+        // Every other delta is scoped the same way, which is six chances to leak.
+        assert!(theirs.ratings.is_empty() && nobodys.ratings.is_empty());
+        assert!(theirs.favorites.is_empty() && nobodys.favorites.is_empty());
+        assert!(theirs.written_reviews.is_empty() && nobodys.written_reviews.is_empty());
+        assert!(theirs.liked_reviews.is_empty() && nobodys.liked_reviews.is_empty());
+        assert!(theirs.posted_comments.is_empty() && nobodys.posted_comments.is_empty());
+
+        // Both can watchlist the same film, which the old single-column primary key
+        // made impossible.
+        assert!(set_watchlist(&conn, &other, "le-souffle", Some(true)).unwrap());
+        assert_eq!(watchlist_recent_first(&conn, ME).unwrap(), ["le-souffle"]);
+        assert_eq!(watchlist_recent_first(&conn, &other).unwrap().len(), 2);
+
+        // And their follows are their own, so one unfollowing changes nothing for the
+        // other.
+        set_follow(&conn, ME, "user-elenarostova", Some(false)).unwrap();
+        assert!(person_by_handle(&conn, &other, "elenarostova").unwrap().unwrap().following);
+        assert!(!person_by_handle(&conn, ME, "elenarostova").unwrap().unwrap().following);
+    }
+
+    /// Two accounts can follow each other, and each sees the other as a follower —
+    /// which the seeded `follows_visitor` flag cannot express.
+    #[test]
+    fn accounts_can_follow_each_other() {
+        let conn = graph();
+        let other = sign_in(&conn, "2002", "someoneelse");
+
+        assert_eq!(set_follow(&conn, ME, &other.id, Some(true)).unwrap(), Some(true));
+        let seen_by_them = person_by_handle(&conn, &other.id, "testviewer").unwrap().unwrap();
+        assert!(seen_by_them.follows_you, "their follower list misses a real follow");
+        assert!(!seen_by_them.following, "they have not followed back");
+
+        let handles: Vec<String> =
+            followers(&conn, &other.id).unwrap().into_iter().map(|row| row.handle).collect();
+        assert!(handles.contains(&"@testviewer".to_string()));
+    }
+
+    /// A session is a row, so logging out really revokes it — the token stops working
+    /// rather than merely being forgotten by one browser.
+    #[test]
+    fn logging_out_revokes_the_session() {
+        let conn = graph();
+        let token = "a-token";
+        create_session(&conn, token, ME).unwrap();
+
+        assert_eq!(session_account(&conn, token).unwrap().map(|a| a.id).as_deref(), Some(ME));
+
+        assert!(delete_session(&conn, token).unwrap());
+        assert!(session_account(&conn, token).unwrap().is_none(), "the token still works");
+        // Twice is not an error, so a repeated logout is safe.
+        assert!(!delete_session(&conn, token).unwrap());
+
+        // An unknown token was never a session.
+        assert!(session_account(&conn, "never-issued").unwrap().is_none());
+    }
+
+    /// An expired session reads as no session at all rather than as an error, so the
+    /// request is simply anonymous.
+    #[test]
+    fn an_expired_session_is_no_session() {
+        let conn = graph();
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, expires_at)
+             VALUES ('stale', ?1, datetime('now', '-1 day'))",
+            [ME],
+        )
+        .unwrap();
+        assert!(session_account(&conn, "stale").unwrap().is_none());
+
+        // And it is swept the next time somebody signs in.
+        create_session(&conn, "fresh", ME).unwrap();
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions WHERE token = 'stale'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
+    }
+
+    /// The CSRF check. A callback may only be completed with a `state` this server
+    /// issued, and only once.
+    #[test]
+    fn an_auth_state_is_accepted_once_and_never_again() {
+        let conn = db();
+        remember_auth_state(&conn, "issued").unwrap();
+
+        // A value nobody issued is refused, which is the mismatch case.
+        assert!(!consume_auth_state(&conn, "forged").unwrap());
+        assert!(!consume_auth_state(&conn, "").unwrap());
+
+        assert!(consume_auth_state(&conn, "issued").unwrap());
+        // Replaying the same callback finds nothing left to spend.
+        assert!(!consume_auth_state(&conn, "issued").unwrap());
+    }
+
+    /// And a state left in a tab overnight is refused too, rather than waiting
+    /// forever for its callback.
+    #[test]
+    fn a_stale_auth_state_is_refused_and_swept() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO auth_states (state, created_at) VALUES ('old', datetime('now', '-1 day'))",
+            [],
+        )
+        .unwrap();
+        assert!(!consume_auth_state(&conn, "old").unwrap());
+
+        // Starting a new sign-in clears it, so the table cannot grow without bound.
+        remember_auth_state(&conn, "new").unwrap();
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM auth_states WHERE state = 'old'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
     }
 
     /// A rating written before `rated_at` existed must still come back — it sorts
@@ -1673,14 +2601,17 @@ mod tests {
     #[test]
     fn ratings_predating_the_timestamp_column_still_load() {
         let conn = db();
-        conn.execute("INSERT INTO ratings (movie_id, half_stars) VALUES ('legacy', 9)", [])
-            .unwrap();
-        set_rating(&conn, "current", 4).unwrap();
+        conn.execute(
+            "INSERT INTO ratings (user_id, movie_id, half_stars) VALUES (?1, 'legacy', 9)",
+            [ME],
+        )
+        .unwrap();
+        set_rating(&conn, ME, "current", 4).unwrap();
 
         let recent: Vec<String> =
-            journal_recent_first(&conn).unwrap().into_iter().map(|row| row.movie_id).collect();
+            journal_recent_first(&conn, ME).unwrap().into_iter().map(|row| row.movie_id).collect();
         assert_eq!(recent, ["current", "legacy"], "NULL rated_at sorts last, not out");
-        assert_eq!(load_store(&conn).unwrap().ratings.get("legacy"), Some(&9));
+        assert_eq!(load_store(&conn, ME).unwrap().ratings.get("legacy"), Some(&9));
     }
 
     /// `migrate` has to add the column to a file created without it, since
@@ -1698,7 +2629,7 @@ mod tests {
         assert!(has_column(&conn, "ratings", "rated_at").unwrap());
         // And twice is still fine.
         prepare(&conn).unwrap();
-        assert_eq!(set_rating(&conn, "m", 8).unwrap(), Some(8));
+        assert_eq!(set_rating(&conn, ME, "m", 8).unwrap(), Some(8));
     }
 
     /// The follow list is only real follows, and it is now the *only* list of people
@@ -1707,12 +2638,12 @@ mod tests {
     #[test]
     fn following_is_only_who_you_really_follow() {
         let conn = db();
-        assert!(following(&conn).unwrap().is_empty(), "no follows, no rows");
+        assert!(following(&conn, ME).unwrap().is_empty(), "no follows, no rows");
 
-        seed_graph(&conn, &demo_graph()).unwrap();
-        let rows = following(&conn).unwrap();
+        let conn = graph();
+        let rows = following(&conn, ME).unwrap();
         let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
-        assert_eq!(ids.len(), follow_count(&conn).unwrap() as usize);
+        assert_eq!(ids.len(), follow_count(&conn, ME).unwrap() as usize);
         assert_eq!(ids.len(), GRAPH.iter().filter(|u| u.followed).count());
 
         // Nobody from the export's cast, named or not.
@@ -1731,6 +2662,9 @@ mod tests {
     fn graph() -> Connection {
         let conn = db();
         seed_graph(&conn, &demo_graph()).unwrap();
+        // Signed in *after* the seed, because `grant_starter_follows` reads the
+        // `starter_follow` flags the seed writes.
+        assert_eq!(sign_in(&conn, "1001", "testviewer").id, ME);
         conn
     }
 
@@ -1745,7 +2679,7 @@ mod tests {
         // A restart must not duplicate anyone. It must also not top anyone up: the
         // follows are the visitor's by then.
         assert_eq!(seed_graph(&conn, &demo_graph()).unwrap(), 0);
-        assert_eq!(search_people(&conn, "").unwrap().len(), GRAPH.len());
+        assert_eq!(search_people(&conn, ME, "").unwrap().len(), GRAPH.len());
 
         // Everyone the seed wrote is a user with a page. Nothing else is in the table
         // — the eleven decorative rows the old `seed` added are gone.
@@ -1753,6 +2687,10 @@ mod tests {
             conn.query_row("SELECT COUNT(*) FROM people WHERE is_user = 0", [], |r| r.get(0))
                 .unwrap();
         assert_eq!(non_users, 0);
+        // And the seed wrote no follow rows: there was nobody to own one.
+        let follows: i64 =
+            conn.query_row("SELECT COUNT(*) FROM follows", [], |r| r.get(0)).unwrap();
+        assert_eq!(follows, 0, "the seed followed somebody on nobody's behalf");
     }
 
     /// A half-finished harvest leaves a usable graph, and a later run leaves it
@@ -1762,13 +2700,13 @@ mod tests {
         let conn = db();
         let all = demo_graph();
         seed_graph(&conn, &all[..2]).unwrap();
-        assert_eq!(search_people(&conn, "").unwrap().len(), 2);
+        assert_eq!(search_people(&conn, ME, "").unwrap().len(), 2);
 
         assert_eq!(seed_graph(&conn, &all).unwrap(), 0, "the graph was re-seeded");
-        assert_eq!(search_people(&conn, "").unwrap().len(), 2);
+        assert_eq!(search_people(&conn, ME, "").unwrap().len(), 2);
         // The two who did land are complete — followable, with their reviews.
-        assert!(!reviews_by_person(&conn, &all[0].id).unwrap().is_empty());
-        assert_eq!(set_follow(&conn, &all[1].id, Some(true)).unwrap(), Some(true));
+        assert!(!reviews_by_person(&conn, ME, &all[0].id).unwrap().is_empty());
+        assert_eq!(set_follow(&conn, ME, &all[1].id, Some(true)).unwrap(), Some(true));
     }
 
     /// Two TMDB nicknames can slug to the same id ("MSBReviews" / "msbreviews").
@@ -1784,7 +2722,7 @@ mod tests {
         let written = seed_graph(&conn, &users).unwrap();
         assert_eq!(written, users.len(), "the collision aborted the seed");
         // The duplicate folded into the first, and everyone after it still landed.
-        let stored = search_people(&conn, "").unwrap();
+        let stored = search_people(&conn, ME, "").unwrap();
         assert_eq!(stored.len(), users.len() - 1);
         assert!(stored.iter().any(|u| u.handle == "@priyanaidu"));
     }
@@ -1796,11 +2734,11 @@ mod tests {
         users[0].handle = "@alreadyprefixed".into();
         seed_graph(&conn, &users[..1]).unwrap();
 
-        let stored = search_people(&conn, "").unwrap();
+        let stored = search_people(&conn, ME, "").unwrap();
         assert_eq!(stored[0].handle, "@alreadyprefixed", "the `@` was doubled");
         // And it's findable either way, because `person_by_handle` normalizes too.
-        assert!(person_by_handle(&conn, "alreadyprefixed").unwrap().is_some());
-        assert!(person_by_handle(&conn, "@alreadyprefixed").unwrap().is_some());
+        assert!(person_by_handle(&conn, ME, "alreadyprefixed").unwrap().is_some());
+        assert!(person_by_handle(&conn, ME, "@alreadyprefixed").unwrap().is_some());
     }
 
     #[test]
@@ -1808,19 +2746,21 @@ mod tests {
         let conn = graph();
 
         let by_handle: Vec<String> =
-            search_people(&conn, "kline").unwrap().into_iter().map(|u| u.handle).collect();
+            search_people(&conn, ME, "kline").unwrap().into_iter().map(|u| u.handle).collect();
         assert_eq!(by_handle, ["@sarahkline"]);
 
         // The display name works too, including the space the handle doesn't have.
         let by_name: Vec<String> =
-            search_people(&conn, "Sarah K").unwrap().into_iter().map(|u| u.name).collect();
+            search_people(&conn, ME, "Sarah K").unwrap().into_iter().map(|u| u.name).collect();
         assert_eq!(by_name, ["Sarah Kline"]);
 
         // Case-insensitive, and a partial prefix is enough.
-        assert_eq!(search_people(&conn, "ELENA").unwrap().len(), 1);
-        assert!(search_people(&conn, "nobodyatall").unwrap().is_empty());
-        // Empty lists everyone: that's what the screen shows before you type.
-        assert_eq!(search_people(&conn, "").unwrap().len(), GRAPH.len());
+        assert_eq!(search_people(&conn, ME, "ELENA").unwrap().len(), 1);
+        assert!(search_people(&conn, ME, "nobodyatall").unwrap().is_empty());
+        // Empty lists everyone but the asker: that's what the screen shows before you
+        // type, and a row offering to follow yourself would do nothing.
+        assert_eq!(search_people(&conn, ME, "").unwrap().len(), GRAPH.len());
+        assert!(search_people(&conn, ME, "testviewer").unwrap().is_empty());
     }
 
     /// The wildcards are escaped, so a search for them finds nothing rather than
@@ -1830,7 +2770,7 @@ mod tests {
         let conn = graph();
         for pattern in ["%", "_", "\\", "%%", "a%"] {
             assert!(
-                search_people(&conn, pattern).unwrap().is_empty(),
+                search_people(&conn, ME, pattern).unwrap().is_empty(),
                 "'{pattern}' matched somebody"
             );
         }
@@ -1841,7 +2781,7 @@ mod tests {
     #[test]
     fn search_puts_followed_people_first() {
         let conn = graph();
-        let results = search_people(&conn, "").unwrap();
+        let results = search_people(&conn, ME, "").unwrap();
         let boundary = results.iter().position(|u| !u.following).unwrap_or(results.len());
         assert!(results[..boundary].iter().all(|u| u.following));
         assert!(results[boundary..].iter().all(|u| !u.following));
@@ -1854,9 +2794,9 @@ mod tests {
     fn following_and_followers_are_different_lists() {
         let conn = graph();
         let followed: Vec<String> =
-            followed_users(&conn).unwrap().into_iter().map(|u| u.handle).collect();
+            followed_users(&conn, ME).unwrap().into_iter().map(|u| u.handle).collect();
         let followers: Vec<String> =
-            followers(&conn).unwrap().into_iter().map(|u| u.handle).collect();
+            followers(&conn, ME).unwrap().into_iter().map(|u| u.handle).collect();
 
         // Every combination the badges have to render is present.
         assert!(followed.contains(&"@elenarostova".into()) && followers.contains(&"@elenarostova".into()));
@@ -1869,21 +2809,24 @@ mod tests {
     fn following_is_idempotent_when_told_the_target() {
         let conn = graph();
         let id = "user-priyanaidu";
-        let before = follow_count(&conn).unwrap();
+        let before = follow_count(&conn, ME).unwrap();
 
-        assert_eq!(set_follow(&conn, id, Some(true)).unwrap(), Some(true));
-        assert_eq!(follow_count(&conn).unwrap(), before + 1);
+        assert_eq!(set_follow(&conn, ME, id, Some(true)).unwrap(), Some(true));
+        assert_eq!(follow_count(&conn, ME).unwrap(), before + 1);
         // Twice is still followed, and still one row.
-        assert_eq!(set_follow(&conn, id, Some(true)).unwrap(), Some(true));
-        assert_eq!(follow_count(&conn).unwrap(), before + 1);
+        assert_eq!(set_follow(&conn, ME, id, Some(true)).unwrap(), Some(true));
+        assert_eq!(follow_count(&conn, ME).unwrap(), before + 1);
 
-        assert_eq!(set_follow(&conn, id, Some(false)).unwrap(), Some(false));
-        assert_eq!(set_follow(&conn, id, Some(false)).unwrap(), Some(false));
-        assert_eq!(follow_count(&conn).unwrap(), before);
+        assert_eq!(set_follow(&conn, ME, id, Some(false)).unwrap(), Some(false));
+        assert_eq!(set_follow(&conn, ME, id, Some(false)).unwrap(), Some(false));
+        assert_eq!(follow_count(&conn, ME).unwrap(), before);
 
         // No body toggles.
-        assert_eq!(set_follow(&conn, id, None).unwrap(), Some(true));
-        assert_eq!(set_follow(&conn, id, None).unwrap(), Some(false));
+        assert_eq!(set_follow(&conn, ME, id, None).unwrap(), Some(true));
+        assert_eq!(set_follow(&conn, ME, id, None).unwrap(), Some(false));
+
+        // And nobody follows themselves: that edge would put you in your own feed.
+        assert_eq!(set_follow(&conn, ME, ME, Some(true)).unwrap(), None);
     }
 
     /// Unfollowing must not touch `follows_visitor` — one is the visitor's action,
@@ -1892,10 +2835,10 @@ mod tests {
     fn unfollowing_leaves_their_side_of_the_graph_alone() {
         let conn = graph();
         let handle = "elenarostova";
-        assert!(person_by_handle(&conn, handle).unwrap().unwrap().follows_you);
+        assert!(person_by_handle(&conn, ME, handle).unwrap().unwrap().follows_you);
 
-        set_follow(&conn, "user-elenarostova", Some(false)).unwrap();
-        let after = person_by_handle(&conn, handle).unwrap().unwrap();
+        set_follow(&conn, ME, "user-elenarostova", Some(false)).unwrap();
+        let after = person_by_handle(&conn, ME, handle).unwrap().unwrap();
         assert!(!after.following);
         assert!(after.follows_you, "they stopped following the visitor too");
     }
@@ -1905,16 +2848,16 @@ mod tests {
     #[test]
     fn the_export_cast_is_not_followable_or_findable() {
         let conn = graph();
-        let before = follow_count(&conn).unwrap();
-        assert_eq!(set_follow(&conn, "elena", Some(true)).unwrap(), None);
-        assert_eq!(set_follow(&conn, "no-such-person", Some(true)).unwrap(), None);
-        assert_eq!(follow_count(&conn).unwrap(), before, "a dangling follow row was written");
+        let before = follow_count(&conn, ME).unwrap();
+        assert_eq!(set_follow(&conn, ME, "elena", Some(true)).unwrap(), None);
+        assert_eq!(set_follow(&conn, ME, "no-such-person", Some(true)).unwrap(), None);
+        assert_eq!(follow_count(&conn, ME).unwrap(), before, "a dangling follow row was written");
 
-        assert!(person_by_id(&conn, "elena").unwrap().is_none());
-        assert!(person_by_handle(&conn, "elena").unwrap().is_none());
+        assert!(person_by_id(&conn, ME, "elena").unwrap().is_none());
+        assert!(person_by_handle(&conn, ME, "elena").unwrap().is_none());
         // And "Marcus" finds the user, not the export's story-rail Marcus.
         let found: Vec<String> =
-            search_people(&conn, "Marcus").unwrap().into_iter().map(|u| u.id).collect();
+            search_people(&conn, ME, "Marcus").unwrap().into_iter().map(|u| u.id).collect();
         assert_eq!(found, ["user-marcusdrey"]);
     }
 
@@ -1922,7 +2865,7 @@ mod tests {
     #[test]
     fn a_films_reviews_put_friends_first_then_the_highest_rated() {
         let conn = graph();
-        let reviews = reviews_for_movie(&conn, "dune-part-two").unwrap();
+        let reviews = reviews_for_movie(&conn, ME, "dune-part-two").unwrap();
         let handles: Vec<&str> = reviews.iter().map(|r| r.handle.as_str()).collect();
 
         // Elena (9, followed) and Marcus (7, followed) outrank Priya (8, stranger)
@@ -1933,9 +2876,9 @@ mod tests {
         // Unfollow the top one and she drops behind her own friend, then below the
         // stranger who rated it higher than she did — this is the fallback the
         // film page relies on when you have no friends who reviewed it.
-        set_follow(&conn, "user-elenarostova", Some(false)).unwrap();
+        set_follow(&conn, ME, "user-elenarostova", Some(false)).unwrap();
         let after: Vec<String> =
-            reviews_for_movie(&conn, "dune-part-two").unwrap().into_iter().map(|r| r.handle).collect();
+            reviews_for_movie(&conn, ME, "dune-part-two").unwrap().into_iter().map(|r| r.handle).collect();
         assert_eq!(after, ["@marcusdrey", "@elenarostova", "@priyanaidu"]);
     }
 
@@ -1947,20 +2890,20 @@ mod tests {
         conn.execute("DELETE FROM follows", []).unwrap();
 
         let stars: Vec<u8> =
-            reviews_for_movie(&conn, "dune-part-two").unwrap().iter().map(|r| r.half_stars).collect();
+            reviews_for_movie(&conn, ME, "dune-part-two").unwrap().iter().map(|r| r.half_stars).collect();
         assert_eq!(stars, [9, 8, 7]);
     }
 
     #[test]
     fn a_films_reviews_are_empty_for_a_film_nobody_reviewed() {
         let conn = graph();
-        assert!(reviews_for_movie(&conn, "no-such-film").unwrap().is_empty());
+        assert!(reviews_for_movie(&conn, ME, "no-such-film").unwrap().is_empty());
     }
 
     #[test]
     fn a_persons_reviews_come_back_newest_first() {
         let conn = graph();
-        let reviews = reviews_by_person(&conn, "user-elenarostova").unwrap();
+        let reviews = reviews_by_person(&conn, ME, "user-elenarostova").unwrap();
         assert_eq!(reviews.len(), 5);
 
         let dates: Vec<&str> = reviews.iter().map(|r| r.created_at.as_str()).collect();
@@ -1977,9 +2920,9 @@ mod tests {
     fn review_counts_match_the_rows() {
         let conn = graph();
         for user in demo_graph() {
-            let stored = person_by_handle(&conn, &user.handle).unwrap().unwrap();
+            let stored = person_by_handle(&conn, ME, &user.handle).unwrap().unwrap();
             assert_eq!(stored.review_count as usize, user.reviews.len());
-            assert_eq!(reviews_by_person(&conn, &stored.id).unwrap().len(), user.reviews.len());
+            assert_eq!(reviews_by_person(&conn, ME, &stored.id).unwrap().len(), user.reviews.len());
         }
     }
 
@@ -2013,12 +2956,167 @@ mod tests {
             conn.query_row::<i64, _, _>("SELECT COUNT(*) FROM people", [], |r| r.get(0)).unwrap(),
             1
         );
-        assert!(search_people(&conn, "").unwrap().is_empty());
-        assert!(followed_with_newest_review(&conn, 10).unwrap().is_empty());
+        assert!(search_people(&conn, ME, "").unwrap().is_empty());
+        assert!(followed_with_newest_review(&conn, ME, 10).unwrap().is_empty());
 
         // And twice is still fine, on the DB and on the unique index.
         prepare(&conn).unwrap();
         assert_eq!(seed_graph(&conn, &demo_graph()).unwrap(), GRAPH.len());
+    }
+
+    /// A database written before sign-in existed, with one visitor's rows in it.
+    ///
+    /// The tables are declared the way the pre-accounts schema declared them —
+    /// `movie_id` alone as the primary key, no `user_id` — which is the shape the
+    /// migration has to recognise.
+    fn pre_accounts_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE people (
+                 id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                 avatar_src TEXT NOT NULL, avatar_alt TEXT NOT NULL,
+                 unseen INTEGER NOT NULL DEFAULT 0,
+                 in_stories INTEGER NOT NULL DEFAULT 0,
+                 position INTEGER NOT NULL DEFAULT 0,
+                 handle TEXT UNIQUE, bio TEXT,
+                 is_user INTEGER NOT NULL DEFAULT 0,
+                 follows_visitor INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE follows (
+                 person_id TEXT PRIMARY KEY REFERENCES people(id),
+                 followed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+             CREATE TABLE watchlist (
+                 movie_id TEXT PRIMARY KEY,
+                 added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+             CREATE TABLE favorites (
+                 movie_id TEXT PRIMARY KEY,
+                 added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+             CREATE TABLE ratings (
+                 movie_id TEXT PRIMARY KEY, half_stars INTEGER NOT NULL, rated_at TEXT);
+             CREATE TABLE visitor_reviews (
+                 movie_id TEXT PRIMARY KEY, body TEXT NOT NULL,
+                 written_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+             CREATE TABLE liked_reviews (review_id TEXT PRIMARY KEY);
+             CREATE TABLE liked_comments (comment_id TEXT PRIMARY KEY);
+             CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE comments (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT, review_id TEXT NOT NULL,
+                 body TEXT NOT NULL,
+                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+             CREATE TABLE replies (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT, review_id TEXT NOT NULL,
+                 comment_id TEXT NOT NULL, body TEXT NOT NULL,
+                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+
+             INSERT INTO people (id, name, avatar_src, avatar_alt, handle, is_user,
+                                 follows_visitor)
+                 VALUES ('user-elenarostova', 'Elena Rostova', 'img/e.jpg', 'Elena.',
+                         '@elenarostova', 1, 1);
+             INSERT INTO follows (person_id) VALUES ('user-elenarostova');
+             INSERT INTO watchlist (movie_id) VALUES ('le-souffle'), ('red-shift');
+             INSERT INTO favorites (movie_id) VALUES ('neon-reverie');
+             INSERT INTO ratings (movie_id, half_stars, rated_at)
+                 VALUES ('the-drop', 7, '2026-01-01 10:00:00');
+             INSERT INTO visitor_reviews (movie_id, body) VALUES ('endless', 'Held up.');
+             INSERT INTO liked_reviews (review_id) VALUES ('user-elenarostova-le-souffle');
+             INSERT INTO liked_comments (comment_id) VALUES ('comment-1');
+             INSERT INTO settings (key, value) VALUES ('visitor_bio', 'Watches too much.');
+             INSERT INTO comments (review_id, body)
+                 VALUES ('user-elenarostova-le-souffle', 'Agreed.');
+             INSERT INTO replies (review_id, comment_id, body)
+                 VALUES ('user-elenarostova-le-souffle', 'comment-1', 'Still agreed.');",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// The migration that matters most: the one visitor's rows get an owner rather
+    /// than being dropped for a tidier schema.
+    #[test]
+    fn the_pre_account_rows_move_to_a_legacy_account() {
+        let conn = pre_accounts_db();
+        for table in ["watchlist", "favorites", "ratings", "visitor_reviews", "follows"] {
+            assert!(!has_column(&conn, table, "user_id").unwrap(), "{table}");
+        }
+
+        prepare(&conn).unwrap();
+
+        // The account exists, wears the export's identity, and cannot be signed in as.
+        let legacy = account(&conn, LEGACY_USER_ID).unwrap().expect("a legacy account");
+        assert_eq!(legacy.name, crate::hydrate::VISITOR_NAME);
+        assert_eq!(legacy.handle, crate::hydrate::VISITOR_HANDLE);
+        let sub: Option<String> = conn
+            .query_row("SELECT google_sub FROM people WHERE id = ?1", [LEGACY_USER_ID], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(sub, None, "the legacy account can be signed in as");
+
+        // Every delta came across, and it is theirs.
+        let store = load_store(&conn, LEGACY_USER_ID).unwrap();
+        assert_eq!(
+            store.watchlist.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["le-souffle", "red-shift"]
+        );
+        assert!(store.favorites.contains("neon-reverie"));
+        assert_eq!(store.ratings.get("the-drop"), Some(&7));
+        assert_eq!(store.written_reviews.get("endless").map(String::as_str), Some("Held up."));
+        assert!(store.liked_reviews.contains("user-elenarostova-le-souffle"));
+        assert!(store.liked_comments.contains("comment-1"));
+        assert_eq!(store.posted_comments["user-elenarostova-le-souffle"].len(), 1);
+        assert_eq!(store.posted_replies.len(), 1);
+        assert_eq!(follow_count(&conn, LEGACY_USER_ID).unwrap(), 1);
+
+        // Their bio moved onto their own row, where a bio lives now.
+        assert_eq!(legacy.bio.as_deref(), Some("Watches too much."));
+        // And nobody else inherited any of it.
+        assert!(load_store(&conn, ANONYMOUS).unwrap().watchlist.is_empty());
+
+        // Whoever they followed becomes the starter set, so the next account to sign
+        // in still opens on a feed.
+        let signed_in = sign_in(&conn, "1001", "testviewer");
+        assert_eq!(follow_count(&conn, &signed_in.id).unwrap(), 1);
+
+        // The graph is not re-seeded over the top of theirs, and running the migration
+        // twice changes nothing.
+        assert!(!needs_graph_seed(&conn).unwrap());
+        prepare(&conn).unwrap();
+        assert_eq!(load_store(&conn, LEGACY_USER_ID).unwrap().watchlist.len(), 2);
+    }
+
+    /// The comment ids the frontend holds have to survive the migration: those two
+    /// tables gain a column rather than being rebuilt.
+    #[test]
+    fn migrating_keeps_the_ids_a_client_already_has() {
+        let conn = pre_accounts_db();
+        prepare(&conn).unwrap();
+
+        let store = load_store(&conn, LEGACY_USER_ID).unwrap();
+        assert_eq!(store.posted_comments["user-elenarostova-le-souffle"][0].id, "comment-1");
+        // And the next one continues the sequence rather than colliding with it.
+        assert_eq!(
+            add_comment(&conn, LEGACY_USER_ID, "user-elenarostova-le-souffle", "More.").unwrap(),
+            "comment-2"
+        );
+    }
+
+    /// A pre-accounts database with the old schema but nothing in it gains no
+    /// account: the migration adopts rows, it does not invent people.
+    #[test]
+    fn an_empty_older_database_gains_no_legacy_account() {
+        let conn = pre_accounts_db();
+        conn.execute_batch(
+            "DELETE FROM watchlist; DELETE FROM favorites; DELETE FROM ratings;
+             DELETE FROM visitor_reviews; DELETE FROM liked_reviews;
+             DELETE FROM liked_comments; DELETE FROM settings;
+             DELETE FROM replies; DELETE FROM comments; DELETE FROM follows;",
+        )
+        .unwrap();
+
+        prepare(&conn).unwrap();
+        assert!(account(&conn, LEGACY_USER_ID).unwrap().is_none());
+        // The schema is still brought forward, so writes work.
+        assert!(has_column(&conn, "watchlist", "user_id").unwrap());
+        assert!(set_watchlist(&conn, ME, "le-souffle", Some(true)).unwrap());
     }
 
     /// Two people can't share a nickname — it's how a person's page is addressed.
@@ -2103,7 +3201,7 @@ mod tests {
     fn a_seeded_person_has_both_strips() {
         let conn = graph();
         let seeded = &demo_graph()[0];
-        let stored = person_by_handle(&conn, &seeded.handle).unwrap().unwrap();
+        let stored = person_by_handle(&conn, ME, &seeded.handle).unwrap().unwrap();
 
         assert_eq!(favorites_by_person(&conn, &stored.id).unwrap(), seeded.favorites);
         assert_eq!(watchlist_by_person(&conn, &stored.id).unwrap(), seeded.watchlist);
@@ -2111,7 +3209,7 @@ mod tests {
 
         // Nobody's two strips name the same film, and everyone has something.
         for user in demo_graph() {
-            let id = person_by_handle(&conn, &user.handle).unwrap().unwrap().id;
+            let id = person_by_handle(&conn, ME, &user.handle).unwrap().unwrap().id;
             let favorites = favorites_by_person(&conn, &id).unwrap();
             let watchlist = watchlist_by_person(&conn, &id).unwrap();
             assert!(!watchlist.is_empty(), "{} has nothing to watch", user.handle);
@@ -2124,7 +3222,7 @@ mod tests {
     #[test]
     fn re_seeding_does_not_duplicate_a_strip() {
         let conn = graph();
-        let id = person_by_handle(&conn, &demo_graph()[0].handle).unwrap().unwrap().id;
+        let id = person_by_handle(&conn, ME, &demo_graph()[0].handle).unwrap().unwrap().id;
         let before = favorites_by_person(&conn, &id).unwrap();
 
         seed_graph(&conn, &demo_graph()).unwrap();

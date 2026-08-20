@@ -1,8 +1,12 @@
-//! Folds the visitor's state (`state`) into the static content (`data`).
+//! Folds one user's state (`state`) into the content (`data` or TMDB).
 //!
 //! Keeping this separate means `data` stays a pure transcription of the export
 //! and never has to know a store exists. Every handler builds its payload from
 //! `data`, passes it through here, and serializes the result.
+//!
+//! Nothing here knows about accounts. It takes a `&Store` and stamps it onto a
+//! payload; whose store it is was decided before it was loaded. That is why an
+//! anonymous request works without a branch anywhere below: it passes an empty one.
 
 use crate::models::*;
 use crate::state::Store;
@@ -12,11 +16,13 @@ use crate::state::Store;
 /// which is where `VISITOR_NAME` goes.
 const BYLINE: &str = "You";
 
-/// The one visitor, transcribed from the export rather than stored.
+/// The export's own visitor, now the identity of one account.
 ///
-/// There is still no per-user identity here (see `state`): every client is this
-/// person. A `people` row for them would imply an account system that doesn't
-/// exist, so these live in code beside the byline they belong with.
+/// These used to *be* the identity, because there was one visitor and no accounts.
+/// A signed-in user has their own `people` row, so these are down to two jobs: they
+/// dress the legacy account that `db::migrate` hands the pre-accounts rows to (see
+/// `db::LEGACY_USER_ID`), and `visitor_avatar` is the fallback face for a comment
+/// whose store carries none.
 ///
 /// The name and the avatar are the export's own — `review-mobile.html` drew Alex
 /// Mercer with this photo, and `data::architecture_review` still credits them —
@@ -125,24 +131,31 @@ pub fn search(mut response: SearchResponse, store: &Store) -> SearchResponse {
     response
 }
 
-/// Applies the visitor's likes and appends anything they posted.
+/// Applies the reader's likes and appends anything they posted.
 ///
-/// A review arrives with an empty thread and no like count — nobody but the visitor
-/// can like or comment on anything yet — so this pass is where the whole
-/// conversation comes from. Counts are bumped by one when liked so the number beside
-/// the button matches what was just clicked.
+/// A review arrives with an empty thread and no like count, so this pass is where the
+/// whole conversation comes from. Counts are bumped by one when liked so the number
+/// beside the button matches what was just clicked.
+///
+/// The thread is the reader's **own** comments, not everybody's. Comments are per-user
+/// deltas — the same as a rating — so a signed-in user sees theirs and an anonymous
+/// reader sees none. A shared thread would need an author on every row, which is a
+/// different feature and a different shape.
 pub fn review(mut review: Review, store: &Store) -> Review {
     review.liked = store.liked_reviews.contains(&review.id);
     review.like_count = like_count(review.like_count, review.liked);
+    // Their own face, or the export's for a store that carries none — which is only
+    // ever an empty store, and an empty store appends no comments to put it on.
+    let byline_avatar = store.avatar.clone().unwrap_or_else(visitor_avatar);
 
-    // Append the visitor's own comments *before* the pass below, so a reply to
-    // one of them is rendered too — the reply loop has to see every comment,
-    // not just the transcribed ones.
+    // Append their own comments *before* the pass below, so a reply to one of them
+    // is rendered too — the reply loop has to see every comment, not just the
+    // transcribed ones.
     if let Some(posted) = store.posted_comments.get(&review.id) {
         review.comments.extend(posted.iter().map(|comment| Comment {
             id: comment.id.clone(),
             author_name: BYLINE.into(),
-            author_avatar: visitor_avatar(),
+            author_avatar: byline_avatar.clone(),
             timestamp: JUST_NOW.into(),
             body: comment.body.clone(),
             // Starts with no count at all rather than a visible zero, matching
@@ -162,7 +175,7 @@ pub fn review(mut review: Review, store: &Store) -> Review {
             comment.replies.extend(replies.iter().map(|posted| Reply {
                 id: posted.id.clone(),
                 author_name: BYLINE.into(),
-                author_avatar: visitor_avatar(),
+                author_avatar: byline_avatar.clone(),
                 body: posted.body.clone(),
             }));
         }

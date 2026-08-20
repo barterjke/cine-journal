@@ -1,0 +1,13 @@
+# What `docker build frontend` can see.
+#
+# A deny-list, unlike the repo root's: everything here is a build input except the
+# three things below. Dropping node_modules is the one that matters — it is ~180
+# packages the build reinstalls from the lockfile anyway.
+
+node_modules
+
+# Built by the image itself. Copying a local one in risks shipping a stale bundle.
+dist
+
+# tsc -b's incremental cache. A stale one can make `tsc -b` skip the typecheck.
+tsconfig.tsbuildinfo

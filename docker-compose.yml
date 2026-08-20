@@ -4,8 +4,9 @@
 #     docker compose pull
 #     docker compose up -d
 #
-# The frontend is a static bundle on Vercel. It rewrites /api/* and /img/* to this
-# host — see frontend/vercel.json.
+# The whole app, not just the server half: `web` serves the built Vite bundle and
+# Caddy routes /api and /img to `api` and everything else to `web`. One origin, so
+# there is no CORS and nothing to rewrite. See Caddyfile.
 #
 # Two hops for config: compose interpolates ${...} from the shell or from the .env
 # file next to this one, then `environment:` puts it in the container. dotenvy in
@@ -46,6 +47,8 @@ services:
       # certificate. A short 502 is the better trade.
       api:
         condition: service_started
+      web:
+        condition: service_started
 
   api:
     # Pulled from GHCR so the VM doesn't compile Rust on two shared ARM cores.
@@ -71,6 +74,16 @@ services:
       # Empty is supported: the app serves the demo dataset with a banner.
       TMDB_TOKEN: ${TMDB_TOKEN:-}
       RUST_LOG: ${RUST_LOG:-cine_journal_api=info,tower_http=info}
+      # Google sign-in. All three empty is supported: the server boots, logs that
+      # sign-in is off, serves reads publicly and 401s every write.
+      #
+      # PUBLIC_URL is the site's own origin. The backend derives the OAuth redirect
+      # URI from it, and that value must match the one in the Google Cloud console
+      # exactly — so this is https://<API_DOMAIN>, not a bare host and no trailing
+      # slash. Wrong here means `redirect_uri_mismatch` at sign-in, nothing at boot.
+      PUBLIC_URL: ${PUBLIC_URL:-https://${API_DOMAIN}}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     volumes:
       # The visitor's data plus the seeded social graph.
       #
@@ -93,6 +106,27 @@ services:
       # Generous on purpose. main.rs runs seed_graph, one TMDB call per film,
       # before it binds. Failures inside start_period don't count against retries.
       start_period: 300s
+
+  # The built Vite bundle, served by nginx. Static files only — it holds no state,
+  # reads no environment, and never talks to the API.
+  web:
+    # Same deal as api: pulled from GHCR, `build:` is for local reproduction, so a
+    # deploy must `docker compose pull` first.
+    image: ghcr.io/barterjke/cine-journal-web:${WEB_TAG:-latest}
+    build:
+      # frontend/, not the repo root: everything the bundle needs is in there.
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # No ports. Caddy reaches it as web:80 over the compose network.
+    healthcheck:
+      # /healthz is a `return 200` in frontend/nginx.conf. curl is in nginx:alpine.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/healthz || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      # Seconds, not minutes: nginx binds immediately. Nothing to seed.
+      start_period: 10s
 
   redis:
     image: redis:7-alpine

@@ -97,6 +97,15 @@ impl Cache {
         }
     }
 
+    /// A cache that is never there, for tests.
+    ///
+    /// Not `from_env`: that reads the environment, and a `REDIS_URL` exported in
+    /// somebody's shell would make the test suite talk to a real server.
+    #[cfg(test)]
+    pub fn disabled() -> Self {
+        Self { connection: None }
+    }
+
     /// Read a cached value, or `None` for every kind of failure.
     ///
     /// Deserialization failure is a miss rather than an error, because the shape of a
@@ -176,19 +185,57 @@ impl Cache {
     }
 }
 
-/// The key one feed page lives under.
+/// What the key calls an anonymous reader.
+///
+/// Their feed is built from public content only, so it is cacheable and shareable —
+/// but it is a *different* feed from any signed-in one, and it needs a name of its
+/// own to say so.
+const ANONYMOUS: &str = "anon";
+
+/// The key one feed page lives under, **for one user**.
 ///
 /// Namespaced and versioned. The prefix keeps this out of the way of anything else
 /// sharing the server (a local Redis is usually shared), and the version is bumped by
 /// hand when the payload shape changes — belt to `get`'s braces, since it retires old
-/// entries immediately rather than letting them expire unread.
+/// entries immediately rather than letting them expire unread. It went to v2 when the
+/// user id joined the key, so no v1 entry can be read as one of these.
 ///
-/// There is no per-user component because there is no per-user identity (see `state`):
-/// one visitor, one feed. If accounts are ever added, the user id belongs here, and
-/// forgetting to put it here would serve one person's feed to another.
-pub fn feed_key(cursor: Option<&str>) -> String {
+/// **The user id is the load-bearing part.** A feed is built from whom you follow and
+/// what you have logged, so two accounts asking for the same cursor want two
+/// different pages. Leaving the id out would make the cache serve whichever page was
+/// built last to whoever asks next — one person's feed handed to another, and a hit
+/// rather than an error, so nothing would look wrong.
+pub fn feed_key(user: Option<&str>, cursor: Option<&str>) -> String {
+    let user = user.unwrap_or(ANONYMOUS);
     match cursor {
-        None => "cinejournal:v1:feed:head".to_string(),
-        Some(cursor) => format!("cinejournal:v1:feed:{cursor}"),
+        None => format!("cinejournal:v2:feed:{user}:head"),
+        Some(cursor) => format!("cinejournal:v2:feed:{user}:{cursor}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The cross-user leak this key exists to prevent. Two accounts on the same
+    /// cursor must not collide, and neither may collide with an anonymous reader.
+    #[test]
+    fn every_reader_has_their_own_feed_key() {
+        let anon = feed_key(None, None);
+        let sam = feed_key(Some("account-1"), None);
+        let ada = feed_key(Some("account-2"), None);
+
+        assert_ne!(sam, ada, "two accounts share a cached feed");
+        assert_ne!(sam, anon, "a signed-in feed is cached where an anonymous one is read");
+        assert!(sam.contains("account-1"));
+        assert!(anon.contains(ANONYMOUS));
+
+        // And the same holds for a deeper page: the cursor alone is not the key.
+        assert_ne!(
+            feed_key(Some("account-1"), Some("8.4.2")),
+            feed_key(Some("account-2"), Some("8.4.2"))
+        );
+        // The head and a cursored page are still distinct for one account.
+        assert_ne!(feed_key(Some("account-1"), Some("8.4.2")), sam);
     }
 }

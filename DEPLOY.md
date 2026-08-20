@@ -1,29 +1,39 @@
 # Deploying CinéJournal
 
-Frontend goes to Vercel. API, cache and database go to one Oracle Cloud VM. Both fit
-in free tiers.
+Everything runs on one Oracle Cloud VM, in the free tier. Four containers, one open
+port.
 
 ```
-browser → Vercel (static Vite build)
-            ├── /api/* ──┐
-            └── /img/* ──┤
-                         ▼
-          Oracle Cloud VM
-            caddy :443  (TLS, only open port)
-              └── api
-                   ├── redis   (feed cache, no disk)
-                   ├── /data   (SQLite, on a volume)
-                   └── TMDB    (outbound)
+browser
+   │  https://your-host/
+   ▼
+Oracle Cloud VM
+  caddy :443  (TLS, the only open port)
+    ├── /api/*  ─┐
+    ├── /img/*  ─┴─→ api
+    │                 ├── redis   (feed cache, no disk)
+    │                 ├── /data   (SQLite, on a volume)
+    │                 └── TMDB    (outbound)
+    └── everything else → web  (nginx + the built Vite bundle)
 ```
 
-`/img` must be rewritten as well as `/api`. TMDB posters are absolute CDN URLs, but
-friend avatars are files served by the API. Miss it and posters work while avatars
-404.
+One origin, so there is no CORS and nothing to rewrite. `api.ts` asks for `/api/...`
+and the browser is already on the right host.
+
+Two details that are easy to get wrong, both handled in `Caddyfile` and
+`frontend/nginx.conf`:
+
+- **`/img` is routed like `/api`.** TMDB posters are absolute CDN URLs, but friend
+  avatars are files the API serves. Miss it and posters work while every avatar 404s.
+- **nginx needs an SPA fallback.** The routes live in `frontend/src/main.tsx`, not on
+  disk, so a reload on `/collections/favorites` has to be answered with
+  `index.html`.
 
 ## Warning: writes are not authenticated
 
-There are no accounts. One shared visitor. Anyone who finds the API URL can change
-your ratings, watchlist, bio and comments.
+There are no accounts. One shared visitor. Anyone who opens the site can change your
+ratings, watchlist, bio and comments — and the site and the API are one hostname now,
+so the URL is not obscure.
 
 This is how the app is built, not a bug. See `backend/src/state.rs`. If you don't
 want it, see [Add a password](#add-a-password) below before you set up DNS.
@@ -31,12 +41,13 @@ want it, see [Add a password](#add-a-password) below before you set up DNS.
 ## What you need
 
 - Oracle Cloud account (free tier needs a card for ID checks, doesn't charge it)
-- Vercel account, connected to the GitHub repo
-- A domain. The API needs its own hostname — Let's Encrypt won't issue a cert for a
-  bare IP.
+- One hostname. A free `duckdns.org` subdomain is enough; you don't need to buy a
+  domain. See Part 2.
 - TMDB read access token. Without it the app serves fake data and shows a banner.
 
-Examples below use `api.example.com` and `example.com`.
+Examples below write the hostname as `api.example.com`. Substitute whatever you pick
+in Part 2 — `yourname.duckdns.org`, say. It is the only hostname there is: the same
+name serves the site and the API.
 
 ---
 
@@ -53,18 +64,37 @@ Console → Compute → Instances → Create instance.
 
 | Setting | Value |
 |---|---|
-| Image | Ubuntu 24.04, **aarch64** build |
+| Image | Ubuntu 24.04 or Oracle Linux 9 — match the arch to the shape |
 | Shape | `VM.Standard.A1.Flex`, **2 OCPU / 12 GB** |
 | Boot volume | default (~47 GB) |
 | SSH key | paste your public key |
 
-2 OCPU / 12 GB is the whole Always Free ARM allowance. Use it in one instance.
+### Only two shapes are actually free
 
-Block storage is 200 GB total across the tenancy. You don't need an extra volume —
-the SQLite file is tiny and lives on a Docker volume on the boot disk.
+This is the part that costs money if you get it wrong. The console will happily offer
+you shapes that are not in the free tier.
 
-**"Out of host capacity"** is normal, not a misconfiguration. Try each availability
-domain, then retry later. Capacity frees up in minutes to days.
+| Shape | Arch | Free? |
+|---|---|---|
+| `VM.Standard.A1.Flex` | arm64 | Yes — 2 OCPU / 12 GB total, the whole ARM allowance |
+| `VM.Standard.E2.1.Micro` | x86_64 | Yes — up to 2, but only 1 GB RAM each |
+| `VM.Standard.E3.Flex`, `E4.Flex`, `E5.Flex` | x86_64 | **No. Billed.** |
+
+Anything in the third row runs against your Free Trial credits and then bills you or
+gets stopped. If you already created one, check **Billing & Cost Management → Cost
+Analysis**.
+
+Take the A1.Flex allowance in one instance rather than two — nothing here benefits from
+a second box.
+
+**"Out of host capacity"** on A1.Flex is normal, not a misconfiguration. Try each
+availability domain, then retry later; capacity frees up in minutes to days. It is the
+reason people end up on a paid shape by accident, so retry rather than substitute.
+
+Either arch works — the images are multi-arch — so this is only about cost and size.
+
+Block storage is 200 GB total across the tenancy. You don't need an extra volume — the
+SQLite file is tiny and lives on a Docker volume on the boot disk.
 
 ### Open ports 80 and 443 — in two places
 
@@ -73,12 +103,24 @@ There are two firewalls. Fixing one leaves the symptom unchanged.
 **1. VCN**, in the console: Networking → Virtual Cloud Networks → your VCN → public
 subnet → Security List → Add Ingress Rules.
 
-| Source | Protocol | Port |
-|---|---|---|
-| `0.0.0.0/0` | TCP | 80 |
-| `0.0.0.0/0` | TCP | 443 |
+| Source | Protocol | Source Port Range | Destination Port Range |
+|---|---|---|---|
+| `0.0.0.0/0` | TCP | **All** | 80 |
+| `0.0.0.0/0` | TCP | **All** | 443 |
 
-**2. The instance**, over SSH. Oracle's Ubuntu images reject everything except SSH:
+**Leave Source Port Range as `All`.** Putting 80 or 443 there is the easy mistake, because
+the form has two port fields and one of them is the number you're thinking about. Clients
+connect *from* a random high port *to* 80, so a rule with source port 80 matches nothing.
+It looks correct in the rule list, and the symptom is a connection that hangs — including
+Let's Encrypt reporting `Timeout during connect (likely firewall problem)`.
+
+Compare against the default SSH rule, which ships with source port `All`. That is what
+yours should look like.
+
+**2. The instance**, over SSH. Oracle's images reject everything except SSH. The command
+depends on the distro — running the wrong one silently does nothing.
+
+**Ubuntu** (iptables):
 
 ```bash
 sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
@@ -89,18 +131,34 @@ sudo netfilter-persistent save
 Check with `sudo iptables -L INPUT --line-numbers` that the rules are **above** the
 REJECT line. Below it they do nothing.
 
-Skipping this gives you a connection that hangs then times out. It looks like a DNS
-or cert problem. It isn't.
+**Oracle Linux** (firewalld):
+
+```bash
+sudo firewall-cmd --permanent --add-service=http --add-service=https
+sudo firewall-cmd --reload
+sudo firewall-cmd --list-all
+```
+
+Docker publishes ports by writing its own iptables rules, which usually bypass the host
+firewall — so on either distro the VCN rule above is the more common culprit. Do both and
+you have ruled out the whole stack.
+
+Skipping this gives you a connection that hangs then times out. It looks like a DNS or
+certificate problem. It isn't.
 
 ### Install Docker
 
 ```bash
-sudo apt-get update && sudo apt-get install -y ca-certificates curl
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker "$USER"
+sudo systemctl enable --now docker
 ```
 
-Log out and back in, then test with `docker run --rm hello-world`.
+The convenience script handles both Ubuntu and Oracle Linux, picks the right arch, and
+installs the Compose plugin — so `docker compose` (no hyphen) is what you use.
+
+Log out and back in for the group change, then test with `docker run --rm hello-world`.
+Without the re-login every command needs `sudo`.
 
 ### Add swap (optional)
 
@@ -116,47 +174,132 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 ---
 
-## 2. DNS
+## 2. A hostname
 
-| Record | Name | Value |
-|---|---|---|
-| `A` | `api` | the instance's public IP |
-| `CNAME` | `www` | `cname.vercel-dns.com` |
+One name, for the site and the API both. You need it because Let's Encrypt won't issue
+a certificate for a bare IP, and without a certificate Caddy can't serve HTTPS. Pick
+one:
 
-Add the `A` record **before** starting Caddy. Caddy gets its cert on startup by
-proving it controls the name over HTTP. If DNS doesn't resolve yet it fails, and
-Let's Encrypt rate-limits failures, so your next few tries fail too.
+### Option A — DuckDNS (free, no domain needed)
 
-Check with `dig +short api.example.com`.
+Go to [duckdns.org](https://www.duckdns.org), sign in with GitHub, pick a subdomain,
+and put your VM's public IP in the box. That's the whole setup.
 
-Use Vercel's dashboard for the apex domain record — it tells you the exact value.
+Then `API_DOMAIN=yourname.duckdns.org`.
+
+Works because `duckdns.org` is on the Public Suffix List, so Let's Encrypt treats your
+subdomain as its own domain with its own rate limit.
+
+### Option B — your own domain (~$10/yr)
+
+At your registrar, add one record:
+
+| Type | Name | Value | TTL |
+|---|---|---|---|
+| `A` | `films` | your VM's public IP | 300 |
+
+That gives you `films.yourdomain.com`, and that one record is all you need. If you'd
+rather the app sat at the apex, point an `A` record for `@` at the same IP and use
+that as `API_DOMAIN` instead.
+
+### Don't use nip.io or sslip.io
+
+They look ideal — `1.2.3.4.sslip.io` resolves to `1.2.3.4` with no signup. But neither
+is on the Public Suffix List, so Let's Encrypt counts the whole of `sslip.io` as one
+domain with a 50-certificates-per-week limit **shared with every other user in the
+world**. Issuance fails unpredictably.
+
+### Before you start Caddy
+
+The name must already resolve. Caddy asks Let's Encrypt for a certificate on startup,
+and Let's Encrypt proves ownership by connecting to whatever the name points at. If
+it doesn't resolve yet the attempt fails, and repeated failures hit a rate limit that
+keeps failing you for a while after you've fixed it.
+
+```bash
+dig +short yourname.duckdns.org     # must print your VM's IP
+```
+
+The hostname goes in exactly one place: `API_DOMAIN` in `.env` on the VM (Part 3).
+Nothing is baked into the frontend bundle.
 
 ---
 
-## 3. Deploy the API
+## 3. Deploy
+
+**Everything in this part runs on the VM, not on your laptop.** SSH in first:
+
+```bash
+ssh -i ~/.ssh/oci-cine-journal ubuntu@<VM_PUBLIC_IP>   # `opc@` on Oracle Linux
+```
+
+Then, on the VM:
 
 ```bash
 git clone https://github.com/barterjke/cine-journal.git
 cd cine-journal
-cp .env.deploy.example .env    # then fill it in
+cp .env.deploy.example .env
+nano .env                      # fill in the three values below
 docker compose pull            # see note
 docker compose up -d
 ```
 
+`.env` is gitignored, so it is never committed. Do it by hand for the first run — you
+want to watch the logs once — then hand it to CI as below.
+
 | Variable | Required | Purpose |
 |---|---|---|
-| `API_DOMAIN` | yes | `api.example.com`. Caddy gets its cert for this. |
-| `ACME_EMAIL` | yes | Let's Encrypt contact address. |
+| `API_DOMAIN` | yes | Your hostname from Part 2, e.g. `cinema-nerd.duckdns.org`. Caddy gets its cert for this. No `https://`, no trailing slash. |
+| `ACME_EMAIL` | yes | **A real address of yours.** Let's Encrypt rejects `example.com`, `test.com` and friends with `invalidContact`, and Caddy then falls back to a different certificate authority — so the failure shows up as "no HTTPS" rather than "bad email". |
 | `TMDB_TOKEN` | no | v4 read access token. Empty = fake data + banner. |
-| `API_TAG` | no | Image tag. Defaults to `latest`. Used for rollback. |
+| `API_TAG` | no | Tag of the API image. Defaults to `latest`. Used for rollback. |
+| `WEB_TAG` | no | Tag of the web image. Same idea, rolls back independently. |
+
+So a filled-in `.env` is three lines:
+
+```
+API_DOMAIN=cinema-nerd.duckdns.org
+ACME_EMAIL=your.real.address@gmail.com
+TMDB_TOKEN=eyJhbGciOi...
+```
+
+Do not leave `ACME_EMAIL` as an `@example.com` address. Let's Encrypt returns
+`invalidContact - contact email has forbidden domain`, Caddy silently tries another
+certificate authority instead, and the symptom you see is a site that never comes up —
+nothing that mentions email. `docker compose logs caddy` is where it says so.
+
+### Let CI own .env instead
+
+Recommended once the first deploy works. Put the same three values in GitHub and every
+deploy writes `.env` on the VM for you:
+
+```bash
+gh variable set API_DOMAIN --body cinema-nerd.duckdns.org
+gh secret set ACME_EMAIL --body your.real.address@gmail.com
+gh secret set TMDB_TOKEN                              # prompts
+```
+
+Why bother: Oracle stops idle Always Free instances, and ARM capacity churns, so you
+will probably rebuild this VM at some point. A hand-made `.env` dies with it. With the
+config in GitHub, a fresh VM needs only Docker, `git clone`, and a deploy.
+
+Two things to know:
+
+- **Hand edits get overwritten.** Once these are set, each deploy rewrites `.env`.
+  Change the values in GitHub, not on the box.
+- **Keep your TMDB token somewhere else too.** GitHub secrets are write-only — you
+  cannot read one back, only replace it.
+
+If `API_DOMAIN` or `ACME_EMAIL` is unset the deploy skips the write and leaves your
+hand-made file alone, so the manual route keeps working.
 
 `API_DOMAIN` and `ACME_EMAIL` have no defaults — compose refuses to start without
 them. An empty `ACME_EMAIL` used to crash-loop Caddy with `wrong argument count`, so
 it's now a hard requirement rather than an optional field.
 
-**Run `docker compose pull` before `up -d`.** The compose file has both `image:` and
-`build:`, so if the tag isn't already local, `up` builds it instead — a silent
-15-minute Rust compile on two shared ARM cores.
+**Run `docker compose pull` before `up -d`.** `api` and `web` both have `image:` and
+`build:`, so if a tag isn't already local, `up` builds it instead — for `api` that's a
+silent 15-minute Rust compile on two shared ARM cores.
 
 **Name the file `.env`.** Docker Compose only auto-loads `.env`. Any other name needs
 `--env-file` on every command, and forgetting it silently falls back to `:latest`
@@ -171,15 +314,22 @@ silently stops working.
 Run these in order. Each one narrows down the next failure.
 
 ```bash
-docker compose ps                              # all 3 up, api healthy
-curl -s localhost:3001/api/health              # the binary
-curl -s https://api.example.com/api/health     # Caddy + DNS + TLS
-docker compose logs api | grep -E 'tmdb|redis' # tmdb: enabled / redis: enabled
+docker compose ps                                    # all 4 up, api and web healthy
+curl -s https://api.example.com/api/health           # Caddy + DNS + TLS + api
+curl -s https://api.example.com/ | grep 'id="root"'  # the bundle
+curl -s https://api.example.com/collections/favorites | grep 'id="root"'   # SPA fallback
+docker compose logs api | grep -E 'tmdb|redis'       # tmdb: enabled / redis: enabled
 ```
 
-The last one matters most. A bad token and a dead cache both leave you with a
-working API and a quieter log, so a 200 from `/api/health` doesn't mean it's
-configured.
+The third and fourth must both return HTML. If the third works and the fourth 404s,
+nginx is serving but `try_files` isn't — check `frontend/nginx.conf`.
+
+The last one matters most. A bad token and a dead cache both leave you with a working
+API and a quieter log, so a 200 from `/api/health` doesn't mean it's configured.
+
+Neither `api` nor `web` publishes a host port, so `curl localhost:3001` no longer
+works. Go through Caddy, or `docker compose exec api curl -s localhost:3001/api/health`
+to skip it.
 
 ### First boot is slow
 
@@ -190,52 +340,65 @@ empty friend list, not a boot failure.
 
 ---
 
-## 4. Deploy the frontend
+## 4. How the frontend is served
 
-### Edit the API domain first
+There is no separate frontend deploy. Part 3 started it: the `web` service is nginx
+with the built Vite bundle baked in, and Caddy sends it everything that isn't `/api`
+or `/img`.
 
-**`frontend/vercel.json` hardcodes `https://api.example.com`. Change it by hand to
-your API domain before deploying.**
+### The three files
 
-Vercel reads `vercel.json` before the build runs and does not interpolate environment
-variables into it, so this can't be generated. Get it wrong and nothing errors: the
-site loads and every API call 404s from Vercel.
-
-This is the second place the domain appears. The first is `API_DOMAIN` in Part 3.
-
-### Project settings
-
-Import the repo in Vercel, then set:
-
-| Setting | Value |
+| File | Job |
 |---|---|
-| Framework preset | Vite |
-| Build command | `npm run build` |
-| Output directory | `dist` |
-| Root directory | depends — see below |
+| `frontend/Dockerfile` | `node:22-alpine` runs `npm ci && npm run build`, then `nginx:1-alpine` copies in `dist`. |
+| `frontend/nginx.conf` | SPA fallback and cache headers. |
+| `Caddyfile` | Path routing: `/api/*` and `/img/*` to `api:3001`, everything else to `web:80`. |
 
-**Root directory depends on how you deploy:**
+### SPA fallback
 
-| Deploy method | Root directory |
-|---|---|
-| GitHub Actions (what `ci-cd.yml` does) | leave **empty** |
-| Vercel's own Git integration | `frontend` |
+```nginx
+try_files $uri $uri/ /index.html;
+```
 
-The workflow runs the Vercel CLI with `working-directory: frontend`, so the CLI is
-already inside that folder and finds `vercel.json` there. Setting Root Directory to
-`frontend` as well makes it resolve twice and fail looking for `frontend/frontend`.
+This is the line that matters. The app's routes — `/collections/favorites`,
+`/people/elenarostova` — exist only in `frontend/src/main.tsx`. Nothing was built to
+those paths, so without the fallback the first load works and every refresh 404s.
 
-With Vercel's Git integration there's no CLI and no working directory, so Vercel needs
-to be told where the app is — otherwise it never reads `vercel.json` at all.
+### Cache headers
 
-### What vercel.json does
+- `/assets/*` — `max-age=31536000, immutable`. Vite hashes those filenames, so a
+  changed file gets a new name.
+- `index.html` — `no-cache`. It names the hashed bundles, so a cached copy points at
+  files the last deploy deleted, and the app loads to a blank page.
 
-Two things: SPA fallback, so refreshing on `/collections/favorites` serves
-`index.html` instead of 404; and rewrites for `/api/*` and `/img/*`.
+### Path routing
 
-The rewrites keep the browser same-origin, same as the Vite dev proxy. `api.ts` uses
-root-relative paths throughout, so the API's address is never in the bundle and
-there's no CORS preflight.
+`handle`, not `handle_path`. `handle_path` strips the matched prefix, so `/api/health`
+would arrive at the API as `/health` and 404 the whole API.
+
+Caddy sorts `handle` blocks by path specificity and puts the matcher-less one last, so
+`/api/*` and `/img/*` beat the catch-all regardless of the order you write them in.
+Check it with:
+
+```bash
+docker compose exec caddy caddy adapt --config /etc/caddy/Caddyfile
+```
+
+### No hostname in the bundle
+
+`api.ts` fetches `/api/...` and `/img/...` — root-relative, so the browser asks
+whatever host it is already on. Single-origin needs no code change, no CORS headers,
+and no build-time API URL. The Vite dev proxy in `frontend/vite.config.ts` does the
+same two prefixes locally.
+
+### Building it by hand
+
+```bash
+docker compose build web        # or: docker build -t cine-journal-web frontend
+```
+
+Context is `frontend/`, unlike the API, whose context is the repo root because it
+serves `/img` from `reference/`.
 
 ---
 
@@ -294,22 +457,26 @@ on any miss.
 
 ### Roll back
 
+Both images are tagged `sha-<short>` by the same commit, so a full rollback is one
+tag in two variables:
+
 ```bash
-docker compose down
-API_TAG=<previous-sha> docker compose up -d
+API_TAG=sha-abc1234 WEB_TAG=sha-abc1234 docker compose up -d
 ```
 
-The variable is `API_TAG`. Get it wrong and compose won't error — it just uses
-`latest`, so the rollback appears to do nothing.
+Either one alone works if only one half is broken. No `docker compose down` first —
+`up -d` recreates just the containers whose image changed.
 
-Roll the frontend back from Vercel's dashboard. The two halves roll back separately;
-see `docs/ci-cd.md`.
+The names are `API_TAG` and `WEB_TAG`. Get one wrong and compose won't error — it uses
+`latest`, so the rollback appears to do nothing. Take the tags from the deploy's run
+summary; see `docs/ci-cd.md`.
 
 ### Logs
 
 ```bash
 docker compose logs -f api
 docker compose logs -f caddy   # cert problems are here, not in api
+docker compose logs -f web     # nginx access log; a 404 here is a routing bug
 ```
 
 `RUST_LOG=cine_journal_api=debug` adds per-operation cache hits and misses. Useful
