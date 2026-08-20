@@ -99,12 +99,17 @@ async fn main() {
     let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| db::DEFAULT_PATH.to_string());
     let conn = db::open(&db_path).unwrap_or_else(|e| panic!("could not open {db_path}: {e}"));
     tracing::info!(path = %db_path, "database ready");
+    let db: content::Db = Arc::new(Mutex::new(conn));
 
     // Reads the token from the environment and verifies it upstream, so a bad one
     // becomes a banner rather than six broken screens. Never logs the token.
     let source = content::Source::from_env().await;
 
-    seed_graph(&conn, &source).await;
+    // Fills the social graph on first run, and rebuilds it when the content source has
+    // changed since it was filled — otherwise every seeded review points at a film the
+    // active source cannot fetch. Runs before the server binds rather than in a
+    // background task, so the graph is never half-visible mid-request. Never fatal.
+    content::ensure_graph(&source, &db).await;
 
     // Optional by design. With no `REDIS_URL`, or with a Redis that is down, every
     // cache operation is a miss and the feed is built from source on each request —
@@ -116,7 +121,7 @@ async fn main() {
     // Reads the credentials from the environment and never logs them.
     let google = auth::Google::from_env();
 
-    let state = state::AppState::new(source, Arc::new(Mutex::new(conn)), cache, google);
+    let state = state::AppState::new(source, db, cache, google);
     let app = routes::router(state)
         .nest_service("/img", ServeDir::new(img_dir))
         .layer(cors)
@@ -142,36 +147,4 @@ async fn main() {
     tracing::info!("listening on http://{addr}");
 
     axum::serve(listener, app).await.expect("server error");
-}
-
-/// Fill the social graph on first run: some users, some followers, some reviews,
-/// so the friend screens have something to show before anyone has used the app.
-///
-/// Never fatal. A harvest needs the network, and refusing to boot because TMDB was
-/// slow would trade a partly-populated friend list for no application at all — the
-/// screens already say when a list is empty. Runs before the server binds rather
-/// than in a background task, so the graph is never half-visible mid-request.
-async fn seed_graph(conn: &rusqlite::Connection, source: &content::Source) {
-    match db::needs_graph_seed(conn) {
-        // Already seeded, or the visitor has since followed people — either way the
-        // graph is theirs now and re-seeding would talk over it.
-        Ok(false) => return,
-        Ok(true) => {}
-        Err(error) => {
-            tracing::warn!(%error, "could not check the social graph; skipping the seed");
-            return;
-        }
-    }
-
-    let users = content::harvest_graph(source).await;
-    if users.is_empty() {
-        tracing::warn!("social graph left empty — no people to seed");
-        return;
-    }
-
-    let reviews: usize = users.iter().map(|u| u.reviews.len()).sum();
-    match db::seed_graph(conn, &users) {
-        Ok(count) => tracing::info!(people = count, reviews, "social graph seeded"),
-        Err(error) => tracing::warn!(%error, "could not seed the social graph"),
-    }
 }

@@ -103,6 +103,35 @@ impl Source {
             Self::Demo { .. } => None,
         }
     }
+
+    /// Which dataset this is, as the seeded graph records it.
+    ///
+    /// A short stable string rather than the enum, because it is written to
+    /// `settings.graph_source` and read back by a later boot — see `ensure_graph`.
+    pub fn tag(&self) -> &'static str {
+        match self {
+            Self::Tmdb(_) => "tmdb",
+            Self::Demo { .. } => "demo",
+        }
+    }
+
+    /// Whether this source could fetch a film id at all, network aside.
+    ///
+    /// Not "does the film exist" — "is this even one of our ids". In TMDB mode a request
+    /// is addressed by the numeric prefix, so an id without one (`le-souffle`) can never
+    /// resolve, whatever TMDB is doing. The demo dataset answers for any id at all, so
+    /// nothing is unaddressable there.
+    ///
+    /// This is the addressing rule itself and not a guess at it: `map::tmdb_id` is the
+    /// same function `movie_detail_by_id` uses to build the request. Where it is wrong it
+    /// errs safely — a demo slug that happens to start with digits reads as addressable,
+    /// so a row is kept rather than deleted.
+    pub fn addresses(&self, movie_id: &str) -> bool {
+        match self {
+            Self::Tmdb(_) => map::tmdb_id(movie_id).is_some(),
+            Self::Demo { .. } => true,
+        }
+    }
 }
 
 /// `GET /api/status` — whether what's on screen is real.
@@ -911,6 +940,195 @@ const HARVEST_USERS: usize = 24;
 /// How many the visitor already follows on first run, so the app opens with friends
 /// rather than an empty graph the user has to populate before anything is testable.
 const SEEDED_FOLLOWS: usize = 5;
+
+/// Bring the seeded graph, and everybody's own rows, into step with the active source.
+///
+/// The bug this exists to stop: the graph is seeded once, on first boot, from whichever
+/// source was configured then. `db::needs_graph_seed` is false ever after, so turning
+/// TMDB on later left a graph full of demo slugs — every seeded review linking to a
+/// film the active source cannot fetch, so every one of them 404s and every poster
+/// comes back `null`. The graph has to know which source made it.
+///
+/// The decision, in order:
+///
+/// - **Recorded source matches the active one.** Nothing to do, and nothing asked of
+///   the network. This is every ordinary restart, and it is what keeps the promise in
+///   `db::needs_graph_seed`: a re-seed would talk over follows that are the users' own
+///   by now.
+/// - **No graph at all.** Seed it, and record the source.
+/// - **Recorded source is a different one.** A declared switch, so re-seed. Not
+///   conditional on the ids happening to resolve: demo answers for *any* id, so a
+///   harvested graph would survive a switch to demo and render every real film as a
+///   slug-derived title.
+/// - **Nothing recorded.** A database from before this was written down. Its provenance
+///   is unknown, so every film it names is checked against the active source, and one
+///   that cannot be resolved condemns the graph. **Every** id, not a sample: a graph can
+///   be *mixed*, and a check that stopped at the first film to resolve would call a
+///   broken graph healthy.
+///
+/// Never fatal. A harvest needs the network, and refusing to boot because TMDB was slow
+/// would trade a partly-populated friend list for no application at all. The harvest is
+/// also run *before* anything is cleared, so a failed one leaves the old graph standing
+/// rather than replacing it with nothing.
+pub async fn ensure_graph(source: &Source, db: &Db) {
+    let active = source.tag();
+    let (recorded, empty) = {
+        let conn = lock(db);
+        (db::graph_source(&conn).unwrap_or_default(), db::needs_graph_seed(&conn).unwrap_or(false))
+    };
+
+    // `!empty` as well as the tag: a graph somebody has emptied by hand must still be
+    // refillable, which is what deleting the people has always been a way to ask for.
+    if !empty && recorded.as_deref() == Some(active) {
+        // Still worth a prune: a switch may have happened before this code existed, and
+        // the rows it leaves behind are per-account rather than part of the graph.
+        prune_unaddressable(source, db);
+        return;
+    }
+
+    if !empty {
+        match recorded.as_deref() {
+            Some(other) => tracing::info!(
+                from = other,
+                to = active,
+                "content source changed — rebuilding the social graph"
+            ),
+            None => {
+                // Unknown provenance. One upstream call per film the graph names, once
+                // per database, and only on the boot that adopts it.
+                let ids = {
+                    let conn = lock(db);
+                    db::seeded_movie_ids(&conn).unwrap_or_default()
+                };
+                let mut unresolved = Vec::new();
+                for id in &ids {
+                    if movie_detail_by_id(source, id).await.is_none() {
+                        unresolved.push(id.clone());
+                    }
+                }
+                if unresolved.is_empty() {
+                    tracing::info!(
+                        source = active,
+                        films = ids.len(),
+                        "social graph resolves against the active source — adopting it"
+                    );
+                    let conn = lock(db);
+                    if let Err(error) = db::set_graph_source(&conn, active) {
+                        tracing::warn!(%error, "could not record the graph's source");
+                    }
+                    drop(conn);
+                    prune_unaddressable(source, db);
+                    return;
+                }
+                tracing::warn!(
+                    source = active,
+                    unresolved = unresolved.len(),
+                    of = ids.len(),
+                    films = ?unresolved,
+                    "the social graph names films the active source cannot resolve — rebuilding it"
+                );
+            }
+        }
+    }
+
+    // Harvested before anything is thrown away, so a failed harvest costs nothing.
+    let users = harvest_graph(source).await;
+    if users.is_empty() {
+        tracing::warn!(
+            source = active,
+            "harvest returned nobody — leaving the social graph as it is"
+        );
+        return;
+    }
+
+    let reviews: usize = users.iter().map(|user| user.reviews.len()).sum();
+    {
+        let conn = lock(db);
+        if !empty {
+            match db::clear_graph(&conn) {
+                Ok(gone) => tracing::info!(people = gone, "cleared the stale social graph"),
+                Err(error) => {
+                    tracing::warn!(%error, "could not clear the social graph; leaving it alone");
+                    return;
+                }
+            }
+        }
+        match db::seed_graph(&conn, &users) {
+            Ok(count) => tracing::info!(people = count, reviews, source = active, "social graph seeded"),
+            Err(error) => {
+                tracing::warn!(%error, "could not seed the social graph");
+                return;
+            }
+        }
+        if let Err(error) = db::set_graph_source(&conn, active) {
+            tracing::warn!(%error, "could not record the graph's source");
+        }
+        // The people an account followed have just been deleted, so give every account
+        // the new graph's starting friends. Without this a rebuild leaves everybody's
+        // feed empty until they go and follow somebody by hand.
+        for account in db::account_ids(&conn).unwrap_or_default() {
+            match db::grant_starter_follows(&conn, &account) {
+                Ok(0) => {}
+                Ok(follows) => tracing::info!(account = %account, follows, "granted starter follows"),
+                Err(error) => tracing::warn!(%error, account = %account, "could not grant follows"),
+            }
+        }
+    }
+
+    prune_unaddressable(source, db);
+}
+
+/// Throw away the rows about films the active source cannot address at all.
+///
+/// The users' own watchlist entries, favourites, ratings and written reviews. A demo
+/// slug means nothing under TMDB — there is no film behind it, so the row can only ever
+/// render as a 404 or a blank — and clearing it is the honest end for a note about an
+/// invented film.
+///
+/// **Only ids the source structurally cannot address**, which is a deliberately
+/// narrower test than the one used on the graph above. That one may use the network,
+/// because guessing wrong costs a re-harvest. This one may not: reading "TMDB timed
+/// out" as "this film does not exist" would delete somebody's watchlist because of a
+/// blip. So a film that *is* addressable and merely 404s today is kept — it may come
+/// back, and a single missing film is a 404 the frontend already handles.
+///
+/// Synchronous, and no `.await`, which is what lets it hold the lock throughout.
+fn prune_unaddressable(source: &Source, db: &Db) {
+    let conn = lock(db);
+    let logged = match db::logged_movie_ids(&conn) {
+        Ok(ids) => ids,
+        Err(error) => {
+            tracing::warn!(%error, "could not read the logged films");
+            return;
+        }
+    };
+    let stale: Vec<String> =
+        logged.into_iter().filter(|id| !source.addresses(id)).collect();
+    if stale.is_empty() {
+        return;
+    }
+
+    match db::discard_films(&conn, &stale) {
+        Ok(gone) => {
+            // Per row and per account, because this is somebody's data going away.
+            for row in &gone {
+                tracing::warn!(
+                    account = %row.user_id,
+                    film = %row.movie_id,
+                    table = row.table,
+                    "discarded a row naming a film this source cannot address"
+                );
+            }
+            tracing::warn!(
+                rows = gone.len(),
+                films = stale.len(),
+                source = source.tag(),
+                "discarded rows about films from the previous content source"
+            );
+        }
+        Err(error) => tracing::warn!(%error, "could not discard the stale rows"),
+    }
+}
 
 /// Collect people and reviews to seed the graph with, once, at startup.
 ///
@@ -2562,6 +2780,380 @@ mod tests {
         // seed writes.
         assert_eq!(sign_in(&db), ME);
         (source, db)
+    }
+
+    // --- Keeping the graph in step with the source ----------------------------
+
+    /// A source that addresses TMDB ids but can reach nothing.
+    ///
+    /// Enough for `tag` and `addresses`, which are pure, and for the "a failed harvest
+    /// changes nothing" path. Anything that fetches gets an error, which is the point.
+    fn dead_tmdb() -> Source {
+        Source::Tmdb(Arc::new(crate::tmdb::Tmdb::new("no-such-token".into()).unwrap()))
+    }
+
+    /// A stand-in for the three endpoints a harvest calls, serving the recorded
+    /// fixtures. Lets the TMDB seed path run without the network.
+    async fn fake_tmdb() -> Source {
+        use axum::{response::IntoResponse, routing::get, Router};
+
+        fn fixture(name: &str) -> String {
+            let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
+        }
+        fn json(body: String) -> axum::response::Response {
+            ([(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response()
+        }
+
+        let tmdb = Router::new()
+            .route("/configuration", get(|| async { json(fixture("configuration.json")) }))
+            .route("/trending/movie/week", get(|| async { json(fixture("trending.json")) }))
+            // The same reviews for every film, which is all the harvest needs: it wants
+            // people with opinions on several films, and this gives it exactly that.
+            .route("/movie/{id}/reviews", get(|| async { json(fixture("reviews-157336.json")) }));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("a free port");
+        let address = listener.local_addr().expect("an address");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, tmdb).await;
+        });
+        Source::Tmdb(Arc::new(
+            crate::tmdb::Tmdb::new_at("a-token".into(), &format!("http://{address}")).unwrap(),
+        ))
+    }
+
+    fn seeded_ids(db: &Db) -> Vec<String> {
+        db::seeded_movie_ids(&lock(db)).unwrap()
+    }
+
+    fn recorded_source(db: &Db) -> Option<String> {
+        db::graph_source(&lock(db)).unwrap()
+    }
+
+    /// Which dataset a source is, and which ids it could ever fetch.
+    ///
+    /// `addresses` is the test the users' own rows are pruned by, so it has to be right
+    /// in both directions: a demo slug is unreachable under TMDB, and the demo dataset
+    /// answers for anything.
+    #[test]
+    fn a_source_knows_which_ids_it_could_fetch() {
+        let demo = Source::Demo { reason: "testing".into() };
+        let tmdb = dead_tmdb();
+
+        assert_eq!(demo.tag(), "demo");
+        assert_eq!(tmdb.tag(), "tmdb");
+
+        for id in ["le-souffle", "morning-haze", "dune-part-two", "red-shift"] {
+            assert!(demo.addresses(id), "{id}");
+            assert!(!tmdb.addresses(id), "{id} is not a TMDB id");
+        }
+        for id in ["157336-interstellar", "1368337-the-odyssey", "969681"] {
+            assert!(demo.addresses(id), "{id}");
+            assert!(tmdb.addresses(id), "{id} is a TMDB id");
+        }
+    }
+
+    /// The demo catalogue's ids must not start with a digit, or `addresses` would read
+    /// one as a TMDB id and keep a row that cannot resolve.
+    ///
+    /// It errs safely — keeping a row rather than deleting a good one — but the whole
+    /// point is that the two id spaces do not overlap, so this pins it.
+    #[test]
+    fn no_demo_id_looks_like_a_tmdb_id() {
+        let tmdb = dead_tmdb();
+        for entry in data::catalogue() {
+            assert!(!tmdb.addresses(&entry.id), "{} reads as a TMDB id", entry.id);
+        }
+    }
+
+    /// **The regression test.** A graph left over from the other source must not stay
+    /// in place: every film it names would 404, which is exactly what the live site did.
+    ///
+    /// Demo is the active source here, and the graph is tagged as TMDB's and stuffed
+    /// with TMDB-shaped ids — the same shape of wrongness, in the direction that needs
+    /// no network.
+    #[tokio::test]
+    async fn a_graph_from_another_source_is_rebuilt_not_left_in_place() {
+        let demo = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+
+        // A harvested graph: real ids, from the other source. Harvested before the
+        // lock, because a `std::sync::Mutex` guard may not be held across an await.
+        let harvested = harvest_graph(&fake_tmdb().await).await;
+        {
+            let conn = lock(&db);
+            db::seed_graph(&conn, &harvested).unwrap();
+            db::set_graph_source(&conn, "tmdb").unwrap();
+        }
+        let foreign = seeded_ids(&db);
+        assert!(!foreign.is_empty());
+        let catalogue: Vec<String> = data::catalogue().into_iter().map(|e| e.id).collect();
+        assert!(
+            foreign.iter().all(|id| !catalogue.contains(id)),
+            "the fixture graph should name films the demo dataset does not have"
+        );
+
+        // Now the source changes under it.
+        ensure_graph(&demo, &db).await;
+
+        // Every film the graph names is one the active source has. This is the
+        // invariant the live site broke.
+        let rebuilt = seeded_ids(&db);
+        assert!(!rebuilt.is_empty(), "the graph was cleared and not refilled");
+        for id in &rebuilt {
+            assert!(catalogue.contains(id), "{id} is not a film the demo dataset has");
+            assert!(
+                movie_detail_by_id(&demo, id).await.is_some(),
+                "{id} does not resolve in the active source"
+            );
+        }
+        // And none of the other source's ids survived.
+        for id in &foreign {
+            assert!(!rebuilt.contains(id), "{id} outlived the rebuild");
+        }
+        assert_eq!(recorded_source(&db).as_deref(), Some("demo"));
+    }
+
+    /// And the direction the live site actually took: a demo graph, then a token.
+    ///
+    /// The harvest runs against recorded fixtures, so this exercises the real seed path
+    /// rather than a stand-in for it.
+    #[tokio::test]
+    async fn turning_tmdb_on_later_rebuilds_the_demo_graph() {
+        let demo = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+
+        ensure_graph(&demo, &db).await;
+        let before = seeded_ids(&db);
+        assert!(!before.is_empty());
+        assert_eq!(recorded_source(&db).as_deref(), Some("demo"));
+
+        let tmdb = fake_tmdb().await;
+        // The broken state, before the fix gets a chance: not one of those ids is
+        // something TMDB could fetch.
+        assert!(before.iter().all(|id| !tmdb.addresses(id)));
+
+        ensure_graph(&tmdb, &db).await;
+
+        let after = seeded_ids(&db);
+        assert!(!after.is_empty(), "the graph was cleared and not refilled");
+        for id in &after {
+            assert!(tmdb.addresses(id), "{id} is not a film TMDB could fetch");
+        }
+        assert!(before.iter().all(|id| !after.contains(id)), "a demo id survived");
+        assert_eq!(recorded_source(&db).as_deref(), Some("tmdb"));
+
+        // The people are the harvest's, and their reviews resolve to real films.
+        let directory = people(&db, None, "a");
+        assert!(!directory.results.is_empty());
+    }
+
+    /// The protection that has to survive all of this: the same source across restarts
+    /// must not touch the graph, because by then the follows are the users' own.
+    #[tokio::test]
+    async fn the_same_source_across_restarts_leaves_the_graph_alone() {
+        let demo = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+
+        ensure_graph(&demo, &db).await;
+        let seeded = seeded_ids(&db);
+        let me = sign_in(&db);
+
+        // The user makes the graph theirs: one more follow, and one fewer.
+        let followed = people(&db, Some(&me), "").following;
+        let dropped = followed[0].id.clone();
+        set_follow(&db, &me, &dropped, Some(false)).unwrap();
+        set_follow(&db, &me, "user-priyanaidu", Some(true)).unwrap();
+        let mine: Vec<String> =
+            people(&db, Some(&me), "").following.into_iter().map(|card| card.id).collect();
+
+        // Three more restarts.
+        for _ in 0..3 {
+            ensure_graph(&demo, &db).await;
+        }
+
+        assert_eq!(seeded_ids(&db), seeded, "the graph was re-seeded");
+        let after: Vec<String> =
+            people(&db, Some(&me), "").following.into_iter().map(|card| card.id).collect();
+        assert_eq!(after, mine, "a restart talked over the user's own follows");
+        assert!(!after.contains(&dropped), "an unfollow was undone");
+    }
+
+    /// Deleting the seeded people has always been a way to ask for a fresh graph, and
+    /// still is: the recorded source matching is not on its own a reason to skip.
+    #[tokio::test]
+    async fn an_emptied_graph_is_refilled_even_when_the_source_matches() {
+        let demo = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+
+        ensure_graph(&demo, &db).await;
+        let seeded = seeded_ids(&db);
+        assert!(!seeded.is_empty());
+        assert_eq!(recorded_source(&db).as_deref(), Some("demo"));
+
+        // By hand, the way somebody starting over would.
+        db::clear_graph(&lock(&db)).unwrap();
+        assert!(seeded_ids(&db).is_empty());
+
+        ensure_graph(&demo, &db).await;
+        assert_eq!(seeded_ids(&db), seeded, "an emptied graph was left empty");
+    }
+
+    /// A database seeded before the source was written down. Its graph resolves, so it
+    /// is adopted rather than rebuilt — nobody's follows are disturbed to record a fact.
+    #[tokio::test]
+    async fn an_untagged_graph_that_resolves_is_adopted() {
+        let demo = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+        {
+            let conn = lock(&db);
+            db::seed_graph(&conn, &db::demo_graph()).unwrap();
+        }
+        let seeded = seeded_ids(&db);
+        assert_eq!(recorded_source(&db), None);
+
+        ensure_graph(&demo, &db).await;
+
+        assert_eq!(seeded_ids(&db), seeded, "a graph that resolves was thrown away");
+        assert_eq!(recorded_source(&db).as_deref(), Some("demo"));
+    }
+
+    /// The same, for a graph that does not resolve: unknown provenance plus a film the
+    /// source cannot fetch condemns it. **Every** id is checked, not a sample — a graph
+    /// can be mixed, and stopping at the first film to resolve would call it healthy.
+    #[tokio::test]
+    async fn an_untagged_graph_that_does_not_resolve_is_rebuilt() {
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+        let tmdb = fake_tmdb().await;
+
+        // A mixed graph: one film TMDB can fetch, the rest demo slugs. This is the
+        // shape the live database was in.
+        {
+            let conn = lock(&db);
+            db::seed_graph(&conn, &db::demo_graph()).unwrap();
+            conn.execute(
+                "INSERT INTO user_reviews (person_id, movie_id, half_stars, body, created_at)
+                 VALUES ('user-elenarostova', '1368337-the-odyssey', 8, 'Real film.', '2026-01-01')",
+                [],
+            )
+            .unwrap();
+        }
+        let before = seeded_ids(&db);
+        assert!(before.contains(&"1368337-the-odyssey".to_string()));
+        assert!(before.iter().any(|id| !tmdb.addresses(id)), "the fixture needs a broken id");
+
+        ensure_graph(&tmdb, &db).await;
+
+        let after = seeded_ids(&db);
+        assert!(!after.is_empty());
+        for id in &after {
+            assert!(tmdb.addresses(id), "{id} survived a rebuild it should not have");
+        }
+        assert_eq!(recorded_source(&db).as_deref(), Some("tmdb"));
+    }
+
+    /// A harvest that comes back empty must leave the old graph standing. Replacing a
+    /// working graph with nothing would be worse than leaving it stale.
+    #[tokio::test]
+    async fn a_failed_harvest_leaves_the_graph_alone() {
+        let demo = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+
+        ensure_graph(&demo, &db).await;
+        let seeded = seeded_ids(&db);
+        assert!(!seeded.is_empty());
+
+        // A TMDB source that can reach nothing: the switch is wanted, the harvest fails.
+        ensure_graph(&dead_tmdb(), &db).await;
+
+        assert_eq!(seeded_ids(&db), seeded, "the graph was cleared for a harvest that failed");
+        // And the source is not recorded as TMDB's, so the next boot tries again.
+        assert_eq!(recorded_source(&db).as_deref(), Some("demo"));
+    }
+
+    /// What a source switch does to the users' own rows: it clears the ones naming films
+    /// the new source cannot address, and only those.
+    #[tokio::test]
+    async fn a_switch_discards_only_the_rows_the_new_source_cannot_address() {
+        let demo = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+        ensure_graph(&demo, &db).await;
+        let me = sign_in(&db);
+
+        // A demo-era row of each kind, plus one naming a film TMDB really has.
+        {
+            let conn = lock(&db);
+            db::set_watchlist(&conn, &me, "le-souffle", Some(true)).unwrap();
+            db::set_watchlist(&conn, &me, "157336-interstellar", Some(true)).unwrap();
+            db::set_favorite(&conn, &me, "morning-haze", Some(true)).unwrap();
+            db::set_rating(&conn, &me, "red-shift", 8).unwrap();
+            db::set_rating(&conn, &me, "1368337-the-odyssey", 9).unwrap();
+            db::set_user_review(&conn, &me, "the-drop", "Invented film, invented words.").unwrap();
+            db::set_user_review(&conn, &me, "157336-interstellar", "A real one.").unwrap();
+        }
+
+        ensure_graph(&fake_tmdb().await, &db).await;
+
+        let store = store(&db, Some(&me));
+        // The demo-era rows are gone: there is no film behind any of those ids now.
+        assert!(store.watchlist.iter().all(|id| id != "le-souffle"));
+        assert!(store.favorites.is_empty());
+        assert!(!store.ratings.contains_key("red-shift"));
+        assert!(!store.written_reviews.contains_key("the-drop"));
+        // The rows naming real films are untouched.
+        assert!(store.watchlist.contains("157336-interstellar"));
+        assert_eq!(store.ratings.get("1368337-the-odyssey"), Some(&9));
+        assert_eq!(
+            store.written_reviews.get("157336-interstellar").map(String::as_str),
+            Some("A real one.")
+        );
+
+        // And the profile is coherent afterwards rather than a grid of blanks.
+        let profile = profile(&demo, &db, &me).await.unwrap();
+        assert!(profile.favorites.is_empty());
+        assert_eq!(profile.watchlist.len(), 1);
+    }
+
+    /// Switching the other way discards nothing: the demo dataset answers for any id,
+    /// so no row becomes meaningless. Losing data in the safe direction would be a bug.
+    #[tokio::test]
+    async fn switching_to_demo_discards_nothing() {
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+        ensure_graph(&fake_tmdb().await, &db).await;
+        let me = sign_in(&db);
+        {
+            let conn = lock(&db);
+            db::set_watchlist(&conn, &me, "157336-interstellar", Some(true)).unwrap();
+            db::set_rating(&conn, &me, "1368337-the-odyssey", 9).unwrap();
+        }
+
+        ensure_graph(&Source::Demo { reason: "testing".into() }, &db).await;
+
+        let store = store(&db, Some(&me));
+        assert!(store.watchlist.contains("157336-interstellar"));
+        assert_eq!(store.ratings.get("1368337-the-odyssey"), Some(&9));
+        assert_eq!(recorded_source(&db).as_deref(), Some("demo"));
+    }
+
+    /// Rebuilding the graph gives every account the new cast's starting friends.
+    /// Without it a switch leaves everybody looking at an empty feed.
+    #[tokio::test]
+    async fn a_rebuild_gives_the_accounts_friends_again() {
+        let demo = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+        ensure_graph(&demo, &db).await;
+        let me = sign_in(&db);
+        assert!(!people(&db, Some(&me), "").following.is_empty());
+
+        ensure_graph(&fake_tmdb().await, &db).await;
+
+        let following = people(&db, Some(&me), "").following;
+        assert!(!following.is_empty(), "the account was left following nobody");
+        // Followed people from the new cast, so their reviews are films that resolve.
+        let seeded = seeded_ids(&db);
+        assert!(!seeded.is_empty());
+        let feed = feed_page(&fake_tmdb().await, &db, Some(&me), None).await;
+        assert!(!feed.items.is_empty(), "the feed was left empty after a rebuild");
     }
 
     /// Without a token the harvest makes no request and falls back to the demo

@@ -83,6 +83,10 @@ impl Entry {
 pub struct Tmdb {
     http: reqwest::Client,
     token: String,
+    /// Where the API lives. A field rather than the constant so a test can point it at
+    /// a stub serving `tests/fixtures/`, and the harvest can be exercised without the
+    /// network. Only `new_at` ever sets it to anything else.
+    base: String,
     cache: RwLock<HashMap<String, Entry>>,
     /// From `/3/configuration`, resolved on first use. `map::ImageBase::default`
     /// is what the endpoint returns today, so a failed config call costs nothing
@@ -105,9 +109,16 @@ impl Tmdb {
         Ok(Self {
             http,
             token,
+            base: API_BASE.to_string(),
             cache: RwLock::new(HashMap::new()),
             images: RwLock::new(None),
         })
+    }
+
+    /// The same client, talking to `base` instead of TMDB.
+    #[cfg(test)]
+    pub fn new_at(token: String, base: &str) -> Result<Self> {
+        Ok(Self { base: base.to_string(), ..Self::new(token)? })
     }
 
     /// GET `path` (with a leading slash), deserialize, and cache the body.
@@ -122,7 +133,7 @@ impl Tmdb {
             }
         }
 
-        let url = format!("{API_BASE}{path}");
+        let url = format!("{}{path}", self.base);
         let response = self
             .http
             .get(&url)

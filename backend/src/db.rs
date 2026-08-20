@@ -809,6 +809,13 @@ pub fn grant_starter_follows(conn: &Connection, user_id: &str) -> Result<usize> 
     )
 }
 
+/// Every real account, so a re-seeded graph can give all of them friends again.
+pub fn account_ids(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT id FROM people WHERE is_account = 1 ORDER BY id")?;
+    let ids = stmt.query_map([], |row| row.get(0))?.collect();
+    ids
+}
+
 // --- Seeding ------------------------------------------------------------------
 
 /// One person to seed into the social graph, and their reviews.
@@ -1808,6 +1815,143 @@ pub fn set_user_review(
 /// The `settings` key the one visitor's bio used to be stored under. Read once by
 /// `adopt_pre_account_rows`, which moves the value onto their `people` row.
 const BIO_KEY: &str = "visitor_bio";
+
+// --- Keeping the graph in step with the content source ------------------------
+
+/// The `settings` key recording which source produced the seeded graph.
+const GRAPH_SOURCE_KEY: &str = "graph_source";
+
+/// Which source the seeded graph was built from — `"tmdb"` or `"demo"`.
+///
+/// `None` for a database seeded before this was recorded, which is not the same as
+/// "empty": it means the graph's provenance is unknown and has to be worked out from
+/// the ids in it. See `content::ensure_graph`.
+pub fn graph_source(conn: &Connection) -> Result<Option<String>> {
+    conn.query_row("SELECT value FROM settings WHERE key = ?1", [GRAPH_SOURCE_KEY], |row| row.get(0))
+        .optional()
+}
+
+/// Record which source the graph now comes from.
+pub fn set_graph_source(conn: &Connection, tag: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![GRAPH_SOURCE_KEY, tag],
+    )?;
+    Ok(())
+}
+
+/// Every film the seeded people reference, once each.
+///
+/// The ids that have to mean something to the active source. A graph left over from
+/// the other one names films it cannot fetch, and every review on screen then links
+/// to a 404 — which is the bug this whole section exists to prevent.
+pub fn seeded_movie_ids(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT movie_id FROM user_reviews
+         UNION SELECT movie_id FROM user_favorites
+         UNION SELECT movie_id FROM user_watchlist
+         ORDER BY movie_id",
+    )?;
+    let ids = stmt.query_map([], |row| row.get(0))?.collect();
+    ids
+}
+
+/// Forget the seeded people and everything about them, so the graph can be built
+/// again from the active source.
+///
+/// Accounts are left alone: they are real people with real rows, and only the seeded
+/// cast is derived from a dataset. Their *follows of* seeded people go, because the
+/// people themselves do — `follows.person_id` is a foreign key, and there is nothing
+/// left to point at. `content::ensure_graph` re-grants the starter follows afterwards,
+/// so an account still opens on a feed.
+///
+/// One transaction: a half-cleared graph would be people with no reviews.
+pub fn clear_graph(conn: &Connection) -> Result<usize> {
+    const SEEDED: &str = "SELECT id FROM people WHERE is_user = 1 AND is_account = 0";
+    let tx = conn.unchecked_transaction()?;
+    // Children first, then the people, or the foreign keys refuse.
+    for table in ["user_reviews", "user_favorites", "user_watchlist"] {
+        tx.execute(&format!("DELETE FROM {table} WHERE person_id IN ({SEEDED})"), [])?;
+    }
+    tx.execute(&format!("DELETE FROM follows WHERE person_id IN ({SEEDED})"), [])?;
+    let gone = tx.execute("DELETE FROM people WHERE is_user = 1 AND is_account = 0", [])?;
+    tx.commit()?;
+    Ok(gone)
+}
+
+/// Every film any account has logged, once each.
+///
+/// The union of the four tables that name a film: what somebody put on a watchlist,
+/// called a favourite, rated, or wrote about.
+pub fn logged_movie_ids(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT movie_id FROM watchlist
+         UNION SELECT movie_id FROM favorites
+         UNION SELECT movie_id FROM ratings
+         UNION SELECT movie_id FROM visitor_reviews
+         ORDER BY movie_id",
+    )?;
+    let ids = stmt.query_map([], |row| row.get(0))?.collect();
+    ids
+}
+
+/// One row a source switch is about to throw away.
+///
+/// Returned rather than just counted so the log can say what went and whose it was.
+/// Somebody losing a watchlist entry deserves better than a number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscardedRow {
+    pub user_id: String,
+    pub movie_id: String,
+    /// Which table it was in: `watchlist`, `favorites`, `ratings` or `visitor_reviews`.
+    pub table: &'static str,
+}
+
+/// The four tables `discard_films` clears, and nothing else.
+///
+/// Deliberately not `liked_reviews`, `liked_comments`, `comments` or `replies`. Those
+/// name a *review*, not a film — a like or a comment on a seeded review that has just
+/// been cleared is unreachable rather than wrong, and switching the source back brings
+/// the same seeded ids and the same conversations with it. Deleting them would be loss
+/// for tidiness.
+const FILM_TABLES: [&str; 4] = ["watchlist", "favorites", "ratings", "visitor_reviews"];
+
+/// Throw away every account's rows about these films, and say what went.
+///
+/// Called with the ids the active source cannot address at all — see
+/// `content::Source::addresses`. Never with an id that merely failed to fetch: a TMDB
+/// outage must not be read as "this film does not exist" and delete somebody's
+/// watchlist.
+///
+/// One transaction, so a failure leaves every row where it was.
+pub fn discard_films(conn: &Connection, movie_ids: &[String]) -> Result<Vec<DiscardedRow>> {
+    if movie_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    let mut gone = Vec::new();
+    for table in FILM_TABLES {
+        // Read the rows before deleting them, because after the delete there is
+        // nothing left to describe.
+        let mut stmt =
+            tx.prepare(&format!("SELECT user_id FROM {table} WHERE movie_id = ?1 ORDER BY user_id"))?;
+        for movie_id in movie_ids {
+            let owners: Vec<String> =
+                stmt.query_map([movie_id], |row| row.get(0))?.collect::<Result<_>>()?;
+            for user_id in owners {
+                gone.push(DiscardedRow { user_id, movie_id: movie_id.clone(), table });
+            }
+        }
+        drop(stmt);
+        for movie_id in movie_ids {
+            tx.execute(&format!("DELETE FROM {table} WHERE movie_id = ?1"), [movie_id])?;
+        }
+    }
+    tx.commit()?;
+    Ok(gone)
+}
 
 /// Store one account's bio. An empty string clears it, restoring the default.
 ///
@@ -3139,6 +3283,156 @@ mod tests {
         let found: Vec<String> =
             search_people(&conn, ME, "Marcus").unwrap().into_iter().map(|u| u.id).collect();
         assert_eq!(found, ["user-marcusdrey"]);
+    }
+
+    // --- Keeping the graph in step with the source -----------------------------
+
+    /// The tag round-trips, and re-recording it replaces rather than accumulating.
+    #[test]
+    fn the_graphs_source_is_recorded_and_replaceable() {
+        let conn = db();
+        assert_eq!(graph_source(&conn).unwrap(), None, "unrecorded is absent, not blank");
+
+        set_graph_source(&conn, "demo").unwrap();
+        assert_eq!(graph_source(&conn).unwrap().as_deref(), Some("demo"));
+        set_graph_source(&conn, "tmdb").unwrap();
+        assert_eq!(graph_source(&conn).unwrap().as_deref(), Some("tmdb"));
+
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM settings WHERE key = 'graph_source'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
+
+    /// Every film the seeded people name, which is the set that has to mean something
+    /// to the active source.
+    #[test]
+    fn the_seeded_films_are_every_film_the_graph_names() {
+        let conn = graph();
+        let ids = seeded_movie_ids(&conn).unwrap();
+        assert!(!ids.is_empty());
+
+        // Distinct and sorted, so a caller can compare two runs.
+        let mut unique = ids.clone();
+        unique.dedup();
+        assert_eq!(ids, unique, "a film was listed twice");
+        assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
+
+        // Every review's, favourite's and watchlist film is in there.
+        for user in demo_graph() {
+            for (movie_id, ..) in &user.reviews {
+                assert!(ids.contains(movie_id), "{movie_id} is missing");
+            }
+            for movie_id in user.favorites.iter().chain(&user.watchlist) {
+                assert!(ids.contains(movie_id), "{movie_id} is missing");
+            }
+        }
+    }
+
+    /// Clearing the graph takes the seeded cast and everything about them, and leaves
+    /// the accounts and their own rows alone.
+    #[test]
+    fn clearing_the_graph_spares_the_accounts() {
+        let conn = graph();
+        set_watchlist(&conn, ME, "le-souffle", Some(true)).unwrap();
+        set_user_review(&conn, ME, "le-souffle", "Mine.").unwrap();
+        assert!(follow_count(&conn, ME).unwrap() > 0);
+
+        let gone = clear_graph(&conn).unwrap();
+        assert_eq!(gone, GRAPH.len());
+
+        // No seeded people, and nothing left pointing at them.
+        assert!(search_people(&conn, ME, "").unwrap().is_empty());
+        assert!(seeded_movie_ids(&conn).unwrap().is_empty());
+        assert_eq!(follow_count(&conn, ME).unwrap(), 0, "a follow outlived the person");
+
+        // The account is still there, with its rows.
+        assert!(account(&conn, ME).unwrap().is_some());
+        assert_eq!(watchlist_recent_first(&conn, ME).unwrap(), ["le-souffle"]);
+        assert_eq!(load_store(&conn, ME).unwrap().written_reviews.len(), 1);
+
+        // And the graph reads as needing a seed again, which is what lets it be refilled.
+        assert!(needs_graph_seed(&conn).unwrap());
+        assert_eq!(seed_graph(&conn, &demo_graph()).unwrap(), GRAPH.len());
+    }
+
+    /// Every film anybody logged, across the four tables that name one.
+    #[test]
+    fn the_logged_films_are_every_film_anybody_noted() {
+        let conn = graph();
+        let other = sign_in(&conn, "2002", "ada").id;
+        assert!(logged_movie_ids(&conn).unwrap().is_empty());
+
+        set_watchlist(&conn, ME, "le-souffle", Some(true)).unwrap();
+        set_favorite(&conn, ME, "morning-haze", Some(true)).unwrap();
+        set_rating(&conn, ME, "red-shift", 8).unwrap();
+        set_user_review(&conn, &other, "the-drop", "Words.").unwrap();
+        // The same film from two accounts is one entry.
+        set_watchlist(&conn, &other, "le-souffle", Some(true)).unwrap();
+
+        assert_eq!(
+            logged_movie_ids(&conn).unwrap(),
+            ["le-souffle", "morning-haze", "red-shift", "the-drop"]
+        );
+    }
+
+    /// Discarding says exactly what went and whose it was, because this is somebody's
+    /// data being deleted and a count is not an account of it.
+    #[test]
+    fn discarding_films_reports_every_row_and_its_owner() {
+        let conn = graph();
+        let other = sign_in(&conn, "2002", "ada").id;
+
+        set_watchlist(&conn, ME, "le-souffle", Some(true)).unwrap();
+        set_watchlist(&conn, &other, "le-souffle", Some(true)).unwrap();
+        set_rating(&conn, ME, "le-souffle", 7).unwrap();
+        set_user_review(&conn, ME, "le-souffle", "Invented film.").unwrap();
+        // The film that survives.
+        set_watchlist(&conn, ME, "157336-interstellar", Some(true)).unwrap();
+
+        let gone = discard_films(&conn, &["le-souffle".to_string()]).unwrap();
+        assert_eq!(gone.len(), 4);
+        assert!(gone.iter().all(|row| row.movie_id == "le-souffle"));
+        // Both owners are named, and each table it came out of.
+        let owners: std::collections::BTreeSet<&str> =
+            gone.iter().map(|row| row.user_id.as_str()).collect();
+        assert_eq!(owners, [ME, other.as_str()].into_iter().collect());
+        let tables: std::collections::BTreeSet<&str> =
+            gone.iter().map(|row| row.table).collect();
+        assert_eq!(tables, ["watchlist", "ratings", "visitor_reviews"].into_iter().collect());
+
+        // The rows really went, and the other film's did not.
+        assert_eq!(watchlist_recent_first(&conn, ME).unwrap(), ["157336-interstellar"]);
+        assert!(watchlist_recent_first(&conn, &other).unwrap().is_empty());
+        assert!(load_store(&conn, ME).unwrap().ratings.is_empty());
+        assert!(load_store(&conn, ME).unwrap().written_reviews.is_empty());
+
+        // Nothing to discard is not an error, and reports nothing.
+        assert!(discard_films(&conn, &[]).unwrap().is_empty());
+        assert!(discard_films(&conn, &["never-logged".to_string()]).unwrap().is_empty());
+    }
+
+    /// Discarding leaves likes and conversations alone. They name a *review*, not a
+    /// film, so they are unreachable rather than wrong — and switching the source back
+    /// brings the same seeded ids and the same threads with them.
+    #[test]
+    fn discarding_films_leaves_the_conversations_alone() {
+        let conn = graph();
+        let review = review_id("user-elenarostova", "le-souffle");
+        set_watchlist(&conn, ME, "le-souffle", Some(true)).unwrap();
+        toggle_review_like(&conn, ME, &review).unwrap();
+        let comment = add_comment(&conn, ME, &review, "Held up.").unwrap();
+        add_reply(&conn, ME, &review, &comment, "Still does.").unwrap();
+        toggle_comment_like(&conn, ME, &comment).unwrap();
+
+        discard_films(&conn, &["le-souffle".to_string()]).unwrap();
+
+        let store = load_store(&conn, ME).unwrap();
+        assert!(store.watchlist.is_empty(), "the watchlist row should have gone");
+        assert!(store.liked_reviews.contains(&review));
+        assert!(store.liked_comments.contains(&comment));
+        assert_eq!(thread(&conn, &review).unwrap().len(), 1);
+        assert_eq!(thread(&conn, &review).unwrap()[0].replies.len(), 1);
     }
 
     // --- An account's own reviews ----------------------------------------------
