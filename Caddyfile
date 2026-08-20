@@ -4,8 +4,8 @@
 # :80 to :443. The API's writes are unauthenticated (one shared visitor), so they
 # should not travel in the clear.
 #
-# api and redis have no host ports. That's what makes it safe for the API to bind
-# 0.0.0.0 and for Redis to run without a password.
+# api, web and redis have no host ports. That's what makes it safe for the API to
+# bind 0.0.0.0 and for Redis to run without a password.
 
 {
 	# Expiry warnings from Let's Encrypt.
@@ -16,15 +16,37 @@
 	email {$ACME_EMAIL}
 }
 
-# The hostname the DNS A record points at — not the Vercel domain. Substituted at
-# parse time; docker-compose.yml refuses to start without it.
+# The hostname the DNS A record points at. It serves the whole app — the bundle and
+# the API are one origin, so there is no CORS and no rewriting. Substituted at parse
+# time; docker-compose.yml refuses to start without it.
 {$API_DOMAIN} {
 	encode zstd gzip
 
-	# One upstream for everything: /api/* and /img/* both come from here. 3001 is
-	# the API's default port.
+	# Both prefixes, not just /api. TMDB posters are absolute CDN URLs, but the
+	# social layer's avatars are files the API serves from /img, so missing this one
+	# breaks every avatar while leaving the posters fine.
 	#
-	# On first boot the API seeds from TMDB before binding, so this is 502 for a
-	# minute or two.
-	reverse_proxy api:3001
+	# `handle`, not `handle_path`: handle_path strips the matched prefix, which would
+	# turn /api/health into a request for /health and 404 the whole API.
+	#
+	# 3001 is the API's default port. On first boot the API seeds from TMDB before
+	# binding, so this is 502 for a minute or two.
+	handle /api/* {
+		reverse_proxy api:3001
+	}
+
+	handle /img/* {
+		reverse_proxy api:3001
+	}
+
+	# Everything else is the SPA. Caddy sorts `handle` blocks by path specificity and
+	# puts the matcher-less one last, so the two above always win — check with
+	# `docker compose exec caddy caddy adapt --config /etc/caddy/Caddyfile` if you
+	# add more.
+	#
+	# nginx does the SPA fallback, so a deep link like /collections/favorites gets
+	# index.html rather than 404. See frontend/nginx.conf.
+	handle {
+		reverse_proxy web:80
+	}
 }

@@ -26,10 +26,6 @@ id_ed25519*
 *.db-wal
 *.db-shm
 
-# Written by `vercel link`. Holds the org and project ids, which are what
-# VERCEL_ORG_ID and VERCEL_PROJECT_ID are set from.
-.vercel/
-
 # Build
 node_modules/
 deno.lock

@@ -1,7 +1,7 @@
-# Test both halves of CinéJournal, then deploy them.
+# Test both halves of CinéJournal, then deploy them to the one VM.
 #
 #   pull request     ->  test-backend, test-frontend
-#   push to main     ->  tests, then deploy-api + deploy-frontend
+#   push to main     ->  tests, then two images, then one deploy
 #   manual dispatch  ->  same as push to main
 #
 # One workflow, not two chained by `workflow_run`. A `workflow_run` status is reported
@@ -31,6 +31,7 @@ concurrency:
 env:
   # Lowercase: registries reject uppercase path components.
   IMAGE: ghcr.io/barterjke/cine-journal-api
+  WEB_IMAGE: ghcr.io/barterjke/cine-journal-web
 
 jobs:
   # ---------------------------------------------------------------- the gates
@@ -103,14 +104,17 @@ jobs:
           npm run test
 
       # Typechecking is not building: `tsc --noEmit` never resolves asset imports, so a
-      # broken bundle can typecheck clean and fail on Vercel after the API has shipped.
+      # broken bundle can typecheck clean and then fail inside the web image build,
+      # after the API has already shipped. Fail here instead, on the runner.
       - name: Build
         working-directory: frontend
         run: npm run build
 
   # ---------------------------------------------------------------- the deploys
   #
-  # `needs:` alone is not enough — a PR run satisfies it. Hence the `if:` on both.
+  # `needs:` alone is not enough — a PR run satisfies it. Hence the `if:` on both of
+  # the jobs that start a chain: build-image and build-web-image. Everything
+  # downstream of them inherits the gate.
 
   # Both architectures, because which one you get on the Always Free tier is not a
   # choice you fully control: A1.Flex (arm64) is often out of capacity, and the fallback
@@ -238,15 +242,76 @@ jobs:
             "${refs[@]}"
           docker buildx imagetools inspect "${IMAGE}:${{ steps.tag.outputs.tag }}"
 
-  deploy-api:
-    name: Deploy API to Oracle Cloud
-    needs: publish-image
+  # The frontend image: nginx plus the built Vite bundle. Nothing like the API's
+  # matrix, because there is nothing arch-specific to build.
+  #
+  # One `build-push-action` for both arches, and no `setup-qemu-action`, because
+  # neither is needed here:
+  #   - frontend/Dockerfile pins the node stage to --platform=$BUILDPLATFORM, so
+  #     `npm ci && npm run build` runs natively and produces the same static files
+  #     whichever arch is being targeted.
+  #   - the nginx stage has no RUN, only COPY, so buildkit never executes an
+  #     arm64 binary on an amd64 runner.
+  # Add a RUN to that stage and this job needs docker/setup-qemu-action@v3.
+  build-web-image:
+    name: Build the web image
+    needs: [test-backend, test-frontend]
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same expression as publish-image, on the same commit, so both images end up
+      # with the same sha tag. Each is only ever used with its own image anyway.
+      - name: Name this build
+        id: tag
+        run: echo "tag=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tagged directly, unlike the API: one job means no race between two jobs
+      # overwriting each other's tag, so there is nothing for a manifest-merge step
+      # to fix.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.WEB_IMAGE }}:${{ steps.tag.outputs.tag }}
+            ${{ env.WEB_IMAGE }}:latest
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+          provenance: false
+
+  # One deploy for the whole stack, since Caddy fronts both images. `needs:` both image
+  # jobs, so a bundle never ships against an API that didn't build — a mixed state that
+  # was unavoidable while the two halves deployed to two providers.
+  deploy:
+    name: Deploy to Oracle Cloud
+    needs: [publish-image, build-web-image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     env:
       TAG: ${{ needs.publish-image.outputs.tag }}
+      WEB_TAG: ${{ needs.build-web-image.outputs.tag }}
     steps:
 
       - name: Set up the SSH key
@@ -362,14 +427,14 @@ jobs:
           # Script on stdin via `bash -s`, so quoting is handled once.
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
               -o ConnectTimeout=15 -p "$PORT" "$USER_NAME@$HOST" \
-              "API_TAG='$TAG' DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
+              "API_TAG='$TAG' WEB_TAG='$WEB_TAG' DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$DEPLOY_PATH"
 
-          # docker-compose.yml reads `${API_TAG:-latest}`. Exported because compose reads
-          # the environment. (DEPLOY.md calls it API_IMAGE_TAG; compose decides, and it
-          # says API_TAG.)
-          export API_TAG
+          # docker-compose.yml reads `${API_TAG:-latest}` and `${WEB_TAG:-latest}`.
+          # Exported because compose reads the environment. Unset means `latest`, with no
+          # error, so a typo in either name looks like a deploy that did nothing.
+          export API_TAG WEB_TAG
 
           # DEPLOY.md keeps the variables in .env.deploy, which compose does not
           # auto-load — only .env. Both layouts are in circulation, so handle either.
@@ -384,14 +449,17 @@ jobs:
             exit 1
           fi
 
-          echo "--- deploying $API_TAG"
+          echo "--- deploying api=$API_TAG web=$WEB_TAG"
+          # No service names: pulls api and web together, so both are local before
+          # anything restarts.
           "${compose[@]}" pull
           # `--remove-orphans`: a service dropped from compose would otherwise keep
           # running and holding its port.
           #
           # `--wait` makes the compose healthchecks the deploy's gate, so this step is
-          # green only once the API answers /api/health. 330s against the healthcheck's
-          # 300s start_period, which covers a first boot re-seeding from TMDB.
+          # green only once the API answers /api/health and nginx answers /healthz.
+          # 330s against the API healthcheck's 300s start_period, which covers a first
+          # boot re-seeding from TMDB. web is up in seconds.
           "${compose[@]}" up -d --remove-orphans --wait --wait-timeout 330
           "${compose[@]}" ps
 
@@ -422,6 +490,34 @@ jobs:
           echo "::error::$HEALTH_URL never answered. The new image is running but unhealthy — see the rollback section of docs/ci-cd.md."
           exit 1
 
+      # Separate from the check above, because they fail for different reasons: the API
+      # answering proves Caddy, DNS and the certificate, so a failure here is web or
+      # Caddy's catch-all route, not the network.
+      #
+      # Uses API_DOMAIN — the site and the API are one origin now, so there is no second
+      # hostname to configure.
+      - name: Smoke-test the site
+        env:
+          API_DOMAIN: ${{ vars.API_DOMAIN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$API_DOMAIN" ]; then
+            echo "::warning::repository variable API_DOMAIN is not set, so nothing checked that the site serves. See docs/ci-cd.md."
+            exit 0
+          fi
+          # Greps for the mount point rather than just a 200: Caddy's own error pages are
+          # 200-adjacent HTML, and so is nginx's default index.
+          for attempt in $(seq 1 10); do
+            if curl -fsS --max-time 10 "https://$API_DOMAIN/" | grep -q 'id="root"'; then
+              echo "site serving after ${attempt} attempt(s)"
+              exit 0
+            fi
+            echo "no bundle yet (attempt ${attempt}/10)"
+            sleep 6
+          done
+          echo "::error::https://$API_DOMAIN/ did not serve the bundle. Check 'docker compose logs web' on the VM, and the handle blocks in Caddyfile."
+          exit 1
+
       # `always()`: a failure above should not leave a credential file on the VM.
       - name: Log the VM out of GHCR
         if: always()
@@ -436,71 +532,16 @@ jobs:
                 'docker logout ghcr.io' || true
           fi
 
-      # In the run summary so the tag is findable later, when you need it to roll back.
+      # In the run summary so the tags are findable later, when you need them to roll
+      # back. Both images, because a rollback is usually only one of them.
       - name: Record what shipped
         if: always()
         run: |
           {
-            echo "### API"
+            echo "### Deployed"
             echo
-            echo "- image: \`${IMAGE}:${TAG}\`"
+            echo "- api: \`${IMAGE}:${TAG}\`"
+            echo "- web: \`${WEB_IMAGE}:${WEB_TAG}\`"
             echo "- commit: ${{ github.sha }}"
-            echo "- roll back with: \`API_TAG=<previous-tag> docker compose up -d\` on the VM"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  deploy-frontend:
-    name: Deploy frontend to Vercel
-    needs: [test-backend, test-frontend]
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    # Every vercel command reads these from the environment.
-    env:
-      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install the Vercel CLI
-        run: |
-          set -euo pipefail
-          [ -n "${VERCEL_TOKEN:-}" ] || { echo "::error::secret VERCEL_TOKEN is not set — see docs/ci-cd.md"; exit 1; }
-          [ -n "${VERCEL_ORG_ID:-}" ] || { echo "::error::secret VERCEL_ORG_ID is not set — see docs/ci-cd.md"; exit 1; }
-          [ -n "${VERCEL_PROJECT_ID:-}" ] || { echo "::error::secret VERCEL_PROJECT_ID is not set — see docs/ci-cd.md"; exit 1; }
-          # Unpinned: the CLI talks to a hosted API, so an old CLI breaks more often than
-          # a new one. Pin a major here if that changes.
-          npm install --global vercel@latest
-
-      # Runs in frontend/, so the project's Root Directory in the Vercel dashboard must
-      # be empty. Set it to `frontend` too and the CLI looks for frontend/frontend.
-      - name: Pull the project settings
-        working-directory: frontend
-        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
-
-      # Build on the runner so the deployed bundle is the one CI verified, and a build
-      # failure lands in this log. `deploy --prebuilt` then only uploads.
-      - name: Build
-        working-directory: frontend
-        run: vercel build --prod --token="$VERCEL_TOKEN"
-
-      - name: Deploy
-        id: deploy
-        working-directory: frontend
-        run: |
-          set -euo pipefail
-          url=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")
-          echo "url=$url" >> "$GITHUB_OUTPUT"
-          {
-            echo "### Frontend"
-            echo
-            echo "- deployment: $url"
-            echo "- commit: ${{ github.sha }}"
+            echo "- roll back with: \`API_TAG=<previous-tag> WEB_TAG=<previous-tag> docker compose up -d\` on the VM"
           } >> "$GITHUB_STEP_SUMMARY"

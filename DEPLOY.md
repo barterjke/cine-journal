@@ -1,29 +1,39 @@
 # Deploying CinéJournal
 
-Frontend goes to Vercel. API, cache and database go to one Oracle Cloud VM. Both fit
-in free tiers.
+Everything runs on one Oracle Cloud VM, in the free tier. Four containers, one open
+port.
 
 ```
-browser → Vercel (static Vite build)
-            ├── /api/* ──┐
-            └── /img/* ──┤
-                         ▼
-          Oracle Cloud VM
-            caddy :443  (TLS, only open port)
-              └── api
-                   ├── redis   (feed cache, no disk)
-                   ├── /data   (SQLite, on a volume)
-                   └── TMDB    (outbound)
+browser
+   │  https://your-host/
+   ▼
+Oracle Cloud VM
+  caddy :443  (TLS, the only open port)
+    ├── /api/*  ─┐
+    ├── /img/*  ─┴─→ api
+    │                 ├── redis   (feed cache, no disk)
+    │                 ├── /data   (SQLite, on a volume)
+    │                 └── TMDB    (outbound)
+    └── everything else → web  (nginx + the built Vite bundle)
 ```
 
-`/img` must be rewritten as well as `/api`. TMDB posters are absolute CDN URLs, but
-friend avatars are files served by the API. Miss it and posters work while avatars
-404.
+One origin, so there is no CORS and nothing to rewrite. `api.ts` asks for `/api/...`
+and the browser is already on the right host.
+
+Two details that are easy to get wrong, both handled in `Caddyfile` and
+`frontend/nginx.conf`:
+
+- **`/img` is routed like `/api`.** TMDB posters are absolute CDN URLs, but friend
+  avatars are files the API serves. Miss it and posters work while every avatar 404s.
+- **nginx needs an SPA fallback.** The routes live in `frontend/src/main.tsx`, not on
+  disk, so a reload on `/collections/favorites` has to be answered with
+  `index.html`.
 
 ## Warning: writes are not authenticated
 
-There are no accounts. One shared visitor. Anyone who finds the API URL can change
-your ratings, watchlist, bio and comments.
+There are no accounts. One shared visitor. Anyone who opens the site can change your
+ratings, watchlist, bio and comments — and the site and the API are one hostname now,
+so the URL is not obscure.
 
 This is how the app is built, not a bug. See `backend/src/state.rs`. If you don't
 want it, see [Add a password](#add-a-password) below before you set up DNS.
@@ -31,14 +41,13 @@ want it, see [Add a password](#add-a-password) below before you set up DNS.
 ## What you need
 
 - Oracle Cloud account (free tier needs a card for ID checks, doesn't charge it)
-- Vercel account, connected to the GitHub repo
-- A hostname for the API. A free `duckdns.org` subdomain is enough; you don't need to
-  buy a domain. See Part 2.
+- One hostname. A free `duckdns.org` subdomain is enough; you don't need to buy a
+  domain. See Part 2.
 - TMDB read access token. Without it the app serves fake data and shows a banner.
 
-Examples below write the API's hostname as `api.example.com`. Substitute whatever you
-pick in Part 2 — `yourname.duckdns.org`, say. The frontend needs no hostname of its
-own; it lives on `<project>.vercel.app` unless you choose to give it one.
+Examples below write the hostname as `api.example.com`. Substitute whatever you pick
+in Part 2 — `yourname.duckdns.org`, say. It is the only hostname there is: the same
+name serves the site and the API.
 
 ---
 
@@ -127,13 +136,11 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 ---
 
-## 2. A hostname for the API
+## 2. A hostname
 
-**The frontend needs nothing.** Vercel gives you `<project>.vercel.app` with working
-HTTPS. No DNS, no records.
-
-**The API needs a hostname**, because Let's Encrypt won't issue a certificate for a
-bare IP, and without a certificate Caddy can't serve HTTPS. Pick one:
+One name, for the site and the API both. You need it because Let's Encrypt won't issue
+a certificate for a bare IP, and without a certificate Caddy can't serve HTTPS. Pick
+one:
 
 ### Option A — DuckDNS (free, no domain needed)
 
@@ -151,11 +158,11 @@ At your registrar, add one record:
 
 | Type | Name | Value | TTL |
 |---|---|---|---|
-| `A` | `api` | your VM's public IP | 300 |
+| `A` | `films` | your VM's public IP | 300 |
 
-That gives you `api.yourdomain.com`. Only add Vercel's records if you also want the
-*frontend* on your domain instead of `.vercel.app` — Vercel's dashboard tells you the
-exact values, so take them from there rather than from a guide.
+That gives you `films.yourdomain.com`, and that one record is all you need. If you'd
+rather the app sat at the apex, point an `A` record for `@` at the same IP and use
+that as `API_DOMAIN` instead.
 
 ### Don't use nip.io or sslip.io
 
@@ -175,12 +182,12 @@ keeps failing you for a while after you've fixed it.
 dig +short yourname.duckdns.org     # must print your VM's IP
 ```
 
-The same hostname goes in two places: `API_DOMAIN` (Part 3) and the rewrites in
-`frontend/vercel.json` (Part 4).
+The hostname goes in exactly one place: `API_DOMAIN` in `.env` on the VM (Part 3).
+Nothing is baked into the frontend bundle.
 
 ---
 
-## 3. Deploy the API
+## 3. Deploy
 
 **Everything in this part runs on the VM, not on your laptop.** SSH in first:
 
@@ -207,7 +214,8 @@ want to watch the logs once — then hand it to CI as below.
 | `API_DOMAIN` | yes | Your hostname from Part 2, e.g. `cinema-nerd.duckdns.org`. Caddy gets its cert for this. No `https://`, no trailing slash. |
 | `ACME_EMAIL` | yes | **A real address of yours.** Let's Encrypt rejects `example.com`, `test.com` and friends with `invalidContact`, and Caddy then falls back to a different certificate authority — so the failure shows up as "no HTTPS" rather than "bad email". |
 | `TMDB_TOKEN` | no | v4 read access token. Empty = fake data + banner. |
-| `API_TAG` | no | Image tag. Defaults to `latest`. Used for rollback. |
+| `API_TAG` | no | Tag of the API image. Defaults to `latest`. Used for rollback. |
+| `WEB_TAG` | no | Tag of the web image. Same idea, rolls back independently. |
 
 So a filled-in `.env` is three lines:
 
@@ -251,9 +259,9 @@ hand-made file alone, so the manual route keeps working.
 them. An empty `ACME_EMAIL` used to crash-loop Caddy with `wrong argument count`, so
 it's now a hard requirement rather than an optional field.
 
-**Run `docker compose pull` before `up -d`.** The compose file has both `image:` and
-`build:`, so if the tag isn't already local, `up` builds it instead — a silent
-15-minute Rust compile on two shared ARM cores.
+**Run `docker compose pull` before `up -d`.** `api` and `web` both have `image:` and
+`build:`, so if a tag isn't already local, `up` builds it instead — for `api` that's a
+silent 15-minute Rust compile on two shared ARM cores.
 
 **Name the file `.env`.** Docker Compose only auto-loads `.env`. Any other name needs
 `--env-file` on every command, and forgetting it silently falls back to `:latest`
@@ -268,15 +276,22 @@ silently stops working.
 Run these in order. Each one narrows down the next failure.
 
 ```bash
-docker compose ps                              # all 3 up, api healthy
-curl -s localhost:3001/api/health              # the binary
-curl -s https://api.example.com/api/health     # Caddy + DNS + TLS
-docker compose logs api | grep -E 'tmdb|redis' # tmdb: enabled / redis: enabled
+docker compose ps                                    # all 4 up, api and web healthy
+curl -s https://api.example.com/api/health           # Caddy + DNS + TLS + api
+curl -s https://api.example.com/ | grep 'id="root"'  # the bundle
+curl -s https://api.example.com/collections/favorites | grep 'id="root"'   # SPA fallback
+docker compose logs api | grep -E 'tmdb|redis'       # tmdb: enabled / redis: enabled
 ```
 
-The last one matters most. A bad token and a dead cache both leave you with a
-working API and a quieter log, so a 200 from `/api/health` doesn't mean it's
-configured.
+The third and fourth must both return HTML. If the third works and the fourth 404s,
+nginx is serving but `try_files` isn't — check `frontend/nginx.conf`.
+
+The last one matters most. A bad token and a dead cache both leave you with a working
+API and a quieter log, so a 200 from `/api/health` doesn't mean it's configured.
+
+Neither `api` nor `web` publishes a host port, so `curl localhost:3001` no longer
+works. Go through Caddy, or `docker compose exec api curl -s localhost:3001/api/health`
+to skip it.
 
 ### First boot is slow
 
@@ -287,52 +302,65 @@ empty friend list, not a boot failure.
 
 ---
 
-## 4. Deploy the frontend
+## 4. How the frontend is served
 
-### Edit the API domain first
+There is no separate frontend deploy. Part 3 started it: the `web` service is nginx
+with the built Vite bundle baked in, and Caddy sends it everything that isn't `/api`
+or `/img`.
 
-**`frontend/vercel.json` hardcodes `https://api.example.com`. Change it by hand to
-your API domain before deploying.**
+### The three files
 
-Vercel reads `vercel.json` before the build runs and does not interpolate environment
-variables into it, so this can't be generated. Get it wrong and nothing errors: the
-site loads and every API call 404s from Vercel.
-
-This is the second place the domain appears. The first is `API_DOMAIN` in Part 3.
-
-### Project settings
-
-Import the repo in Vercel, then set:
-
-| Setting | Value |
+| File | Job |
 |---|---|
-| Framework preset | Vite |
-| Build command | `npm run build` |
-| Output directory | `dist` |
-| Root directory | depends — see below |
+| `frontend/Dockerfile` | `node:22-alpine` runs `npm ci && npm run build`, then `nginx:1-alpine` copies in `dist`. |
+| `frontend/nginx.conf` | SPA fallback and cache headers. |
+| `Caddyfile` | Path routing: `/api/*` and `/img/*` to `api:3001`, everything else to `web:80`. |
 
-**Root directory depends on how you deploy:**
+### SPA fallback
 
-| Deploy method | Root directory |
-|---|---|
-| GitHub Actions (what `ci-cd.yml` does) | leave **empty** |
-| Vercel's own Git integration | `frontend` |
+```nginx
+try_files $uri $uri/ /index.html;
+```
 
-The workflow runs the Vercel CLI with `working-directory: frontend`, so the CLI is
-already inside that folder and finds `vercel.json` there. Setting Root Directory to
-`frontend` as well makes it resolve twice and fail looking for `frontend/frontend`.
+This is the line that matters. The app's routes — `/collections/favorites`,
+`/people/elenarostova` — exist only in `frontend/src/main.tsx`. Nothing was built to
+those paths, so without the fallback the first load works and every refresh 404s.
 
-With Vercel's Git integration there's no CLI and no working directory, so Vercel needs
-to be told where the app is — otherwise it never reads `vercel.json` at all.
+### Cache headers
 
-### What vercel.json does
+- `/assets/*` — `max-age=31536000, immutable`. Vite hashes those filenames, so a
+  changed file gets a new name.
+- `index.html` — `no-cache`. It names the hashed bundles, so a cached copy points at
+  files the last deploy deleted, and the app loads to a blank page.
 
-Two things: SPA fallback, so refreshing on `/collections/favorites` serves
-`index.html` instead of 404; and rewrites for `/api/*` and `/img/*`.
+### Path routing
 
-The rewrites keep the browser same-origin, same as the Vite dev proxy. `api.ts` uses
-root-relative paths throughout, so the API's address is never in the bundle and
-there's no CORS preflight.
+`handle`, not `handle_path`. `handle_path` strips the matched prefix, so `/api/health`
+would arrive at the API as `/health` and 404 the whole API.
+
+Caddy sorts `handle` blocks by path specificity and puts the matcher-less one last, so
+`/api/*` and `/img/*` beat the catch-all regardless of the order you write them in.
+Check it with:
+
+```bash
+docker compose exec caddy caddy adapt --config /etc/caddy/Caddyfile
+```
+
+### No hostname in the bundle
+
+`api.ts` fetches `/api/...` and `/img/...` — root-relative, so the browser asks
+whatever host it is already on. Single-origin needs no code change, no CORS headers,
+and no build-time API URL. The Vite dev proxy in `frontend/vite.config.ts` does the
+same two prefixes locally.
+
+### Building it by hand
+
+```bash
+docker compose build web        # or: docker build -t cine-journal-web frontend
+```
+
+Context is `frontend/`, unlike the API, whose context is the repo root because it
+serves `/img` from `reference/`.
 
 ---
 
@@ -391,22 +419,26 @@ on any miss.
 
 ### Roll back
 
+Both images are tagged `sha-<short>` by the same commit, so a full rollback is one
+tag in two variables:
+
 ```bash
-docker compose down
-API_TAG=<previous-sha> docker compose up -d
+API_TAG=sha-abc1234 WEB_TAG=sha-abc1234 docker compose up -d
 ```
 
-The variable is `API_TAG`. Get it wrong and compose won't error — it just uses
-`latest`, so the rollback appears to do nothing.
+Either one alone works if only one half is broken. No `docker compose down` first —
+`up -d` recreates just the containers whose image changed.
 
-Roll the frontend back from Vercel's dashboard. The two halves roll back separately;
-see `docs/ci-cd.md`.
+The names are `API_TAG` and `WEB_TAG`. Get one wrong and compose won't error — it uses
+`latest`, so the rollback appears to do nothing. Take the tags from the deploy's run
+summary; see `docs/ci-cd.md`.
 
 ### Logs
 
 ```bash
 docker compose logs -f api
 docker compose logs -f caddy   # cert problems are here, not in api
+docker compose logs -f web     # nginx access log; a 404 here is a routing bug
 ```
 
 `RUST_LOG=cine_journal_api=debug` adds per-operation cache hits and misses. Useful

@@ -7,9 +7,10 @@ import react from '@vitejs/plugin-react'
 // same-origin, so CORS never enters the picture in dev and the poster `src`
 // paths stay identical to the ones in the static export.
 //
-// `vercel.json` does the same two prefixes in production, as rewrites to the OCI
-// host. `api.ts` uses root-relative paths in both cases, so the API's location is
-// never in the bundle.
+// In production Caddy does the same two prefixes, as `handle` blocks in front of the
+// nginx container that serves this build — so both environments are single-origin.
+// `api.ts` uses root-relative paths, so the API's location is never in the bundle.
+// See Caddyfile and frontend/Dockerfile.
 //
 // Both prefixes, not just `/api`: TMDB posters are absolute CDN URLs, but the
 // social layer's avatars come from `/img`, so missing that one breaks every avatar
