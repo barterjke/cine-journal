@@ -385,6 +385,8 @@ jobs:
           API_DOMAIN: ${{ vars.API_DOMAIN }}
           ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
           TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           if [ -z "${API_DOMAIN:-}" ] || [ -z "${ACME_EMAIL:-}" ]; then
@@ -395,8 +397,17 @@ jobs:
           if [ -z "${TMDB_TOKEN:-}" ]; then
             echo "::warning::TMDB_TOKEN is unset — the API will serve the invented dataset behind a banner."
           fi
-          printf 'API_DOMAIN=%s\nACME_EMAIL=%s\nTMDB_TOKEN=%s\n' \
-            "$API_DOMAIN" "$ACME_EMAIL" "${TMDB_TOKEN:-}" |
+          # Also not fatal. With these empty the API boots with sign-in off: reads public,
+          # every write 401. Warn, because on a multi-user site that is the whole app
+          # read-only, and nothing on the page explains why writing fails.
+          if [ -z "${GOOGLE_CLIENT_ID:-}" ] || [ -z "${GOOGLE_CLIENT_SECRET:-}" ]; then
+            echo "::warning::GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET unset — sign-in is disabled, so every write returns 401. See DEPLOY.md."
+          fi
+          # PUBLIC_URL is derived, not configured: the OAuth redirect URI is built from it
+          # and has to match the Google console exactly. One less value to get wrong.
+          printf 'API_DOMAIN=%s\nACME_EMAIL=%s\nTMDB_TOKEN=%s\nPUBLIC_URL=https://%s\nGOOGLE_CLIENT_ID=%s\nGOOGLE_CLIENT_SECRET=%s\n' \
+            "$API_DOMAIN" "$ACME_EMAIL" "${TMDB_TOKEN:-}" "$API_DOMAIN" \
+            "${GOOGLE_CLIENT_ID:-}" "${GOOGLE_CLIENT_SECRET:-}" |
             ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
                 -o ConnectTimeout=15 -p "$PORT" "$USER_NAME@$HOST" \
                 "cd '$DEPLOY_PATH' && umask 077 && cat > .env.new && mv .env.new .env && echo 'wrote .env'"
