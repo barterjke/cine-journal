@@ -8,6 +8,11 @@
 //! The static content is transcribed in `data`; anything the visitor changes
 //! lives in `state` and is folded into these types by `hydrate` on the way out.
 //! Request bodies are at the bottom of the file.
+//!
+//! "The visitor" below means **whoever is reading this response** — the signed-in
+//! account, or nobody. Every field documented as theirs comes from their own
+//! `state::Store`, which is empty for a reader with no session, so the flags read as
+//! untouched rather than as somebody else's. See `auth` and `routes`.
 
 use serde::{Deserialize, Serialize};
 
@@ -483,8 +488,8 @@ pub struct ReviewRequest {
 /// `PUT /api/profile` — the one part of the visitor's identity they own.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BioRequest {
-    /// Empty or whitespace restores the export's line rather than blanking the
-    /// profile, so there is no way to end up with a header that looks broken.
+    /// Empty or whitespace restores the default rather than leaving the field in an
+    /// in-between state; the response says which of the two is now stored.
     pub bio: String,
 }
 
@@ -563,8 +568,9 @@ pub struct ReviewState {
 
 /// Result of editing the visitor's bio: the line now on their profile.
 ///
-/// Always a string, never `None` — clearing it restores the export's line, and the
-/// header has to have something to draw.
+/// Always a string, never `None`. Clearing it gives back the default, which is empty
+/// for a real account and the export's sentence for the legacy visitor — see
+/// `content::default_bio`.
 #[derive(Debug, Clone, Serialize)]
 pub struct BioState {
     pub bio: String,
@@ -744,11 +750,12 @@ pub struct PersonProfile {
     /// How many they've written, so a client that clamps the list still prints the
     /// true number.
     pub review_count: u32,
-    // Deliberately no follower/following counts. The graph stores the visitor's own
-    // edges and nothing else — there is no person-to-person following — so any such
-    // count would be 0 or 1, and a page reading "1 followers" under someone's name
-    // is worse than a page that doesn't claim to know. The two relationships that
-    // *are* real, `following` and `follows_you`, are above.
+    // Deliberately no follower/following counts. A seeded person has no edges of
+    // their own — the harvest gives them a static "follows you" flag and nothing
+    // else — so their count would be a number invented for the page, and a page
+    // reading "1 followers" under someone's name is worse than a page that doesn't
+    // claim to know. Real accounts do follow each other, so the two relationships
+    // that are always true, `following` and `follows_you`, are above.
 }
 
 /// `GET /api/people` — the friend-search screen.
@@ -797,29 +804,31 @@ pub struct RatedFilm {
     pub blurb: Option<String>,
 }
 
-/// `GET /api/profile` — the whole profile screen in one request.
+/// `GET /api/profile` — the signed-in user's whole profile screen in one request.
 ///
-/// The visitor still has no `people` row: there is exactly one of them and no notion
-/// of signing in (see `state`), so a row in the table the *other* people share would
-/// encode an account system that doesn't exist. Their name, handle, avatar and joined
-/// line are the export's, held as constants in `hydrate`.
+/// **401 when nobody is signed in.** This is the account's own page rather than
+/// content, so there is nothing to answer with for a reader who has no account —
+/// see the note at the top of `routes`.
 ///
-/// Their **bio** is the exception, and is stored — `db::visitor_bio`, falling back to
-/// the export's line when they've never edited it. Editing one line of text is not an
-/// account system, and a profile you cannot change any part of is not a profile.
+/// The header is the account's own `people` row: an account lives in the same table
+/// the other people do, so its name, nickname and avatar are Google's and its page is
+/// reachable at `/api/people/{handle}` like anybody else's.
+///
+/// The **bio** is the one part of it the user writes — `db::set_user_bio`, falling
+/// back to a default when they never have.
 ///
 /// Everything below the header is theirs out of SQLite: favourites, watchlist,
-/// ratings, written reviews and the seeded friends.
+/// ratings, written reviews and whoever they follow.
 #[derive(Debug, Clone, Serialize)]
 pub struct Profile {
     pub name: String,
-    /// "@alexm_cinema", with the sigil, since it's never used as a lookup key.
+    /// "@sam", with the sigil, since it's never used as a lookup key.
     pub handle: String,
     pub avatar: Image,
-    /// "Cinephile since 2018" — the export's phrasing, kept whole.
+    /// "Cinephile since 2026" — the export's phrasing, with the year they joined.
     pub member_since: String,
     pub bio: String,
-    /// The films the visitor marked as favourites, most recent first.
+    /// The films they marked as favourites, most recent first.
     ///
     /// Was "their highest-rated films", which meant the strip rearranged itself
     /// whenever they rated anything and could never be *chosen*. The heart on a

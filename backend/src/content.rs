@@ -15,9 +15,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::db;
-use crate::hydrate::{
-    visitor_avatar, VISITOR_BIO, VISITOR_HANDLE, VISITOR_NAME, VISITOR_SINCE,
-};
+use crate::hydrate::{VISITOR_BIO, VISITOR_SINCE};
 use crate::models::*;
 use crate::tmdb::{self, map, DiscoverFilters, Tmdb};
 use crate::{data, hydrate};
@@ -138,14 +136,30 @@ fn lock(db: &Db) -> std::sync::MutexGuard<'_, rusqlite::Connection> {
     db.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Read the visitor's deltas. Falls back to an empty store rather than failing the
-/// request — a screen missing its likes beats no screen.
-pub fn store(db: &Db) -> crate::state::Store {
+/// Read one user's deltas, or an empty store for an anonymous reader.
+///
+/// Anonymous short-circuits before SQLite: there is no id to scope a query to, and
+/// an empty `Store` is exactly what hydrating for a reader with no account means.
+///
+/// A read failure also falls back to an empty store rather than failing the request —
+/// a screen missing its likes beats no screen.
+pub fn store(db: &Db, user: Option<&str>) -> crate::state::Store {
+    let Some(user) = user else {
+        return crate::state::Store::default();
+    };
     let conn = lock(db);
-    db::load_store(&conn).unwrap_or_else(|error| {
-        tracing::error!(%error, "could not read the visitor's state");
+    db::load_store(&conn, user).unwrap_or_else(|error| {
+        tracing::error!(%error, "could not read a user's state");
         crate::state::Store::default()
     })
+}
+
+/// The id to scope a query to, for a reader who may not be signed in.
+///
+/// `db::ANONYMOUS` matches no row, so the personal tables come back empty and the
+/// follow flags come back false without a second code path — see `db::USER_SELECT`.
+fn viewer(user: Option<&str>) -> &str {
+    user.unwrap_or(db::ANONYMOUS)
 }
 
 // --- Reads --------------------------------------------------------------------
@@ -265,17 +279,32 @@ const FEED_REVIEW_WINDOW: u32 = 60;
 /// Every card is derived from something the visitor or the people they follow did.
 /// There is no filler when a source runs dry; the feed simply ends, and the screen says
 /// so.
-pub async fn feed_page(source: &Source, db: &Db, cursor: Option<&str>) -> FeedPage {
+/// An anonymous reader gets the graph's newest reviews and nothing else. Those are
+/// public content, the same rows a person's page shows, so serving them leaks nothing
+/// — and a signed-out home page with no films on it would make a browsable site look
+/// broken. The journal and the recommendation rail stay empty, because both are
+/// derived from somebody's own rows.
+pub async fn feed_page(
+    source: &Source,
+    db: &Db,
+    user: Option<&str>,
+    cursor: Option<&str>,
+) -> FeedPage {
     let cursor = cursor.and_then(FeedCursor::parse).unwrap_or_default();
+    let me = viewer(user);
 
     // One lock, one scope, no `.await` inside it.
     let (reviews, journal, favorite_ids, watchlist_ids) = {
         let conn = lock(db);
+        let reviews = match user {
+            Some(_) => db::reviews_from_followed(&conn, me, FEED_REVIEW_WINDOW),
+            None => db::recent_reviews(&conn, me, FEED_REVIEW_WINDOW),
+        };
         (
-            db::reviews_from_followed(&conn, FEED_REVIEW_WINDOW).unwrap_or_default(),
-            db::journal_recent_first(&conn).unwrap_or_default(),
-            db::favorites_recent_first(&conn).unwrap_or_default(),
-            db::watchlist_recent_first(&conn).unwrap_or_default(),
+            reviews.unwrap_or_default(),
+            db::journal_recent_first(&conn, me).unwrap_or_default(),
+            db::favorites_recent_first(&conn, me).unwrap_or_default(),
+            db::watchlist_recent_first(&conn, me).unwrap_or_default(),
         )
     };
 
@@ -377,14 +406,22 @@ pub async fn feed_page(source: &Source, db: &Db, cursor: Option<&str>) -> FeedPa
 /// The same three facts the desktop feed draws, in the shape this screen has: one
 /// rail and one grid. Tapping a circle opens that person's newest review, which is
 /// what makes the rail a rail rather than a row of decoration.
-pub async fn mobile_feed(source: &Source, db: &Db) -> MobileFeed {
+///
+/// As on the desktop feed, an anonymous reader gets the graph's newest reviews rather
+/// than an empty grid — and no stories rail, because that rail *is* the follow list.
+pub async fn mobile_feed(source: &Source, db: &Db, user: Option<&str>) -> MobileFeed {
+    let me = viewer(user);
     let (followed, reviews, favorite_ids, watchlist_ids) = {
         let conn = lock(db);
+        let reviews = match user {
+            Some(_) => db::reviews_from_followed(&conn, me, FRIEND_REVIEWS_SHOWN),
+            None => db::recent_reviews(&conn, me, FRIEND_REVIEWS_SHOWN),
+        };
         (
-            db::followed_with_newest_review(&conn, STORIES_SHOWN as u32).unwrap_or_default(),
-            db::reviews_from_followed(&conn, FRIEND_REVIEWS_SHOWN).unwrap_or_default(),
-            db::favorites_recent_first(&conn).unwrap_or_default(),
-            db::watchlist_recent_first(&conn).unwrap_or_default(),
+            db::followed_with_newest_review(&conn, me, STORIES_SHOWN as u32).unwrap_or_default(),
+            reviews.unwrap_or_default(),
+            db::favorites_recent_first(&conn, me).unwrap_or_default(),
+            db::watchlist_recent_first(&conn, me).unwrap_or_default(),
         )
     };
 
@@ -592,25 +629,29 @@ async fn recommended(
     ranked.into_iter().take(RECOMMENDED_SHOWN).map(|c| c.rec).collect()
 }
 
-/// The profile screen.
+/// The signed-in user's own profile screen. `None` when the id names no account.
 ///
 /// Unlike every other function here there is no `data::` counterpart to fall back
-/// to, and that is the point: the whole screen below the header is the visitor's
+/// to, and that is the point: the whole screen below the header is that account's
 /// own rows out of SQLite, which exist in both modes. Only the film *titles and
 /// posters* behind their stored ids need a source, and each is resolved
 /// independently — a film TMDB has forgotten drops out of the grid rather than
 /// blanking it.
-pub async fn profile(source: &Source, db: &Db) -> Profile {
+///
+/// The header is the account's `people` row now, not the export's constants: a real
+/// account has a name, a nickname and a face of its own. The legacy visitor is the
+/// one account still wearing the export's, because those rows were shown under it.
+pub async fn profile(source: &Source, db: &Db, user: &str) -> Option<Profile> {
     // One lock, one scope, no `.await` inside it.
-    let (follows, follow_count, favorite_ids, watchlist_ids, journal, bio) = {
+    let (account, follows, follow_count, favorite_ids, watchlist_ids, journal) = {
         let conn = lock(db);
         (
-            db::following(&conn).unwrap_or_default(),
-            db::follow_count(&conn).unwrap_or(0),
-            db::favorites_recent_first(&conn).unwrap_or_default(),
-            db::watchlist_recent_first(&conn).unwrap_or_default(),
-            db::journal_recent_first(&conn).unwrap_or_default(),
-            db::visitor_bio(&conn).unwrap_or_default(),
+            db::account(&conn, user).ok().flatten()?,
+            db::following(&conn, user).unwrap_or_default(),
+            db::follow_count(&conn, user).unwrap_or(0),
+            db::favorites_recent_first(&conn, user).unwrap_or_default(),
+            db::watchlist_recent_first(&conn, user).unwrap_or_default(),
+            db::journal_recent_first(&conn, user).unwrap_or_default(),
         )
     };
 
@@ -625,14 +666,14 @@ pub async fn profile(source: &Source, db: &Db) -> Profile {
         })
         .collect();
 
-    Profile {
-        name: VISITOR_NAME.into(),
-        handle: VISITOR_HANDLE.into(),
-        avatar: visitor_avatar(),
-        member_since: VISITOR_SINCE.into(),
-        // Their own line if they've written one, the export's otherwise. See
-        // `db::visitor_bio` for why the default isn't stored eagerly.
-        bio: bio.unwrap_or_else(|| VISITOR_BIO.into()),
+    Some(Profile {
+        name: account.name.clone(),
+        handle: account.handle.clone(),
+        avatar: account.avatar.clone(),
+        member_since: member_since(&account),
+        // Their own line if they've written one, the default otherwise. See
+        // `db::user_bio` for why the default isn't stored eagerly.
+        bio: account.bio.clone().unwrap_or_else(|| default_bio(&account.id)),
         favorites: movies_for(source, favorite_ids.iter().map(String::as_str), FAVORITES_SHOWN)
             .await,
         watchlist: movies_for(source, watchlist_ids.iter().map(String::as_str), WATCHLIST_SHOWN)
@@ -643,6 +684,31 @@ pub async fn profile(source: &Source, db: &Db) -> Profile {
         // many people you follow is the one thing this must not do.
         following_count: follow_count,
         following,
+    })
+}
+
+/// The line under an account's name when they have written no bio.
+///
+/// The legacy visitor keeps the export's sentence, because it is the line their
+/// profile has always shown and clearing a bio should put back what was there. A real
+/// account gets nothing rather than a borrowed personality — the header simply omits
+/// the line, which is honest for somebody who has not written one.
+fn default_bio(user: &str) -> String {
+    if user == db::LEGACY_USER_ID {
+        VISITOR_BIO.to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// "Cinephile since 2026" — the export's phrasing, with a year that is true.
+///
+/// The legacy visitor has no `joined_at`, since their rows predate sign-in, so they
+/// keep the export's fixed line rather than claiming a date nothing recorded.
+fn member_since(account: &db::AccountRow) -> String {
+    match account.joined_at.as_deref().and_then(|stamp| stamp.get(..4)) {
+        Some(year) => format!("Cinephile since {year}"),
+        None => VISITOR_SINCE.to_string(),
     }
 }
 
@@ -677,6 +743,7 @@ pub fn is_collection(slug: &str) -> bool {
 pub async fn collection(
     source: &Source,
     db: &Db,
+    user: Option<&str>,
     slug: &str,
     person: Option<&str>,
 ) -> Option<Collection> {
@@ -685,22 +752,24 @@ pub async fn collection(
     }
 
     match person {
-        Some(handle) => person_collection(source, db, slug, handle).await,
-        None => Some(visitor_collection(source, db, slug).await),
+        Some(handle) => person_collection(source, db, user, slug, handle).await,
+        None => Some(own_collection(source, db, user, slug).await),
     }
 }
 
-/// The visitor's own favourites, watchlist or journal.
-async fn visitor_collection(source: &Source, db: &Db, slug: &str) -> Collection {
+/// The reader's own favourites, watchlist or journal. Empty for an anonymous one,
+/// whose store is empty — the page exists, they have nothing in it.
+async fn own_collection(source: &Source, db: &Db, user: Option<&str>, slug: &str) -> Collection {
+    let me = viewer(user);
     // One lock, one scope, no `.await` inside it — and all three lists are read
     // whichever slug was asked for, because the read is one cheap query each and
     // branching inside the guard would put a `match` between the lock and its drop.
     let (favorite_ids, watchlist_ids, journal) = {
         let conn = lock(db);
         (
-            db::favorites_recent_first(&conn).unwrap_or_default(),
-            db::watchlist_recent_first(&conn).unwrap_or_default(),
-            db::journal_recent_first(&conn).unwrap_or_default(),
+            db::favorites_recent_first(&conn, me).unwrap_or_default(),
+            db::watchlist_recent_first(&conn, me).unwrap_or_default(),
+            db::journal_recent_first(&conn, me).unwrap_or_default(),
         )
     };
 
@@ -742,14 +811,14 @@ async fn visitor_collection(source: &Source, db: &Db, slug: &str) -> Collection 
 async fn person_collection(
     source: &Source,
     db: &Db,
+    user: Option<&str>,
     slug: &str,
     handle: &str,
 ) -> Option<Collection> {
     let (row, favorite_ids, watchlist_ids) = {
         let conn = lock(db);
-        let row = db::person_by_handle(&conn, handle).ok().flatten()?;
-        let favorites = db::favorites_by_person(&conn, &row.id).unwrap_or_default();
-        let watchlist = db::watchlist_by_person(&conn, &row.id).unwrap_or_default();
+        let row = db::person_by_handle(&conn, viewer(user), handle).ok().flatten()?;
+        let (favorites, watchlist) = person_taste(&conn, &row);
         (row, favorites, watchlist)
     };
 
@@ -974,18 +1043,45 @@ fn review_bio(reviews: &[(String, u8, String, String)]) -> String {
 /// third panel listing every account on the server was neither of those: it made the
 /// page a user directory that happened to have your friends in a sidebar. Search is
 /// how you find somebody you don't already follow, so it answers only when asked.
-pub fn people(db: &Db, query: &str) -> PeopleResponse {
+/// An anonymous reader can search — accounts and seeded people are public — but has
+/// no two lists of their own, so those come back empty rather than showing whose
+/// followers the seed happened to invent.
+pub fn people(db: &Db, user: Option<&str>, query: &str) -> PeopleResponse {
+    let me = viewer(user);
     let conn = lock(db);
     let results = if query.trim().is_empty() {
         Vec::new()
     } else {
-        db::search_people(&conn, query).unwrap_or_default().iter().map(card).collect()
+        db::search_people(&conn, me, query).unwrap_or_default().iter().map(card).collect()
     };
-    PeopleResponse {
-        query: query.to_string(),
-        results,
-        following: db::followed_users(&conn).unwrap_or_default().iter().map(card).collect(),
-        followers: db::followers(&conn).unwrap_or_default().iter().map(card).collect(),
+    let (following, followers) = match user {
+        Some(_) => (
+            db::followed_users(&conn, me).unwrap_or_default().iter().map(card).collect(),
+            db::followers(&conn, me).unwrap_or_default().iter().map(card).collect(),
+        ),
+        None => (Vec::new(), Vec::new()),
+    };
+    PeopleResponse { query: query.to_string(), results, following, followers }
+}
+
+/// One person's favourites and watchlist, from whichever pair of tables holds them.
+///
+/// A real account writes to `favorites` and `watchlist` by pressing buttons; a seeded
+/// person was filled into `user_favorites` and `user_watchlist` by the harvest, which
+/// derived both from their reviews. Two sources, one page — otherwise a signed-in
+/// user's page would show reviews and two empty strips while a seeded person's showed
+/// all three.
+fn person_taste(conn: &rusqlite::Connection, row: &db::UserRow) -> (Vec<String>, Vec<String>) {
+    if row.is_account {
+        (
+            db::favorites_recent_first(conn, &row.id).unwrap_or_default(),
+            db::watchlist_recent_first(conn, &row.id).unwrap_or_default(),
+        )
+    } else {
+        (
+            db::favorites_by_person(conn, &row.id).unwrap_or_default(),
+            db::watchlist_by_person(conn, &row.id).unwrap_or_default(),
+        )
     }
 }
 
@@ -1008,13 +1104,18 @@ fn card(row: &db::UserRow) -> PersonCard {
 /// favourites, their watchlist and their reviews. A page that showed only reviews
 /// while yours showed four tiles made two kinds of person out of one — and the
 /// difference that is real is the header, not the body.
-pub async fn person(source: &Source, db: &Db, handle: &str) -> Option<PersonProfile> {
+pub async fn person(
+    source: &Source,
+    db: &Db,
+    user: Option<&str>,
+    handle: &str,
+) -> Option<PersonProfile> {
+    let me = viewer(user);
     let (row, reviews, favorite_ids, watchlist_ids) = {
         let conn = lock(db);
-        let row = db::person_by_handle(&conn, handle).ok().flatten()?;
-        let reviews = db::reviews_by_person(&conn, &row.id).unwrap_or_default();
-        let favorites = db::favorites_by_person(&conn, &row.id).unwrap_or_default();
-        let watchlist = db::watchlist_by_person(&conn, &row.id).unwrap_or_default();
+        let row = db::person_by_handle(&conn, me, handle).ok().flatten()?;
+        let reviews = db::reviews_by_person(&conn, me, &row.id).unwrap_or_default();
+        let (favorites, watchlist) = person_taste(&conn, &row);
         (row, reviews, favorites, watchlist)
     };
 
@@ -1040,10 +1141,15 @@ pub async fn person(source: &Source, db: &Db, handle: &str) -> Option<PersonProf
 /// The film's title and poster are already on the page that asks for this, so this
 /// resolves them anyway rather than trusting the caller: a person's page needs them
 /// too, and one shape for both means the detail page can't drift from the profile.
-pub async fn reviews_of_movie(source: &Source, db: &Db, movie_id: &str) -> Vec<UserReview> {
+pub async fn reviews_of_movie(
+    source: &Source,
+    db: &Db,
+    user: Option<&str>,
+    movie_id: &str,
+) -> Vec<UserReview> {
     let rows = {
         let conn = lock(db);
-        db::reviews_for_movie(&conn, movie_id).unwrap_or_default()
+        db::reviews_for_movie(&conn, viewer(user), movie_id).unwrap_or_default()
     };
     user_reviews(source, &rows).await
 }
@@ -1100,28 +1206,29 @@ async fn user_reviews(source: &Source, rows: &[db::UserReviewRow]) -> Vec<UserRe
 /// never going to work, a 500 tells it to leave the button alone and try again.
 pub fn set_follow(
     db: &Db,
+    user: &str,
     person_id: &str,
     target: Option<bool>,
 ) -> rusqlite::Result<Option<FollowState>> {
     let conn = lock(db);
-    let Some(following) = db::set_follow(&conn, person_id, target)? else {
+    let Some(following) = db::set_follow(&conn, user, person_id, target)? else {
         return Ok(None);
     };
     Ok(Some(FollowState {
         person_id: person_id.to_string(),
         following,
-        following_count: db::follow_count(&conn)?,
+        following_count: db::follow_count(&conn, user)?,
     }))
 }
 
-/// Store the visitor's bio and return the line their profile now shows.
+/// Store one account's bio and return the line their profile now shows.
 ///
-/// Clearing it restores `VISITOR_BIO` rather than leaving the header blank, so the
+/// Clearing it restores the default rather than leaving the header blank, so the
 /// fallback lives here — one place — rather than in the handler and the profile
-/// builder separately.
-pub fn set_bio(db: &Db, bio: &str) -> rusqlite::Result<String> {
+/// builder separately. See `default_bio` for what the default is.
+pub fn set_bio(db: &Db, user: &str, bio: &str) -> rusqlite::Result<String> {
     let conn = lock(db);
-    Ok(db::set_visitor_bio(&conn, bio)?.unwrap_or_else(|| VISITOR_BIO.into()))
+    Ok(db::set_user_bio(&conn, user, bio)?.unwrap_or_else(|| default_bio(user)))
 }
 
 /// "5 films reviewed · generous ratings" — a followed person's line on the profile.
@@ -1225,10 +1332,10 @@ fn first_sentence(synopsis: &str) -> Option<String> {
 /// page you could open had reviews you couldn't; and the harvest had already
 /// imported those very reviewers *as our users*, so it duplicated data we own. One
 /// system now, and every review on screen belongs to somebody with a page.
-pub async fn reviews(source: &Source, db: &Db) -> Vec<Review> {
+pub async fn reviews(source: &Source, db: &Db, user: Option<&str>) -> Vec<Review> {
     let rows = {
         let conn = lock(db);
-        db::recent_reviews(&conn, RECENT_REVIEWS).unwrap_or_default()
+        db::recent_reviews(&conn, viewer(user), RECENT_REVIEWS).unwrap_or_default()
     };
 
     let mut out = Vec::with_capacity(rows.len());
@@ -1244,10 +1351,15 @@ pub async fn reviews(source: &Source, db: &Db) -> Vec<Review> {
 }
 
 /// One review by its `<person>-<film>` id.
-pub async fn review_by_id(source: &Source, db: &Db, id: &str) -> Option<Review> {
+pub async fn review_by_id(
+    source: &Source,
+    db: &Db,
+    user: Option<&str>,
+    id: &str,
+) -> Option<Review> {
     let row = {
         let conn = lock(db);
-        db::review_by_id(&conn, id).ok().flatten()?
+        db::review_by_id(&conn, viewer(user), id).ok().flatten()?
     };
     full_review(source, &row).await
 }
@@ -1745,30 +1857,58 @@ fn decade_bounds(label: &str) -> Option<(u16, u16)> {
 /// comment nothing will ever render. Deliberately a plain SQLite lookup rather than
 /// `review_by_id`, which resolves the film: liking a review must not depend on TMDB
 /// being reachable.
+/// A review is public content, so this asks as nobody: the viewer only decides the
+/// `followed` flag, which existence does not depend on.
 pub fn review_exists(db: &Db, id: &str) -> bool {
     let conn = lock(db);
-    db::review_by_id(&conn, id).ok().flatten().is_some()
+    db::review_by_id(&conn, db::ANONYMOUS, id).ok().flatten().is_some()
 }
 
-/// Whether this comment exists. Guards replies and likes against ids nothing
-/// renders.
+/// Whether this account posted this comment. Guards replies and likes against ids
+/// nothing renders.
 ///
-/// Every comment there is was posted by the visitor — reviews arrive with none —
-/// so SQLite is the whole answer.
-pub fn comment_exists(db: &Db, review_id: &str, comment_id: &str) -> bool {
+/// A thread shows only the comments you wrote, so scoping this to the account is what
+/// keeps "can reply to it" and "can see it" the same set.
+pub fn comment_exists(db: &Db, user: &str, review_id: &str, comment_id: &str) -> bool {
     let conn = lock(db);
-    db::comment_exists(&conn, review_id, comment_id).unwrap_or(false)
+    db::comment_exists(&conn, user, review_id, comment_id).unwrap_or(false)
 }
 
-/// A review with the visitor's likes, comments and replies folded in.
-pub async fn hydrated_review(source: &Source, db: &Db, id: &str) -> Option<Review> {
-    let review = review_by_id(source, db, id).await?;
-    Some(hydrate::review(review, &store(db)))
+/// A review with the reader's own likes, comments and replies folded in.
+pub async fn hydrated_review(
+    source: &Source,
+    db: &Db,
+    user: Option<&str>,
+    id: &str,
+) -> Option<Review> {
+    let review = review_by_id(source, db, user, id).await?;
+    Some(hydrate::review(review, &store(db, user)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The account the tests below act as. Its id is derived from the Google subject,
+    /// so it is knowable without threading a variable through every call.
+    const ME: &str = "account-1001";
+
+    /// Sign somebody in, through the same path a real callback takes.
+    fn sign_in(db: &Db) -> String {
+        let conn = lock(db);
+        db::upsert_google_account(
+            &conn,
+            &db::GoogleAccount {
+                sub: "1001".into(),
+                email: Some("me@example.com".into()),
+                name: "Test Viewer".into(),
+                avatar: Image::new("img/avatar-test.jpg", "A test avatar."),
+                handle: "testviewer".into(),
+            },
+        )
+        .expect("an account")
+        .id
+    }
 
     /// The demo path must not touch the network, so `Source::Demo` has to be
     /// buildable and usable without a client.
@@ -1782,19 +1922,20 @@ mod tests {
         // nothing, in either mode. This used to be the export's two "Live Now" rooms,
         // four "Recent Entries" and three activity lines — every one of them invented,
         // which is the point: an empty feed is the true answer here.
-        let page = feed_page(&source, &db, None).await;
+        sign_in(&db);
+        let page = feed_page(&source, &db, Some(ME), None).await;
         assert!(page.items.is_empty());
         // And it says so rather than offering a cursor: a client handed one would ask
         // for a second empty page, and go on asking.
         assert!(page.next_cursor.is_none());
 
-        let mobile = mobile_feed(&source, &db).await;
+        let mobile = mobile_feed(&source, &db, Some(ME)).await;
         assert!(mobile.stories.is_empty());
         assert!(mobile.items.is_empty());
 
         // Reviews are the graph's, not the export's, so an unseeded database has
         // none — which is a different claim from "the export has none".
-        assert!(reviews(&source, &db).await.is_empty());
+        assert!(reviews(&source, &db, Some(ME)).await.is_empty());
 
         // The demo's "every id resolves" behaviour, which TMDB mode replaces with
         // a real 404.
@@ -1809,14 +1950,18 @@ mod tests {
     async fn the_feeds_are_built_from_follows_and_the_journal() {
         let source = Source::Demo { reason: "testing".into() };
         let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
-        let followed: Vec<String> = {
+        {
             let conn = lock(&db);
             db::seed_graph(&conn, &db::demo_graph()).unwrap();
-            db::set_rating(&conn, "neon-reverie", 8).unwrap();
-            db::following(&conn).unwrap().into_iter().map(|row| row.id).collect()
+        }
+        sign_in(&db);
+        let followed: Vec<String> = {
+            let conn = lock(&db);
+            db::set_rating(&conn, ME, "neon-reverie", 8).unwrap();
+            db::following(&conn, ME).unwrap().into_iter().map(|row| row.id).collect()
         };
 
-        let page = feed_page(&source, &db, None).await;
+        let page = feed_page(&source, &db, Some(ME), None).await;
         assert!(!page.items.is_empty());
 
         let reviews: Vec<&UserReview> = page
@@ -1855,7 +2000,7 @@ mod tests {
 
         // The mobile rail is the same graph, one circle per followed person, each
         // opening a review that really exists.
-        let mobile = mobile_feed(&source, &db).await;
+        let mobile = mobile_feed(&source, &db, Some(ME)).await;
         assert_eq!(mobile.stories.len(), followed.len().min(STORIES_SHOWN));
         for story in &mobile.stories {
             if let Some(id) = &story.review_id {
@@ -1909,7 +2054,7 @@ mod tests {
         let (source, db) = graph().await;
         {
             let conn = lock(&db);
-            db::set_rating(&conn, "neon-reverie", 8).unwrap();
+            db::set_rating(&conn, ME, "neon-reverie", 8).unwrap();
         }
 
         let mut seen: Vec<String> = Vec::new();
@@ -1917,7 +2062,7 @@ mod tests {
         let mut pages = 0;
 
         loop {
-            let page = feed_page(&source, &db, cursor.as_deref()).await;
+            let page = feed_page(&source, &db, Some(ME), cursor.as_deref()).await;
             pages += 1;
             assert!(page.items.len() <= FEED_PAGE_SIZE);
             assert!(!page.from_cache, "content never claims to have come from the cache");
@@ -1951,12 +2096,13 @@ mod tests {
         {
             let conn = lock(&db);
             for id in ["neon-reverie", "le-souffle", "the-drop"] {
-                db::set_favorite(&conn, id, Some(true)).unwrap();
+                db::set_favorite(&conn, ME, id, Some(true)).unwrap();
             }
-            db::set_rating(&conn, "red-shift", 7).unwrap();
+            db::set_rating(&conn, ME, "red-shift", 7).unwrap();
         }
 
-        let favorites = collection(&source, &db, "favorites", None).await.expect("the visitor's");
+        let favorites =
+            collection(&source, &db, Some(ME), "favorites", None).await.expect("their own");
         assert_eq!(favorites.slug, "favorites");
         assert_eq!(favorites.title, "Favorite Films");
         assert!(favorites.owner.is_none(), "the visitor's own has no owner header");
@@ -1966,13 +2112,14 @@ mod tests {
         assert!(favorites.movies.iter().all(|m| m.rating_half_stars.is_none()));
 
         // The journal is the one collection with stars behind it.
-        let journal = collection(&source, &db, "journal", None).await.expect("the visitor's");
+        let journal =
+            collection(&source, &db, Some(ME), "journal", None).await.expect("their own");
         assert_eq!(journal.movies.len(), 1);
         assert_eq!(journal.movies[0].movie.id, "red-shift");
         assert_eq!(journal.movies[0].rating_half_stars, Some(7));
 
         // Somebody else's carries a header saying whose it is.
-        let theirs = collection(&source, &db, "favorites", Some("elenarostova"))
+        let theirs = collection(&source, &db, Some(ME), "favorites", Some("elenarostova"))
             .await
             .expect("a seeded user");
         let owner = theirs.owner.expect("somebody else's names them");
@@ -1988,10 +2135,12 @@ mod tests {
     async fn an_unknown_collection_is_a_404() {
         let (source, db) = graph().await;
 
-        assert!(collection(&source, &db, "everything", None).await.is_none());
-        assert!(collection(&source, &db, "favorites", Some("nobody-at-all")).await.is_none());
+        assert!(collection(&source, &db, Some(ME), "everything", None).await.is_none());
+        assert!(collection(&source, &db, Some(ME), "favorites", Some("nobody")).await.is_none());
         // Somebody else has no journal: their reviews are already their page.
-        assert!(collection(&source, &db, "journal", Some("elenarostova")).await.is_none());
+        assert!(collection(&source, &db, Some(ME), "journal", Some("elenarostova"))
+            .await
+            .is_none());
 
         assert!(is_collection("watchlist"));
         assert!(!is_collection("Watchlist"), "slugs are the URL's, and the URL is lowercase");
@@ -2051,12 +2200,13 @@ mod tests {
         }
 
         // The clamped card, as a film page lists it.
-        let cards = reviews_of_movie(&source, &db, "dune-part-two").await;
+        let cards = reviews_of_movie(&source, &db, Some(ME), "dune-part-two").await;
         assert!(!cards.is_empty(), "the demo graph has reviews of this film");
         let card = &cards[0];
 
         // The same id, expanded.
-        let full = review_by_id(&source, &db, &card.id).await.expect("the card's id resolves");
+        let full =
+            review_by_id(&source, &db, Some(ME), &card.id).await.expect("the card's id resolves");
         assert_eq!(full.id, card.id);
         assert_eq!(full.author_name, card.author_name);
         assert_eq!(full.author_handle, card.author_handle);
@@ -2070,7 +2220,7 @@ mod tests {
         // And the guards the mutation handlers use agree with the lookup.
         assert!(review_exists(&db, &card.id));
         assert!(!review_exists(&db, "user-nobody-dune-part-two"));
-        assert!(review_by_id(&source, &db, "user-nobody-dune-part-two").await.is_none());
+        assert!(review_by_id(&source, &db, Some(ME), "user-nobody-dune-part-two").await.is_none());
     }
 
     /// `GET /api/reviews` opens on people the visitor follows.
@@ -2082,8 +2232,9 @@ mod tests {
             let conn = lock(&db);
             db::seed_graph(&conn, &db::demo_graph()).unwrap();
         }
+        sign_in(&db);
 
-        let listed = reviews(&source, &db).await;
+        let listed = reviews(&source, &db, Some(ME)).await;
         assert!(!listed.is_empty());
         assert!(listed.len() <= RECENT_REVIEWS as usize);
         assert!(listed[0].author_followed, "the list opens on a friend");
@@ -2101,43 +2252,50 @@ mod tests {
         let source = Source::Demo { reason: "testing".into() };
         let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
 
-        // An untouched visitor: a header and four empty strips. Empty rather than
-        // borrowed posters — see `Profile::favorites`. "Following" is empty too,
-        // because on a database with no graph in it the visitor follows nobody.
-        let empty = profile(&source, &db).await;
-        assert_eq!(empty.name, "Alex Mercer");
-        assert_eq!(empty.handle, "@alexm_cinema");
-        assert_eq!(empty.bio, VISITOR_BIO, "an unedited bio is the export's line");
+        // An id nobody signed in as has no profile at all — that is the 401 the
+        // handler turns it into rather than an invented header.
+        assert!(profile(&source, &db, "account-nobody").await.is_none());
+
+        // A fresh account: a header and four empty strips. Empty rather than borrowed
+        // posters — see `Profile::favorites`. "Following" is empty too, because on a
+        // database with no graph in it there is nobody to start out following.
+        sign_in(&db);
+        let empty = profile(&source, &db, ME).await.expect("a signed-in account");
+        assert_eq!(empty.name, "Test Viewer");
+        assert_eq!(empty.handle, "@testviewer");
+        assert!(empty.bio.is_empty(), "an unwritten bio borrows nobody's personality");
+        assert!(empty.member_since.starts_with("Cinephile since "));
         assert!(empty.favorites.is_empty());
         assert!(empty.watchlist.is_empty());
         assert!(empty.recent_reviews.is_empty());
         assert!(empty.following.is_empty());
         assert_eq!(empty.following_count, 0);
 
-        // With the graph seeded, the count and the list agree — and both agree with
-        // the friend directory, which is the point of taking the count from the
-        // graph rather than from the list's length.
+        // With the graph seeded and the follows granted, the count and the list agree —
+        // and both agree with the friend directory, which is the point of taking the
+        // count from the graph rather than from the list's length.
         {
             let conn = lock(&db);
             db::seed_graph(&conn, &db::demo_graph()).unwrap();
+            db::grant_starter_follows(&conn, ME).unwrap();
         }
-        let seeded = profile(&source, &db).await;
+        let seeded = profile(&source, &db, ME).await.unwrap();
         assert_eq!(seeded.following_count as usize, seeded.following.len());
-        assert_eq!(seeded.following_count as usize, people(&db, "").following.len());
+        assert_eq!(seeded.following_count as usize, people(&db, Some(ME), "").following.len());
         assert!(!seeded.following.is_empty());
         assert!(seeded.following.iter().all(|f| !f.subtitle.is_empty()));
         assert!(seeded.following.iter().all(|f| f.handle.is_some()));
 
         {
             let conn = lock(&db);
-            db::set_watchlist(&conn, "le-souffle", Some(true)).unwrap();
-            db::set_watchlist(&conn, "red-shift", Some(true)).unwrap();
-            db::set_rating(&conn, "neon-reverie", 9).unwrap();
-            db::set_rating(&conn, "the-drop", 5).unwrap();
-            db::set_favorite(&conn, "the-drop", Some(true)).unwrap();
+            db::set_watchlist(&conn, ME, "le-souffle", Some(true)).unwrap();
+            db::set_watchlist(&conn, ME, "red-shift", Some(true)).unwrap();
+            db::set_rating(&conn, ME, "neon-reverie", 9).unwrap();
+            db::set_rating(&conn, ME, "the-drop", 5).unwrap();
+            db::set_favorite(&conn, ME, "the-drop", Some(true)).unwrap();
         }
 
-        let filled = profile(&source, &db).await;
+        let filled = profile(&source, &db, ME).await.unwrap();
         // Newest first, and both resolved to a real title and poster.
         assert_eq!(
             filled.watchlist.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
@@ -2164,13 +2322,14 @@ mod tests {
         let source = Source::Demo { reason: "testing".into() };
         let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
 
+        sign_in(&db);
         {
             let conn = lock(&db);
-            db::set_rating(&conn, "neon-reverie", 9).unwrap();
-            db::set_visitor_review(&conn, "le-souffle", "Two hours of held breath.").unwrap();
+            db::set_rating(&conn, ME, "neon-reverie", 9).unwrap();
+            db::set_user_review(&conn, ME, "le-souffle", "Two hours of held breath.").unwrap();
         }
 
-        let filled = profile(&source, &db).await;
+        let filled = profile(&source, &db, ME).await.unwrap();
         assert_eq!(filled.recent_reviews.len(), 2, "a rating and a review are both entries");
 
         let written = filled.recent_reviews.iter().find(|r| r.id == "le-souffle").unwrap();
@@ -2194,11 +2353,20 @@ mod tests {
         let source = Source::Demo { reason: "testing".into() };
         let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
 
-        assert_eq!(set_bio(&db, "  Only watches sequels. ").unwrap(), "Only watches sequels.");
-        assert_eq!(profile(&source, &db).await.bio, "Only watches sequels.");
+        sign_in(&db);
+        assert_eq!(
+            set_bio(&db, ME, "  Only watches sequels. ").unwrap(),
+            "Only watches sequels."
+        );
+        assert_eq!(profile(&source, &db, ME).await.unwrap().bio, "Only watches sequels.");
 
-        assert_eq!(set_bio(&db, "").unwrap(), VISITOR_BIO);
-        assert_eq!(profile(&source, &db).await.bio, VISITOR_BIO);
+        // A real account clearing their bio gets nothing back, not somebody else's line.
+        assert_eq!(set_bio(&db, ME, "").unwrap(), "");
+        assert_eq!(profile(&source, &db, ME).await.unwrap().bio, "");
+
+        // The legacy visitor is the one account that keeps the export's sentence,
+        // because it is the line their profile has always shown.
+        assert_eq!(set_bio(&db, db::LEGACY_USER_ID, "").unwrap(), VISITOR_BIO);
     }
 
     #[test]
@@ -2243,7 +2411,7 @@ mod tests {
 
         assert!(db.is_poisoned());
         // The visitor's state is still readable, which is the whole point.
-        assert!(store(&db).watchlist.is_empty());
+        assert!(store(&db, Some(ME)).watchlist.is_empty());
     }
 
     // --- The social graph -----------------------------------------------------
@@ -2254,7 +2422,11 @@ mod tests {
         let source = Source::Demo { reason: "testing".into() };
         let conn = db::open(":memory:").unwrap();
         db::seed_graph(&conn, &harvest_graph(&source).await).unwrap();
-        (source, Arc::new(Mutex::new(conn)))
+        let db: Db = Arc::new(Mutex::new(conn));
+        // Signed in after the seed, because the starter follows come off the flags the
+        // seed writes.
+        assert_eq!(sign_in(&db), ME);
+        (source, db)
     }
 
     /// Without a token the harvest makes no request and falls back to the demo
@@ -2276,22 +2448,29 @@ mod tests {
     #[tokio::test]
     async fn an_empty_query_searches_for_nobody() {
         let (_, db) = graph().await;
-        let idle = people(&db, "");
+        let idle = people(&db, Some(ME), "");
 
         assert_eq!(idle.query, "");
         assert!(idle.results.is_empty(), "no search, no results");
         // Both sides of the graph are still there — they are the screen, not the search.
         assert!(!idle.following.is_empty() && !idle.followers.is_empty());
         // Whitespace is the same as nothing: a stray space in the box isn't a query.
-        assert!(people(&db, "   ").results.is_empty());
+        assert!(people(&db, Some(ME), "   ").results.is_empty());
+
+        // An anonymous reader can search, because accounts are public, but has no two
+        // lists of their own — showing the seed's followers would claim they were theirs.
+        let guest = people(&db, None, "elena");
+        assert!(!guest.results.is_empty());
+        assert!(guest.results.iter().all(|card| !card.following && !card.follows_you));
+        assert!(guest.following.is_empty() && guest.followers.is_empty());
     }
 
     #[tokio::test]
     async fn the_directory_carries_both_sides_of_the_graph() {
         let (_, db) = graph().await;
-        let idle = people(&db, "");
+        let idle = people(&db, Some(ME), "");
 
-        let elena = people(&db, "elenarostova");
+        let elena = people(&db, Some(ME), "elenarostova");
         assert_eq!(elena.query, "elenarostova");
         // A card knows both relationship bits, so the button and the badge on one
         // row can't disagree.
@@ -2299,7 +2478,7 @@ mod tests {
         assert!(elena.following && elena.follows_you);
         assert_eq!(elena.review_count, 5);
 
-        let found = people(&db, "kline");
+        let found = people(&db, Some(ME), "kline");
         assert_eq!(found.query, "kline");
         assert_eq!(found.results.len(), 1);
         // The visitor's own lists don't shrink to the search term — they're beside
@@ -2311,7 +2490,7 @@ mod tests {
     async fn a_persons_page_resolves_films_and_counts() {
         let (source, db) = graph().await;
 
-        let elena = person(&source, &db, "elenarostova").await.expect("a seeded user");
+        let elena = person(&source, &db, Some(ME), "elenarostova").await.expect("a seeded user");
         assert_eq!(elena.name, "Elena Rostova");
         assert_eq!(elena.handle, "@elenarostova");
         assert!(elena.following && elena.follows_you);
@@ -2327,10 +2506,15 @@ mod tests {
 
         // The `@` is optional, and an unknown nickname is a real miss so the route
         // can 404 rather than draw an empty page.
-        assert!(person(&source, &db, "@elenarostova").await.is_some());
-        assert!(person(&source, &db, "nobody").await.is_none());
+        assert!(person(&source, &db, Some(ME), "@elenarostova").await.is_some());
+        assert!(person(&source, &db, Some(ME), "nobody").await.is_none());
         // The export's decorative cast has no page.
-        assert!(person(&source, &db, "elena").await.is_none());
+        assert!(person(&source, &db, Some(ME), "elena").await.is_none());
+
+        // A page is public: an anonymous reader gets it, with both flags false.
+        let guest = person(&source, &db, None, "elenarostova").await.expect("a public page");
+        assert_eq!(guest.reviews.len(), elena.reviews.len());
+        assert!(!guest.following && !guest.follows_you);
     }
 
     /// "Other people's profiles should look exactly the same as your profile."
@@ -2338,7 +2522,7 @@ mod tests {
     #[tokio::test]
     async fn a_persons_page_shows_their_favourites_and_watchlist() {
         let (source, db) = graph().await;
-        let elena = person(&source, &db, "elenarostova").await.expect("a seeded user");
+        let elena = person(&source, &db, Some(ME), "elenarostova").await.expect("a seeded user");
 
         assert!(!elena.favorites.is_empty(), "a seeded person's favourites are empty");
         assert!(!elena.watchlist.is_empty(), "a seeded person's watchlist is empty");
@@ -2364,7 +2548,7 @@ mod tests {
     async fn a_films_reviews_are_friends_first_then_best_rated() {
         let (source, db) = graph().await;
 
-        let reviews = reviews_of_movie(&source, &db, "dune-part-two").await;
+        let reviews = reviews_of_movie(&source, &db, Some(ME), "dune-part-two").await;
         assert_eq!(reviews.len(), 3);
         assert!(reviews.iter().all(|r| r.movie_id == "dune-part-two"));
         assert!(reviews.iter().all(|r| r.movie_title == "Dune: Part Two"));
@@ -2382,30 +2566,30 @@ mod tests {
 
         // A film nobody reviewed is an empty list, not an error — the section
         // hides itself.
-        assert!(reviews_of_movie(&source, &db, "project-kepler").await.len() <= 1);
-        assert!(reviews_of_movie(&source, &db, "no-such-film").await.is_empty());
+        assert!(reviews_of_movie(&source, &db, Some(ME), "project-kepler").await.len() <= 1);
+        assert!(reviews_of_movie(&source, &db, Some(ME), "no-such-film").await.is_empty());
     }
 
     #[tokio::test]
     async fn following_reports_the_new_count_and_404s_on_a_stranger() {
         let (_, db) = graph().await;
-        let before = people(&db, "").following.len();
+        let before = people(&db, Some(ME), "").following.len();
 
         let followed =
-            set_follow(&db, "user-priyanaidu", Some(true)).unwrap().expect("a real user");
+            set_follow(&db, ME, "user-priyanaidu", Some(true)).unwrap().expect("a real user");
         assert!(followed.following);
         assert_eq!(followed.person_id, "user-priyanaidu");
         assert_eq!(followed.following_count as usize, before + 1);
         // The directory agrees immediately, so the screen can trust one response.
-        assert_eq!(people(&db, "").following.len(), before + 1);
+        assert_eq!(people(&db, Some(ME), "").following.len(), before + 1);
 
-        let dropped = set_follow(&db, "user-priyanaidu", Some(false)).unwrap().unwrap();
+        let dropped = set_follow(&db, ME, "user-priyanaidu", Some(false)).unwrap().unwrap();
         assert!(!dropped.following);
         assert_eq!(dropped.following_count as usize, before);
 
         // `Ok(None)` is a 404, distinct from an `Err`, which is a failed write.
-        assert!(set_follow(&db, "elena", Some(true)).unwrap().is_none());
-        assert!(set_follow(&db, "nobody", None).unwrap().is_none());
+        assert!(set_follow(&db, ME, "elena", Some(true)).unwrap().is_none());
+        assert!(set_follow(&db, ME, "nobody", None).unwrap().is_none());
     }
 
     /// Every profile "Following" row links to a page that opens, because only real
@@ -2415,19 +2599,19 @@ mod tests {
     #[tokio::test]
     async fn every_followed_row_opens_a_page() {
         let (source, db) = graph().await;
-        let profile = profile(&source, &db).await;
+        let profile = profile(&source, &db, ME).await.expect("a signed-in account");
 
         assert!(!profile.following.is_empty(), "the seeded friends must be there");
         for row in &profile.following {
             let handle = row.handle.as_deref().expect("a followed person has a page");
             assert!(handle.starts_with('@'));
-            assert!(person(&source, &db, handle).await.is_some(), "{handle} has no page");
+            assert!(person(&source, &db, Some(ME), handle).await.is_some(), "{handle} has no page");
             // Their bio stands in for the rail sentence they don't have.
             assert!(row.subtitle.contains("reviewed"), "{}", row.subtitle);
         }
 
         // The rails themselves are untouched — the export's cast still draws them.
-        let stories = mobile_feed(&source, &db).await.stories;
+        let stories = mobile_feed(&source, &db, Some(ME)).await.stories;
         assert!(!stories.is_empty(), "the stories rail is still the export's cast");
     }
 
