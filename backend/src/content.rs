@@ -3422,6 +3422,46 @@ mod tests {
         assert!(!guest.following && !guest.follows_you);
     }
 
+    /// The endpoint the bug was reported against: a lowercased or hand-typed nickname
+    /// has to reach the person a link from inside the app reaches.
+    ///
+    /// TMDB hands over mixed-case usernames, so before this most of a harvested graph
+    /// 404ed at the address people actually type.
+    #[tokio::test]
+    async fn a_persons_page_opens_whatever_case_the_nickname_is_typed_in() {
+        let source = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+        {
+            let conn = lock(&db);
+            let mut users = db::demo_graph();
+            users[0].handle = "Geronimo1967".into();
+            db::seed_graph(&conn, &users).unwrap();
+        }
+
+        for typed in [
+            "Geronimo1967",
+            "geronimo1967",
+            "GERONIMO1967",
+            "@Geronimo1967",
+            "@geronimo1967",
+        ] {
+            let page = person(&source, &db, None, typed).await;
+            let page = page.unwrap_or_else(|| panic!("/api/people/{typed} was a 404"));
+            // The stored capitalisation is what goes back out, whatever was typed.
+            assert_eq!(page.handle, "@Geronimo1967", "{typed} changed the display case");
+        }
+
+        // Their collection page resolves the nickname too, and the same way.
+        for typed in ["geronimo1967", "@GERONIMO1967"] {
+            let theirs = collection(&source, &db, None, "favorites", Some(typed)).await;
+            let owner = theirs.unwrap_or_else(|| panic!("their collection 404ed for {typed}")).owner;
+            assert_eq!(owner.expect("an owner").handle, "@Geronimo1967");
+        }
+
+        // A nickname nobody has is still a 404 rather than a near miss.
+        assert!(person(&source, &db, None, "geronimo").await.is_none());
+    }
+
     /// "Other people's profiles should look exactly the same as your profile."
     /// Their page carries both strips, resolved to real films, not reviews alone.
     #[tokio::test]

@@ -125,8 +125,14 @@ const SCHEMA: &str = "PRAGMA foreign_keys = ON;
          -- The app's users. Seeded once from `content::harvest_graph`, then
          -- read-mostly.
          --
-         -- `handle` is the nickname friend search matches on, and is UNIQUE
+         -- `handle` is the nickname friend search matches on, and is unique
          -- because it is how a person is addressed ('@msbreviews').
+         --
+         -- Unique **ignoring case**, through `people_by_handle_nocase`. Two people
+         -- holding '@sam' and '@Sam' would be an account-confusion problem at
+         -- sign-up, and would make one URL match two rows once lookup folds case.
+         -- The stored value keeps whatever case it arrived in — CinemaSerf is
+         -- '@Geronimo1967' on screen — so folding is for comparison only.
          --
          -- Every row here is now a user, so `is_user` is always 1 and the column
          -- survives only for the queries that still filter on it and for databases
@@ -444,6 +450,20 @@ fn migrate(conn: &Connection) -> Result<()> {
         "CREATE UNIQUE INDEX IF NOT EXISTS people_by_google_sub ON people(google_sub)",
     )?;
 
+    // Case-folded uniqueness on the nickname. The column's own UNIQUE is
+    // case-*sensitive*, so it lets '@sam' and '@Sam' sit side by side — which is an
+    // account-confusion problem at sign-up, and makes one URL match two rows now that
+    // lookup folds case.
+    //
+    // Rows already on disk may hold such a pair, and the index would refuse to be
+    // built over them, so they are separated first. Before `adopt_pre_account_rows`,
+    // which mints the legacy account's nickname and should be protected by this too.
+    resolve_handle_collisions(conn)?;
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS people_by_handle_nocase
+             ON people(handle COLLATE NOCASE)",
+    )?;
+
     adopt_pre_account_rows(conn)
 }
 
@@ -575,18 +595,75 @@ fn ensure_legacy_account(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// A nickname nobody has yet.
+/// Separate any nicknames that differ only in case, so the folded unique index can be
+/// built over rows already on disk.
 ///
-/// `people.handle` is unique because it addresses a page, and two Google accounts
-/// can easily want the same one. The wanted nickname wins if it is free, otherwise
-/// a number is appended — "@sam", "@sam2", "@sam3". The random fallback exists so
-/// this cannot fail on a server with fifty Sams.
+/// A database written before uniqueness folded case may hold '@sam' and '@Sam'. The
+/// index would refuse to be created over that pair, and a failed migration would take
+/// the boot with it — so one of them is renamed instead. Never fatal, and never a
+/// silent delete: both people keep their page, one of them at a new address.
+///
+/// Which one keeps the nickname: a real account before a seeded person, then the lowest
+/// id. Somebody who signed in is not renamed to make room for a harvested reviewer, and
+/// beyond that the rule is only there to be the same on every boot.
+///
+/// Logged per row, because a nickname is how a person is linked to and one of them has
+/// just changed.
+fn resolve_handle_collisions(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT id, handle FROM people
+         WHERE handle IS NOT NULL
+           AND EXISTS(SELECT 1 FROM people other
+                      WHERE other.handle IS NOT NULL
+                        AND other.id <> people.id
+                        AND other.handle = people.handle COLLATE NOCASE)
+         ORDER BY handle COLLATE NOCASE, is_account DESC, id",
+    )?;
+    let rows: Vec<(String, String)> =
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<Result<_>>()?;
+    drop(stmt);
+
+    // Ordered by the folded nickname, so a group is a run: the first of each run keeps
+    // what it has and everything after it is renamed.
+    let mut kept: Option<String> = None;
+    for (id, handle) in rows {
+        // `to_ascii_lowercase`, not `to_lowercase`: NOCASE folds ASCII and nothing else,
+        // and this has to group rows exactly the way the query selected them. Full
+        // Unicode folding here would put two rows in one group that the index is
+        // perfectly happy to keep apart.
+        let folded = handle.to_ascii_lowercase();
+        if kept.as_deref() != Some(folded.as_str()) {
+            kept = Some(folded);
+            continue;
+        }
+        let fresh = unique_handle(conn, &handle)?;
+        conn.execute("UPDATE people SET handle = ?2 WHERE id = ?1", params![id, fresh])?;
+        tracing::warn!(
+            person = %id,
+            was = %handle,
+            now = %fresh,
+            "two nicknames differed only in case — renamed one so each URL names one person"
+        );
+    }
+    Ok(())
+}
+
+/// A nickname nobody has yet, **ignoring case**.
+///
+/// `people.handle` is unique because it addresses a page, and two Google accounts can
+/// easily want the same one. The wanted nickname wins if it is free, otherwise a number
+/// is appended — "@sam", "@sam2", "@sam3". The random fallback exists so this cannot
+/// fail on a server with fifty Sams.
+///
+/// The taken-check folds case, so somebody arriving as "SAM" takes "@SAM2" rather than
+/// sitting beside "@sam" as a second page one URL could mean. Their own capitalisation
+/// is kept in what they get.
 fn unique_handle(conn: &Connection, wanted: &str) -> Result<String> {
     let base = format!("@{}", wanted.trim_start_matches('@'));
     for attempt in 1..=HANDLE_TRIES {
         let candidate = if attempt == 1 { base.clone() } else { format!("{base}{attempt}") };
         let taken: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM people WHERE handle = ?1)",
+            "SELECT EXISTS(SELECT 1 FROM people WHERE handle = ?1 COLLATE NOCASE)",
             [&candidate],
             |row| row.get(0),
         )?;
@@ -1330,14 +1407,23 @@ pub fn search_people(conn: &Connection, user_id: &str, query: &str) -> Result<Ve
     rows
 }
 
-/// One user by nickname, with or without the leading `@`.
+/// One user by nickname, with or without the leading `@`, in any case.
+///
+/// `/people/geronimo1967` has to reach the person stored as `@Geronimo1967`: people
+/// lowercase URLs by habit, and a hand-typed or shared link would otherwise 404 while
+/// the same link built inside the app worked. `COLLATE NOCASE` also makes this agree
+/// with `search_people`, whose `LIKE` has always folded case — the two disagreeing was
+/// the odder half of the bug.
+///
+/// Only one row can match, because `people_by_handle_nocase` folds the same way.
 pub fn person_by_handle(
     conn: &Connection,
     user_id: &str,
     handle: &str,
 ) -> Result<Option<UserRow>> {
     let handle = format!("@{}", handle.trim_start_matches('@'));
-    let mut stmt = conn.prepare(&format!("{} WHERE p.handle = ?2", user_select()))?;
+    let mut stmt =
+        conn.prepare(&format!("{} WHERE p.handle = ?2 COLLATE NOCASE", user_select()))?;
     let row = stmt.query_row(params![user_id, handle], user_from_row).optional()?;
     Ok(row)
 }
@@ -2887,6 +2973,34 @@ mod tests {
         }
     }
 
+    /// A new account whose nickname differs from an existing one only in case has to
+    /// collide with it, not settle beside it — one URL, one person.
+    #[test]
+    fn a_new_nickname_collides_ignoring_case() {
+        let conn = db();
+        // Seeded with a capital, the way a harvested TMDB username arrives.
+        let mut users = demo_graph();
+        users[0].handle = "Sam".into();
+        seed_graph(&conn, &users).unwrap();
+
+        let shouty = sign_in(&conn, "1001", "SAM");
+        assert_eq!(shouty.handle, "@SAM2", "'SAM' sat beside '@Sam' as a second page");
+        let quiet = sign_in(&conn, "2002", "sam");
+        assert_eq!(quiet.handle, "@sam3");
+
+        // Three distinct people, three distinct URLs, and their own capitalisation kept.
+        let resolved: Vec<String> = ["Sam", "SAM2", "sam3"]
+            .iter()
+            .map(|typed| person_by_handle(&conn, ME, typed).unwrap().expect(typed).id)
+            .collect();
+        assert_eq!(resolved.len(), 3);
+        assert_eq!(
+            resolved.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            3,
+            "two URLs reached the same person"
+        );
+    }
+
     /// A new account opens on the seed's friends rather than an empty feed.
     #[test]
     fn a_new_account_starts_out_following_the_starter_set() {
@@ -3877,12 +3991,233 @@ mod tests {
     #[test]
     fn nicknames_are_unique() {
         let conn = graph();
-        let clash = conn.execute(
+        let insert = |id: &str, handle: &str| {
+            conn.execute(
+                "INSERT INTO people (id, name, avatar_src, avatar_alt, position, handle, is_user)
+                 VALUES (?1, 'Elena', 'img/a.jpg', 'alt', 99, ?2, 1)",
+                params![id, handle],
+            )
+        };
+
+        assert!(insert("impostor", "@elenarostova").is_err(), "a duplicate nickname was accepted");
+        // **Ignoring case**, and enforced by the schema rather than by whatever wrote
+        // the row — otherwise one URL would name two people once lookup folds case.
+        for variant in ["@Elenarostova", "@ELENAROSTOVA", "@eLeNaRoStOvA"] {
+            assert!(insert("impostor", variant).is_err(), "{variant} was accepted beside the original");
+        }
+        // A nickname that differs by more than case is still fine.
+        assert!(insert("newcomer", "@elenarostova2").is_ok());
+    }
+
+    /// A database written before uniqueness folded case can hold '@sam' and '@Sam'. The
+    /// folded index would refuse to be built over that, so the migration separates them
+    /// rather than taking the boot down with it.
+    #[test]
+    fn the_migration_separates_nicknames_that_differ_only_in_case() {
+        // Built by hand at the pre-fold schema: the column's own UNIQUE is
+        // case-sensitive, which is exactly how the pair got in.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE people (
+                 id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                 avatar_src TEXT NOT NULL, avatar_alt TEXT NOT NULL,
+                 unseen INTEGER NOT NULL DEFAULT 0,
+                 in_stories INTEGER NOT NULL DEFAULT 0,
+                 position INTEGER NOT NULL DEFAULT 0,
+                 handle TEXT UNIQUE, bio TEXT,
+                 is_user INTEGER NOT NULL DEFAULT 0,
+                 follows_visitor INTEGER NOT NULL DEFAULT 0);
+             INSERT INTO people (id, name, avatar_src, avatar_alt, handle, is_user)
+                 VALUES ('user-sam', 'Sam', 'img/a.jpg', 'a', '@Sam', 1),
+                        ('user-sammy', 'Sammy', 'img/b.jpg', 'b', '@sam', 1),
+                        ('user-shouty', 'Shouty', 'img/c.jpg', 'c', '@SAM', 1),
+                        ('user-alone', 'Alone', 'img/d.jpg', 'd', '@Solo', 1);",
+        )
+        .unwrap();
+
+        prepare(&conn).unwrap();
+
+        // Nobody was deleted, and nobody was left sharing a folded nickname.
+        let handles: Vec<(String, String)> = conn
+            .prepare("SELECT id, handle FROM people ORDER BY id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_>>()
+            .unwrap();
+        assert_eq!(handles.len(), 4, "the migration lost somebody");
+        let folded: std::collections::BTreeSet<String> =
+            handles.iter().map(|(_, handle)| handle.to_ascii_lowercase()).collect();
+        assert_eq!(folded.len(), 4, "two people still share a nickname: {handles:?}");
+
+        // One of the three keeps '@Sam'; the others are renamed from their own casing,
+        // so each still looks like themselves.
+        let of = |id: &str| {
+            handles.iter().find(|(row, _)| row == id).map(|(_, handle)| handle.clone()).unwrap()
+        };
+        assert_eq!(of("user-alone"), "@Solo", "an uncontested nickname was touched");
+        let contested = [of("user-sam"), of("user-sammy"), of("user-shouty")];
+        assert_eq!(contested.iter().filter(|handle| handle.len() == "@Sam".len()).count(), 1);
+
+        // Every one of them still has a page, at whatever address they ended up with,
+        // and the folded index is in place now.
+        for (id, handle) in &handles {
+            let found = person_by_handle(&conn, ME, handle).unwrap();
+            assert_eq!(found.map(|row| row.id).as_deref(), Some(id.as_str()), "{handle}");
+        }
+        let index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index' AND name = 'people_by_handle_nocase'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, 1);
+
+        // And running it again changes nothing, since there is nothing left to separate.
+        prepare(&conn).unwrap();
+        assert_eq!(of("user-alone"), "@Solo");
+    }
+
+    /// A real account keeps its nickname when a seeded person contests it: somebody who
+    /// signed in is not renamed to make room for a harvested reviewer.
+    #[test]
+    fn the_migration_renames_the_seeded_person_not_the_account() {
+        let conn = db();
+        let signed_in = sign_in(&conn, "1001", "sam");
+        assert_eq!(signed_in.handle, "@sam");
+
+        // Slipped in past the folded index, the way a pre-fold database holds it.
+        conn.execute_batch("DROP INDEX people_by_handle_nocase")
+            .unwrap();
+        conn.execute(
             "INSERT INTO people (id, name, avatar_src, avatar_alt, position, handle, is_user)
-             VALUES ('impostor', 'Elena', 'img/a.jpg', 'alt', 99, '@elenarostova', 1)",
+             VALUES ('user-seeded', 'Sam Seeded', 'img/a.jpg', 'a', 0, '@Sam', 1)",
             [],
+        )
+        .unwrap();
+
+        prepare(&conn).unwrap();
+
+        assert_eq!(
+            account(&conn, &signed_in.id).unwrap().unwrap().handle,
+            "@sam",
+            "the signed-in account was renamed"
         );
-        assert!(clash.is_err(), "a duplicate nickname was accepted");
+        let seeded = person_by_id(&conn, ME, "user-seeded").unwrap().unwrap();
+        assert_ne!(seeded.handle, "@Sam");
+        assert!(seeded.handle.starts_with("@Sam"), "{}", seeded.handle);
+    }
+
+    /// The limit of `NOCASE`, stated on purpose: it folds ASCII and nothing else, so two
+    /// nicknames differing only in a non-ASCII letter's case are two people.
+    ///
+    /// Both can exist and each resolves at its own address — no arbitrary winner and no
+    /// 500. Only the *other* casing of a non-ASCII letter misses, which is a 404 rather
+    /// than a wrong answer. Accounts cannot reach this state at all:
+    /// `auth::handle_from` filters a Google name down to `[a-z0-9_]` before it ever gets
+    /// here, so an account's nickname is ASCII and already lower-case.
+    #[test]
+    fn non_ascii_case_is_not_folded_and_both_names_still_work() {
+        let conn = db();
+        let mut users = demo_graph();
+        users[0].handle = "Ärger".into();
+        users[1].handle = "ärger".into();
+        seed_graph(&conn, &users).unwrap();
+
+        // The folded index let both in, because it does not fold these.
+        let stored: Vec<String> = search_people(&conn, ME, "rger")
+            .unwrap()
+            .into_iter()
+            .map(|user| user.handle)
+            .collect();
+        assert_eq!(stored.len(), 2, "one of them was rejected: {stored:?}");
+
+        // Each resolves at its own address, deterministically, to a different person.
+        let upper = person_by_handle(&conn, ME, "Ärger").unwrap().expect("the capital one");
+        let lower = person_by_handle(&conn, ME, "ärger").unwrap().expect("the small one");
+        assert_ne!(upper.id, lower.id);
+        assert_eq!(upper.handle, "@Ärger");
+        assert_eq!(lower.handle, "@ärger");
+
+        // The ASCII part still folds, which is what the index is for.
+        assert!(person_by_handle(&conn, ME, "@Ärger").unwrap().is_some());
+    }
+
+    /// Lookup folds case, with or without the `@`, so a hand-typed or lowercased URL
+    /// reaches the same person a link from inside the app does.
+    ///
+    /// The bug: TMDB hands over mixed-case usernames, so most of a harvested graph was
+    /// unreachable at the address people actually type.
+    #[test]
+    fn a_nickname_resolves_in_any_case_and_with_or_without_the_at_sign() {
+        let conn = db();
+        let mut users = demo_graph();
+        users[0].handle = "Geronimo1967".into();
+        seed_graph(&conn, &users).unwrap();
+
+        for typed in [
+            "Geronimo1967",
+            "geronimo1967",
+            "GERONIMO1967",
+            "gErOnImO1967",
+            "@Geronimo1967",
+            "@geronimo1967",
+            "@GERONIMO1967",
+        ] {
+            let found = person_by_handle(&conn, ME, typed).unwrap();
+            let found = found.unwrap_or_else(|| panic!("{typed} did not resolve"));
+            // Display case is the stored case, whatever was typed to get here.
+            assert_eq!(found.handle, "@Geronimo1967", "{typed} changed the display case");
+        }
+
+        // Still no false positives: folding case is not folding characters.
+        assert!(person_by_handle(&conn, ME, "geronimo196").unwrap().is_none());
+        assert!(person_by_handle(&conn, ME, "geronimo19670").unwrap().is_none());
+        assert!(person_by_handle(&conn, ME, "nobody").unwrap().is_none());
+    }
+
+    /// Search has always folded case — `LIKE` does by default — so lookup folding too is
+    /// what stops the two disagreeing about whether a person exists.
+    #[test]
+    fn search_and_lookup_agree_about_case() {
+        let conn = db();
+        let mut users = demo_graph();
+        users[0].handle = "Geronimo1967".into();
+        seed_graph(&conn, &users).unwrap();
+
+        for typed in ["geronimo1967", "Geronimo1967", "GERONIMO1967"] {
+            let searched: Vec<String> =
+                search_people(&conn, ME, typed).unwrap().into_iter().map(|u| u.handle).collect();
+            assert_eq!(searched, ["@Geronimo1967"], "search missed {typed}");
+            assert!(
+                person_by_handle(&conn, ME, typed).unwrap().is_some(),
+                "search found {typed} but lookup did not"
+            );
+        }
+    }
+
+    /// The stored value keeps whatever case it arrived in, all the way out again.
+    #[test]
+    fn a_nicknames_case_survives_the_round_trip() {
+        let conn = db();
+        let mut users = demo_graph();
+        users[0].handle = "@Brent_Marchant".into();
+        seed_graph(&conn, &users).unwrap();
+        let id = users[0].id.clone();
+
+        assert_eq!(person_by_id(&conn, ME, &id).unwrap().unwrap().handle, "@Brent_Marchant");
+        assert_eq!(
+            search_people(&conn, ME, "brent").unwrap()[0].handle,
+            "@Brent_Marchant",
+            "search lowercased what it returned"
+        );
+        // And an account's, which comes through `unique_handle`.
+        let signed_in = sign_in(&conn, "1001", "MixedCase");
+        assert_eq!(signed_in.handle, "@MixedCase");
+        assert_eq!(account(&conn, &signed_in.id).unwrap().unwrap().handle, "@MixedCase");
+        assert!(person_by_handle(&conn, ME, "mixedcase").unwrap().is_some());
     }
 
     /// Favourites come from what someone rated highly; the watchlist from what they
