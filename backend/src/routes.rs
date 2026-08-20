@@ -444,24 +444,25 @@ async fn like_review(
     if !content::review_exists(&state.db, &id) {
         return not_found(format!("no review with id '{id}'"));
     }
-    // No stored count to add to: reviews arrive with none, so the button reads
-    // nothing until this click and 1 after.
-    let base_count = None;
 
+    // The toggle returns the new total as well as this user's own state, so the
+    // number the button shows is the one the table now holds rather than a guess.
     let result = {
         let conn = state.db.lock().unwrap_or_else(|p| p.into_inner());
         db::toggle_review_like(&conn, &me.id, &id)
     };
 
     match result {
-        Ok(liked) => {
-            let like_count = hydrate::like_count(base_count, liked);
+        Ok((liked, total)) => {
+            let like_count = hydrate::like_count(total);
             Json(LikeState { id, liked, like_count }).into_response()
         }
         Err(error) => write_failed(error),
     }
 }
 
+/// Like or unlike **anybody's** comment. A thread is shared, so the only thing that
+/// has to be true is that the comment is on this review.
 async fn like_comment(
     State(state): State<AppState>,
     CurrentUser(me): CurrentUser,
@@ -470,12 +471,9 @@ async fn like_comment(
     if !content::review_exists(&state.db, &review_id) {
         return not_found(format!("no review with id '{review_id}'"));
     }
-    if !content::comment_exists(&state.db, &me.id, &review_id, &comment_id) {
+    if !content::comment_exists(&state.db, &review_id, &comment_id) {
         return not_found(format!("no comment with id '{comment_id}' on '{review_id}'"));
     }
-    // As in `like_review`: every comment in the thread is one this user posted, so
-    // there is no count behind it.
-    let base_count = None;
 
     let result = {
         let conn = state.db.lock().unwrap_or_else(|p| p.into_inner());
@@ -483,8 +481,8 @@ async fn like_comment(
     };
 
     match result {
-        Ok(liked) => {
-            let like_count = hydrate::like_count(base_count, liked);
+        Ok((liked, total)) => {
+            let like_count = hydrate::like_count(total);
             Json(LikeState { id: comment_id, liked, like_count }).into_response()
         }
         Err(error) => write_failed(error),
@@ -609,9 +607,10 @@ async fn post_reply(
     if !content::review_exists(&state.db, &review_id) {
         return not_found(format!("no review with id '{review_id}'"));
     }
-    // Only replies to comments this user can see — otherwise the reply would be
-    // stored under a key nothing renders and vanish silently.
-    if !content::comment_exists(&state.db, &me.id, &review_id, &comment_id) {
+    // Only replies to comments that exist — otherwise the reply would be stored under
+    // a key nothing renders and vanish silently. Anybody's comment will do: replying to
+    // somebody else is what makes the thread a conversation.
+    if !content::comment_exists(&state.db, &review_id, &comment_id) {
         return not_found(format!("no comment with id '{comment_id}' on '{review_id}'"));
     }
 
@@ -1017,6 +1016,275 @@ mod tests {
         // Nothing about the credentials is in the redirect but the client id, which is
         // public by design — the secret must never leave the process.
         assert!(!location.contains("test-client-secret"));
+    }
+
+    /// A review written by an account has to reach the people who follow them. That
+    /// is the product: it used to be written, stored, and seen by nobody.
+    #[tokio::test]
+    async fn an_accounts_review_reaches_a_followers_feed_and_their_page() {
+        let (app, state) = app();
+        let sam = sign_in(&state, "1001", "sam");
+        let ada = sign_in(&state, "2002", "ada");
+
+        // Ada follows Sam, then Sam writes about a film and scores it.
+        let (status, _) =
+            call(&app, Method::POST, "/api/people/account-1001/follow", Some(&ada), None).await;
+        assert_eq!(status, StatusCode::OK);
+        for (uri, body) in [
+            ("/api/movies/le-souffle/rating", r#"{"rating_half_stars":9}"#),
+            ("/api/movies/le-souffle/review", r#"{"body":"The café scene, forever."}"#),
+        ] {
+            let (status, _) = call(&app, Method::PUT, uri, Some(&sam), Some(body)).await;
+            assert_eq!(status, StatusCode::OK);
+        }
+
+        // Sam's public page, as Ada sees it.
+        let (status, page) =
+            call(&app, Method::GET, "/api/people/sam", Some(&ada), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let page: serde_json::Value = serde_json::from_str(&page).unwrap();
+        assert_eq!(page["review_count"], 1, "their page prints a count of nothing");
+        let listed = page["reviews"].as_array().expect("reviews");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["body"], "The café scene, forever.");
+        assert_eq!(listed[0]["rating_half_stars"], 9);
+        // Credited to them by name, nickname and face — not to "the visitor".
+        assert_eq!(listed[0]["author_handle"], "@sam");
+        assert_eq!(listed[0]["author_id"], "account-1001");
+        assert!(listed[0]["author_avatar"]["src"].as_str().is_some());
+
+        // Ada's feed, which is why she followed them.
+        let (_, feed) = call(&app, Method::GET, "/api/feed", Some(&ada), None).await;
+        let feed: serde_json::Value = serde_json::from_str(&feed).unwrap();
+        let by_sam: Vec<&serde_json::Value> = feed["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["kind"] == "review" && item["author_id"] == "account-1001")
+            .collect();
+        assert_eq!(by_sam.len(), 1, "a follower's feed misses the review");
+        assert_eq!(by_sam[0]["author_followed"], true);
+
+        // The film's own page lists it beside the seeded people's.
+        let (_, on_film) =
+            call(&app, Method::GET, "/api/movies/le-souffle/reviews", Some(&ada), None).await;
+        let on_film: serde_json::Value = serde_json::from_str(&on_film).unwrap();
+        let authors: Vec<&str> =
+            on_film.as_array().unwrap().iter().filter_map(|r| r["author_id"].as_str()).collect();
+        assert!(authors.contains(&"account-1001"));
+        assert!(authors.len() > 1, "the seeded reviews of this film went missing");
+
+        // And the review page opens from the id the card carries, for anybody —
+        // including a reader with no account.
+        let id = listed[0]["id"].as_str().unwrap().to_string();
+        for cookie in [Some(ada.as_str()), None] {
+            let (status, _) =
+                call(&app, Method::GET, &format!("/api/reviews/{id}"), cookie, None).await;
+            assert_eq!(status, StatusCode::OK);
+        }
+    }
+
+    /// Prose with no score publishes as `null` rather than as zero stars, which would
+    /// read as a one-out-of-five verdict.
+    #[tokio::test]
+    async fn a_review_written_without_a_score_publishes_a_null_rating() {
+        let (app, state) = app();
+        let sam = sign_in(&state, "1001", "sam");
+
+        let (status, _) = call(
+            &app,
+            Method::PUT,
+            "/api/movies/endless/review",
+            Some(&sam),
+            Some(r#"{"body":"No stars from me."}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (_, page) = call(&app, Method::GET, "/api/people/sam", None, None).await;
+        let page: serde_json::Value = serde_json::from_str(&page).unwrap();
+        assert_eq!(page["reviews"][0]["rating_half_stars"], serde_json::Value::Null);
+    }
+
+    /// The other half of the product: a conversation. Two accounts on one review,
+    /// each seeing the other, each able to reply to and like what the other wrote.
+    #[tokio::test]
+    async fn two_users_share_one_comment_thread() {
+        let (app, state) = app();
+        let sam = sign_in(&state, "1001", "sam");
+        let ada = sign_in(&state, "2002", "ada");
+        let review = "/api/reviews/user-elenarostova-le-souffle";
+
+        let post = |cookie: &str, uri: String, body: String| {
+            let app = app.clone();
+            let cookie = cookie.to_string();
+            async move {
+                let (status, body) =
+                    call(&app, Method::POST, &uri, Some(&cookie), Some(&body)).await;
+                assert_eq!(status, StatusCode::OK, "{body}");
+                serde_json::from_str::<serde_json::Value>(&body).expect("a review")
+            }
+        };
+
+        // Sam comments; the response is the whole review, thread included.
+        let after = post(&sam, format!("{review}/comments"), r#"{"body":"Loved it."}"#.into()).await;
+        let comments = after["comments"].as_array().unwrap();
+        assert_eq!(comments.len(), 1);
+        let sams_comment = comments[0]["id"].as_str().unwrap().to_string();
+        assert_eq!(comments[0]["author_handle"], "@sam");
+        assert_eq!(comments[0]["is_you"], true, "the author must be told it is theirs");
+        assert_eq!(comments[0]["author_name"], "sam the viewer", "the real name, not 'You'");
+        // A real date, where every comment used to read "Just now".
+        assert!(comments[0]["timestamp"].as_str().unwrap().contains(','));
+
+        // Ada sees it, and it is not hers.
+        let (_, seen) = call(&app, Method::GET, review, Some(&ada), None).await;
+        let seen: serde_json::Value = serde_json::from_str(&seen).unwrap();
+        assert_eq!(seen["comments"].as_array().unwrap().len(), 1, "one user cannot see another's");
+        assert_eq!(seen["comments"][0]["is_you"], false);
+        assert_eq!(seen["comments"][0]["author_handle"], "@sam");
+
+        // Ada replies to Sam's comment, which used to 404.
+        let after = post(
+            &ada,
+            format!("{review}/comments/{sams_comment}/replies"),
+            r#"{"body":"Overrated."}"#.into(),
+        )
+        .await;
+        let replies = after["comments"][0]["replies"].as_array().unwrap();
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0]["author_handle"], "@ada");
+        assert_eq!(replies[0]["is_you"], true, "the reply is Ada's, seen by Ada");
+        // The comment above it is still Sam's, on the same page.
+        assert_eq!(after["comments"][0]["is_you"], false);
+
+        // Ada also comments in her own right, and the thread stays oldest-first.
+        let after = post(&ada, format!("{review}/comments"), r#"{"body":"Second thoughts."}"#.into())
+            .await;
+        let bodies: Vec<&str> = after["comments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["body"].as_str().unwrap())
+            .collect();
+        assert_eq!(bodies, ["Loved it.", "Second thoughts."]);
+    }
+
+    /// Like counts are everybody's. Two people liking one comment must read 2 to both
+    /// of them, not 1 each — which is what a per-viewer count did.
+    #[tokio::test]
+    async fn a_like_count_is_shared_and_the_heart_is_not() {
+        let (app, state) = app();
+        let sam = sign_in(&state, "1001", "sam");
+        let ada = sign_in(&state, "2002", "ada");
+        let review = "/api/reviews/user-elenarostova-le-souffle";
+
+        let (_, posted) = call(
+            &app,
+            Method::POST,
+            &format!("{review}/comments"),
+            Some(&sam),
+            Some(r#"{"body":"Worth it."}"#),
+        )
+        .await;
+        let posted: serde_json::Value = serde_json::from_str(&posted).unwrap();
+        let comment = posted["comments"][0]["id"].as_str().unwrap().to_string();
+        assert_eq!(posted["comments"][0]["like_count"], serde_json::Value::Null);
+
+        // Each press reports the new total, the presser's own state alongside it.
+        let like = |cookie: &str, uri: String| {
+            let app = app.clone();
+            let cookie = cookie.to_string();
+            async move {
+                let (status, body) = call(&app, Method::POST, &uri, Some(&cookie), None).await;
+                assert_eq!(status, StatusCode::OK, "{body}");
+                serde_json::from_str::<serde_json::Value>(&body).expect("a like state")
+            }
+        };
+
+        let first = like(&sam, format!("{review}/comments/{comment}/like")).await;
+        assert_eq!((first["liked"].as_bool(), first["like_count"].as_u64()), (Some(true), Some(1)));
+        let second = like(&ada, format!("{review}/comments/{comment}/like")).await;
+        assert_eq!((second["liked"].as_bool(), second["like_count"].as_u64()), (Some(true), Some(2)));
+
+        // Both of them read 2, and both see their own heart filled.
+        for cookie in [&sam, &ada] {
+            let (_, page) = call(&app, Method::GET, review, Some(cookie), None).await;
+            let page: serde_json::Value = serde_json::from_str(&page).unwrap();
+            assert_eq!(page["comments"][0]["like_count"], 2, "a shared count read as 1");
+            assert_eq!(page["comments"][0]["liked"], true);
+        }
+        // A third reader sees the same 2 and an empty heart.
+        let (_, page) = call(&app, Method::GET, review, None, None).await;
+        let page: serde_json::Value = serde_json::from_str(&page).unwrap();
+        assert_eq!(page["comments"][0]["like_count"], 2);
+        assert_eq!(page["comments"][0]["liked"], false);
+
+        // The review's own likes work the same way.
+        let first = like(&sam, format!("{review}/like")).await;
+        assert_eq!(first["like_count"], 1);
+        let second = like(&ada, format!("{review}/like")).await;
+        assert_eq!(second["like_count"], 2);
+        let (_, page) = call(&app, Method::GET, review, Some(&sam), None).await;
+        let page: serde_json::Value = serde_json::from_str(&page).unwrap();
+        assert_eq!(page["like_count"], 2);
+        assert_eq!(page["liked"], true);
+
+        // Unliking takes one away rather than clearing the row for everybody.
+        let undone = like(&sam, format!("{review}/comments/{comment}/like")).await;
+        assert_eq!((undone["liked"].as_bool(), undone["like_count"].as_u64()), (Some(false), Some(1)));
+    }
+
+    /// A signed-out reader can follow a conversation. Joining it is what needs an
+    /// account.
+    #[tokio::test]
+    async fn anonymous_can_read_a_thread_but_not_post_to_it() {
+        let (app, state) = app();
+        let sam = sign_in(&state, "1001", "sam");
+        let review = "/api/reviews/user-elenarostova-le-souffle";
+
+        let (_, posted) = call(
+            &app,
+            Method::POST,
+            &format!("{review}/comments"),
+            Some(&sam),
+            Some(r#"{"body":"Read this, stranger."}"#),
+        )
+        .await;
+        let comment = serde_json::from_str::<serde_json::Value>(&posted).unwrap()["comments"][0]
+            ["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Readable, in full, with its author credited and nothing claimed as the
+        // reader's own.
+        let (status, page) = call(&app, Method::GET, review, None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        let page: serde_json::Value = serde_json::from_str(&page).unwrap();
+        assert_eq!(page["comments"].as_array().unwrap().len(), 1);
+        assert_eq!(page["comments"][0]["body"], "Read this, stranger.");
+        assert_eq!(page["comments"][0]["author_handle"], "@sam");
+        assert_eq!(page["comments"][0]["is_you"], false);
+        assert_eq!(page["comments"][0]["liked"], false);
+
+        // But not writable, at any of the three ways in.
+        for (uri, body) in [
+            (format!("{review}/comments"), Some(r#"{"body":"Me too."}"#)),
+            (format!("{review}/comments/{comment}/replies"), Some(r#"{"body":"Me too."}"#)),
+            (format!("{review}/comments/{comment}/like"), None),
+        ] {
+            let (status, answer) = call(&app, Method::POST, &uri, None, body).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri} answered {status}");
+            assert!(answer.contains("\"error\""));
+        }
+
+        // And nothing was written on the way past.
+        let (_, page) = call(&app, Method::GET, review, None, None).await;
+        let page: serde_json::Value = serde_json::from_str(&page).unwrap();
+        assert_eq!(page["comments"].as_array().unwrap().len(), 1);
+        assert!(page["comments"][0]["replies"].as_array().unwrap().is_empty());
+        assert_eq!(page["comments"][0]["like_count"], serde_json::Value::Null);
     }
 
     /// With no credentials the server still runs: reads work, writes 401, and the

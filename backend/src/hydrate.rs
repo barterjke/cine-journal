@@ -7,22 +7,21 @@
 //! Nothing here knows about accounts. It takes a `&Store` and stamps it onto a
 //! payload; whose store it is was decided before it was loaded. That is why an
 //! anonymous request works without a branch anywhere below: it passes an empty one.
+//!
+//! What is *not* here any more is the comment thread. This module used to build one
+//! out of the store, which meant the thread was whatever the viewer had written
+//! themselves. Threads are shared content now and come from `db::thread`; the only
+//! per-viewer thing left about them is which likes are the reader's own.
 
 use crate::models::*;
 use crate::state::Store;
 
-/// What a comment row calls the visitor. Their own posts are labelled by relation
-/// rather than by name, as the export drew them — the name belongs on the profile,
-/// which is where `VISITOR_NAME` goes.
-const BYLINE: &str = "You";
-
 /// The export's own visitor, now the identity of one account.
 ///
 /// These used to *be* the identity, because there was one visitor and no accounts.
-/// A signed-in user has their own `people` row, so these are down to two jobs: they
-/// dress the legacy account that `db::migrate` hands the pre-accounts rows to (see
-/// `db::LEGACY_USER_ID`), and `visitor_avatar` is the fallback face for a comment
-/// whose store carries none.
+/// A signed-in user has their own `people` row, so these are down to one job: they
+/// dress the legacy account that `db::migrate` hands the pre-accounts rows to — see
+/// `db::LEGACY_USER_ID`.
 ///
 /// The name and the avatar are the export's own — `review-mobile.html` drew Alex
 /// Mercer with this photo, and `data::architecture_review` still credits them —
@@ -38,12 +37,7 @@ pub const VISITOR_BIO: &str =
 const VISITOR_AVATAR_ALT: &str =
     "A portrait of a young person in a brightly lit, modern setting wearing stylish minimalist clothing.";
 
-/// Posted content has no real timestamp — the export's are pre-formatted strings
-/// like "2 hours ago", and inventing a clock-based one would drift out of that
-/// vocabulary the moment a minute passed.
-const JUST_NOW: &str = "Just now";
-
-/// One face for the visitor everywhere.
+/// The legacy account's face.
 ///
 /// This was Elena's small avatar until the profile screen existed, which made the
 /// mismatch load-bearing: Elena is a *friend* on the stories rail, so the visitor
@@ -53,20 +47,19 @@ pub fn visitor_avatar() -> Image {
     Image::new("img/avatar-alex-mercer.jpg", VISITOR_AVATAR_ALT)
 }
 
-/// The like count to show beside a button, given the transcribed count and
-/// whether the visitor has liked it.
+/// How a like total renders beside a button: nothing at all when nobody has pressed
+/// it, the number otherwise.
 ///
-/// Shared by the hydrate passes and by the two like handlers, which return the
-/// new count directly — three copies of this drifted apart once already.
-/// Something the export drew without a count reads 1 once liked and goes back to
-/// showing none once unliked, rather than a visible zero.
-pub fn like_count(base: Option<u32>, liked: bool) -> Option<u32> {
-    match (base, liked) {
-        (Some(n), true) => Some(n + 1),
-        (Some(n), false) => Some(n),
-        (None, true) => Some(1),
-        (None, false) => None,
-    }
+/// One place for that rule, because `content` applies it when building a review and
+/// the two like handlers apply it again when answering a press. Three copies of it
+/// drifted apart once already.
+///
+/// It used to take a transcribed base count and the viewer's own flag and add them,
+/// because every like there was belonged to the one visitor. Totals are real now —
+/// counted out of `liked_reviews` and `liked_comments`, the viewer's own included — so
+/// there is nothing left to add and adding would double-count them.
+pub fn like_count(total: u32) -> Option<u32> {
+    (total > 0).then_some(total)
 }
 
 /// One page of the infinite feed.
@@ -131,56 +124,20 @@ pub fn search(mut response: SearchResponse, store: &Store) -> SearchResponse {
     response
 }
 
-/// Applies the reader's likes and appends anything they posted.
+/// Marks which of a review's likes are the reader's own.
 ///
-/// A review arrives with an empty thread and no like count, so this pass is where the
-/// whole conversation comes from. Counts are bumped by one when liked so the number
-/// beside the button matches what was just clicked.
+/// Just the flags. `content` builds the review and its whole thread out of SQLite,
+/// counts included, because both are content that everybody sees; what only this
+/// reader can be told is which hearts are filled in for *them*. Two people looking at
+/// the same review get the same numbers and different hearts.
 ///
-/// The thread is the reader's **own** comments, not everybody's. Comments are per-user
-/// deltas — the same as a rating — so a signed-in user sees theirs and an anonymous
-/// reader sees none. A shared thread would need an author on every row, which is a
-/// different feature and a different shape.
+/// An anonymous reader passes an empty store, so nothing is flagged — and no branch
+/// anywhere had to learn about that.
 pub fn review(mut review: Review, store: &Store) -> Review {
     review.liked = store.liked_reviews.contains(&review.id);
-    review.like_count = like_count(review.like_count, review.liked);
-    // Their own face, or the export's for a store that carries none — which is only
-    // ever an empty store, and an empty store appends no comments to put it on.
-    let byline_avatar = store.avatar.clone().unwrap_or_else(visitor_avatar);
-
-    // Append their own comments *before* the pass below, so a reply to one of them
-    // is rendered too — the reply loop has to see every comment, not just the
-    // transcribed ones.
-    if let Some(posted) = store.posted_comments.get(&review.id) {
-        review.comments.extend(posted.iter().map(|comment| Comment {
-            id: comment.id.clone(),
-            author_name: BYLINE.into(),
-            author_avatar: byline_avatar.clone(),
-            timestamp: JUST_NOW.into(),
-            body: comment.body.clone(),
-            // Starts with no count at all rather than a visible zero, matching
-            // the export's second comment, which renders no like button.
-            like_count: None,
-            replies: Vec::new(),
-            liked: false,
-        }));
-    }
-
     for comment in &mut review.comments {
         comment.liked = store.liked_comments.contains(&comment.id);
-        comment.like_count = like_count(comment.like_count, comment.liked);
-
-        let key = (review.id.clone(), comment.id.clone());
-        if let Some(replies) = store.posted_replies.get(&key) {
-            comment.replies.extend(replies.iter().map(|posted| Reply {
-                id: posted.id.clone(),
-                author_name: BYLINE.into(),
-                author_avatar: byline_avatar.clone(),
-                body: posted.body.clone(),
-            }));
-        }
     }
-
     review
 }
 
@@ -188,7 +145,6 @@ pub fn review(mut review: Review, store: &Store) -> Review {
 mod tests {
     use super::*;
     use crate::data;
-    use crate::state::{PostedComment, PostedReply};
 
     fn store() -> Store {
         Store::default()
@@ -324,12 +280,12 @@ mod tests {
         assert_eq!(unrated.your_rating_half_stars, None);
     }
 
-    /// A review as `content::full_review` hands one over: a `user_reviews` row
-    /// expanded into a page, with an empty thread and no like count. Everything
-    /// under it is the visitor's, which is what this module puts there.
+    /// A review as `content::full_review` hands one over: the page, its real like
+    /// total and its whole thread, with the per-viewer flags still false. Setting
+    /// those is the only job this module has left on a review.
     fn seeded_review() -> Review {
         Review {
-            id: "user-elenarostova-dune-part-two".into(),
+            id: ID.into(),
             movie: Movie {
                 id: "dune-part-two".into(),
                 title: "Dune: Part Two".into(),
@@ -345,7 +301,7 @@ mod tests {
             author_avatar: Image::new("img/avatar-elena-rostova.jpg", "Elena Rostova."),
             author_followed: true,
             watched_on: "Reviewed on March 15, 2024".into(),
-            rating_half_stars: 9,
+            rating_half_stars: Some(9),
             paragraphs: vec!["Villeneuve builds a world you can feel the grit of.".into()],
             like_count: None,
             comments: Vec::new(),
@@ -353,136 +309,108 @@ mod tests {
         }
     }
 
+    /// One comment on it, by somebody else, with two people already liking it.
+    fn comment(id: &str) -> Comment {
+        Comment {
+            id: id.into(),
+            author_id: "account-2002".into(),
+            author_name: "Ada Lovelace".into(),
+            author_handle: "@ada".into(),
+            author_avatar: Image::new("img/avatar-ada.jpg", "Ada."),
+            is_you: false,
+            timestamp: "August 20, 2026".into(),
+            body: "Agreed about the sound.".into(),
+            like_count: Some(2),
+            replies: Vec::new(),
+            liked: false,
+        }
+    }
+
     /// The id every test below keys its store entries on.
     const ID: &str = "user-elenarostova-dune-part-two";
 
-    /// A review carries no stored count, so the first like reads 1 rather than
-    /// inventing a number to add to.
+    /// The reader's own like fills the heart. The *number* is not this module's to
+    /// touch: it is everybody's total, counted in `db`, and adding the viewer's like
+    /// to it here would count them twice.
     #[test]
-    fn liking_a_review_starts_its_count_at_one() {
-        let base = seeded_review();
-        assert_eq!(base.like_count, None);
+    fn liking_a_review_fills_the_heart_and_leaves_the_total_alone() {
+        let mut base = seeded_review();
+        base.like_count = Some(3);
 
         let mut store = store();
         store.liked_reviews.insert(ID.into());
 
         let liked = review(base, &store);
         assert!(liked.liked);
-        assert_eq!(liked.like_count, Some(1));
+        assert_eq!(liked.like_count, Some(3), "the viewer's own like was double-counted");
     }
 
-    /// And unliking takes the number away entirely rather than showing a zero.
+    /// A review nobody has liked shows no number at all rather than a visible zero.
     #[test]
-    fn unliking_removes_the_count_rather_than_zeroing_it() {
+    fn an_unliked_review_shows_no_count() {
         let hydrated = review(seeded_review(), &store());
         assert!(!hydrated.liked);
         assert_eq!(hydrated.like_count, None);
     }
 
+    /// The same for a comment: the heart is the reader's, the number is everybody's.
     #[test]
-    fn posted_comments_become_the_thread() {
-        let mut store = store();
-        store.posted_comments.insert(
-            ID.into(),
-            vec![
-                PostedComment { id: "comment-1".into(), body: "First".into() },
-                PostedComment { id: "comment-2".into(), body: "Second".into() },
-            ],
-        );
+    fn a_comment_carries_the_readers_own_like_and_the_shared_total() {
+        let mut base = seeded_review();
+        base.comments = vec![comment("comment-1"), comment("comment-2")];
 
-        let hydrated = review(seeded_review(), &store);
-        assert_eq!(hydrated.comments.len(), 2);
-        assert_eq!(hydrated.comments[0].body, "First");
-        let last = hydrated.comments.last().unwrap();
-        assert_eq!(last.body, "Second");
-        assert_eq!(last.author_name, BYLINE);
-        assert_eq!(last.timestamp, JUST_NOW);
-        // No count until liked — the export's second comment drew no like button.
-        assert_eq!(last.like_count, None);
+        let mut store = store();
+        store.liked_comments.insert("comment-2".into());
+
+        let hydrated = review(base, &store);
+        assert!(!hydrated.comments[0].liked);
+        assert!(hydrated.comments[1].liked);
+        // Both still read 2, because two people liked each of them.
+        assert_eq!(hydrated.comments[0].like_count, Some(2));
+        assert_eq!(hydrated.comments[1].like_count, Some(2));
     }
 
-    /// Liking a comment must not invent a count out of thin air — it starts from 0,
-    /// so the button reads 1.
-    #[test]
-    fn liking_a_comment_starts_from_zero() {
-        let mut store = store();
-        store
-            .posted_comments
-            .insert(ID.into(), vec![PostedComment { id: "comment-1".into(), body: "Mine".into() }]);
-        store.liked_comments.insert("comment-1".into());
-
-        let hydrated = review(seeded_review(), &store);
-        let comment = &hydrated.comments[0];
-        assert!(comment.liked);
-        assert_eq!(comment.like_count, Some(1));
-    }
-
-    /// A reply to a comment posted this session has to render too — which only
-    /// works if posted comments are appended before the reply pass.
-    #[test]
-    fn posted_replies_attach_to_their_comment() {
-        let mut store = store();
-        store.posted_comments.insert(
-            ID.into(),
-            vec![PostedComment { id: "comment-1".into(), body: "Mine".into() }],
-        );
-        store.posted_replies.insert(
-            (ID.into(), "comment-1".into()),
-            vec![PostedReply { id: "reply-2".into(), body: "And a follow-up".into() }],
-        );
-
-        let hydrated = review(seeded_review(), &store);
-        let mine = &hydrated.comments[0];
-        assert_eq!(mine.replies.len(), 1);
-        assert_eq!(mine.replies[0].body, "And a follow-up");
-        assert_eq!(mine.replies[0].author_name, BYLINE);
-    }
-
-    /// Replies keyed to one review don't leak into another.
-    #[test]
-    fn replies_are_scoped_to_their_review() {
-        let mut store = store();
-        store
-            .posted_comments
-            .insert(ID.into(), vec![PostedComment { id: "comment-1".into(), body: "Mine".into() }]);
-        store.posted_replies.insert(
-            ("some-other-review".into(), "comment-1".into()),
-            vec![PostedReply { id: "reply-2".into(), body: "Wrong review".into() }],
-        );
-
-        let hydrated = review(seeded_review(), &store);
-        assert!(hydrated.comments[0].replies.is_empty());
-    }
-
-    /// And a like keyed to another review doesn't either — both screens read the
-    /// same tables, so the id is the only thing keeping them apart.
+    /// A like keyed to another review doesn't leak in — both screens read the same
+    /// tables, so the id is the only thing keeping them apart.
     #[test]
     fn likes_are_scoped_to_their_review() {
         let mut store = store();
         store.liked_reviews.insert("user-marcusdrey-dune-part-two".into());
+        store.liked_comments.insert("comment-99".into());
 
-        let hydrated = review(seeded_review(), &store);
+        let mut base = seeded_review();
+        base.comments = vec![comment("comment-1")];
+
+        let hydrated = review(base, &store);
         assert!(!hydrated.liked, "another person's review of the same film");
-        assert_eq!(hydrated.like_count, None);
+        assert!(!hydrated.comments[0].liked);
     }
 
-    /// The like handlers return this number directly rather than re-hydrating, so
-    /// it has to agree with what the hydrate passes produce.
+    /// The rule the like handlers and `content` both apply: nothing at all for nobody,
+    /// the real total otherwise. It used to add the viewer's own like to a transcribed
+    /// base, which was only right while every like belonged to one visitor.
     #[test]
-    fn like_counts_round_trip() {
-        assert_eq!(like_count(Some(24), true), Some(25));
-        assert_eq!(like_count(Some(24), false), Some(24));
-        assert_eq!(like_count(None, true), Some(1));
-        assert_eq!(like_count(None, false), None);
+    fn a_like_total_hides_itself_at_zero() {
+        assert_eq!(like_count(0), None);
+        assert_eq!(like_count(1), Some(1));
+        assert_eq!(like_count(24), Some(24));
     }
 
+    /// An anonymous reader passes an empty store, and gets the thread untouched:
+    /// every comment still there, every author still credited, nothing liked.
     #[test]
-    fn an_empty_store_changes_nothing() {
-        let base = seeded_review();
+    fn an_empty_store_leaves_the_thread_readable() {
+        let mut base = seeded_review();
+        base.comments = vec![comment("comment-1")];
+        base.like_count = Some(4);
+
         let hydrated = review(base.clone(), &store());
         assert!(!hydrated.liked);
-        assert_eq!(hydrated.like_count, base.like_count);
+        assert_eq!(hydrated.like_count, Some(4));
         assert_eq!(hydrated.paragraphs, base.paragraphs);
-        assert!(hydrated.comments.is_empty());
+        assert_eq!(hydrated.comments.len(), 1, "a signed-out reader lost the thread");
+        assert_eq!(hydrated.comments[0].author_name, "Ada Lovelace");
+        assert!(!hydrated.comments[0].is_you);
+        assert_eq!(hydrated.comments[0].like_count, Some(2));
     }
 }

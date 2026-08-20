@@ -455,8 +455,14 @@ pub async fn mobile_feed(source: &Source, db: &Db, user: Option<&str>) -> Mobile
                 year: None,
                 poster: review.poster.unwrap_or_else(missing_poster),
             },
-            subtitle: format!("{} rated it", first_name(&review.author_name)),
-            rating_half_stars: Some(review.rating_half_stars),
+            // "rated it" only when they did. An account can write about a film
+            // without scoring it, and the card would otherwise say they rated it
+            // while drawing no stars.
+            subtitle: match review.rating_half_stars {
+                Some(_) => format!("{} rated it", first_name(&review.author_name)),
+                None => format!("{} reviewed it", first_name(&review.author_name)),
+            },
+            rating_half_stars: review.rating_half_stars,
             review_id: Some(review.id),
             on_watchlist: false,
         })
@@ -1343,7 +1349,7 @@ pub async fn reviews(source: &Source, db: &Db, user: Option<&str>) -> Vec<Review
         // Sequential rather than concurrent: consecutive rows are often about the
         // same film, and `Tmdb::movie` caches on the path, so the second one is a
         // hit. Spawning would race them into duplicate upstream calls instead.
-        if let Some(review) = full_review(source, row).await {
+        if let Some(review) = full_review(source, db, user, row).await {
             out.push(review);
         }
     }
@@ -1361,7 +1367,7 @@ pub async fn review_by_id(
         let conn = lock(db);
         db::review_by_id(&conn, viewer(user), id).ok().flatten()?
     };
-    full_review(source, &row).await
+    full_review(source, db, user, &row).await
 }
 
 /// One stored review as the full review screen draws it: the prose, plus the film
@@ -1372,11 +1378,19 @@ pub async fn review_by_id(
 /// without the film, whereas this whole page is *about* a film. Its backdrop, its
 /// poster, its genres and its director are the page around the text, and rendering
 /// them as blanks would be worse than a 404.
-async fn full_review(source: &Source, row: &db::UserReviewRow) -> Option<Review> {
+async fn full_review(
+    source: &Source,
+    db: &Db,
+    user: Option<&str>,
+    row: &db::UserReviewRow,
+) -> Option<Review> {
     let detail = movie_detail_by_id(source, &row.movie_id).await?;
+    let id = db::review_id(&row.person_id, &row.movie_id);
+    // After the await, so no lock is held across it.
+    let (comments, likes) = conversation(db, user, &id);
 
     Some(Review {
-        id: db::review_id(&row.person_id, &row.movie_id),
+        id,
         movie: Movie {
             id: detail.id,
             title: detail.title,
@@ -1404,12 +1418,67 @@ async fn full_review(source: &Source, row: &db::UserReviewRow) -> Option<Review>
         },
         rating_half_stars: row.half_stars,
         paragraphs: map::paragraphs(&row.body),
-        // No stored count: nobody but the visitor can like anything yet, so the
-        // button reads nothing until they do and 1 after — see `hydrate::like_count`.
-        like_count: None,
-        comments: Vec::new(),
+        like_count: hydrate::like_count(likes),
+        comments,
+        // `hydrate::review` fills this in — it is the one field here that is about the
+        // reader rather than about the review.
         liked: false,
     })
+}
+
+/// The conversation on one review, and how many people have liked the review itself.
+///
+/// One lock for both, and no `.await` inside it. `user` decides only the `is_you`
+/// bylines; the comments, the replies and the counts are the same for everybody, and
+/// `hydrate::review` adds which hearts are filled in.
+fn conversation(db: &Db, user: Option<&str>, review_id: &str) -> (Vec<Comment>, u32) {
+    let conn = lock(db);
+    let comments = db::thread(&conn, review_id).unwrap_or_default();
+    let likes = db::review_like_count(&conn, review_id).unwrap_or(0);
+
+    let dressed = comments
+        .into_iter()
+        .map(|row| Comment {
+            id: row.id,
+            author_id: row.author_id.clone(),
+            author_name: row.author_name,
+            author_handle: row.author_handle,
+            author_avatar: row.author_avatar,
+            // The name is always the author's real one; this is what lets the client
+            // print "You" instead without losing the link to their page.
+            is_you: user == Some(row.author_id.as_str()),
+            timestamp: stamp(&row.created_at),
+            body: row.body,
+            like_count: hydrate::like_count(row.like_count),
+            replies: row
+                .replies
+                .into_iter()
+                .map(|reply| Reply {
+                    id: reply.id,
+                    author_id: reply.author_id.clone(),
+                    author_name: reply.author_name,
+                    author_handle: reply.author_handle,
+                    author_avatar: reply.author_avatar,
+                    is_you: user == Some(reply.author_id.as_str()),
+                    timestamp: stamp(&reply.created_at),
+                    body: reply.body,
+                })
+                .collect(),
+            // As on the review: `hydrate::review` says whether this reader liked it.
+            liked: false,
+        })
+        .collect();
+
+    (dressed, likes)
+}
+
+/// A stored timestamp as a thread prints it.
+///
+/// A real date, where a posted comment used to read "Just now" — it had no stored time
+/// worth printing, and now every one does. The raw value is the fallback rather than a
+/// blank, so a row written in some other format still says when.
+fn stamp(created_at: &str) -> String {
+    map::long_date(created_at).unwrap_or_else(|| created_at.to_string())
 }
 
 /// `GET /api/movies` — the detail pages of the trending films.
@@ -1864,17 +1933,17 @@ pub fn review_exists(db: &Db, id: &str) -> bool {
     db::review_by_id(&conn, db::ANONYMOUS, id).ok().flatten().is_some()
 }
 
-/// Whether this account posted this comment. Guards replies and likes against ids
+/// Whether this comment exists on this review. Guards replies and likes against ids
 /// nothing renders.
 ///
-/// A thread shows only the comments you wrote, so scoping this to the account is what
-/// keeps "can reply to it" and "can see it" the same set.
-pub fn comment_exists(db: &Db, user: &str, review_id: &str, comment_id: &str) -> bool {
+/// Not scoped to the asker: a thread is shared, so anybody who can read a comment can
+/// reply to it and like it. Nothing can edit or delete one.
+pub fn comment_exists(db: &Db, review_id: &str, comment_id: &str) -> bool {
     let conn = lock(db);
-    db::comment_exists(&conn, user, review_id, comment_id).unwrap_or(false)
+    db::comment_exists(&conn, review_id, comment_id).unwrap_or(false)
 }
 
-/// A review with the reader's own likes, comments and replies folded in.
+/// A review with the reader's own likes marked on it.
 pub async fn hydrated_review(
     source: &Source,
     db: &Db,
@@ -2369,6 +2438,56 @@ mod tests {
         assert_eq!(set_bio(&db, db::LEGACY_USER_ID, "").unwrap(), VISITOR_BIO);
     }
 
+    /// A thread prints real dates now. The raw value is the fallback rather than a
+    /// blank, so a row stored in some other format still says when.
+    #[test]
+    fn a_comment_timestamp_is_a_date_or_the_raw_value() {
+        // What CURRENT_TIMESTAMP writes, and what the seed writes.
+        assert_eq!(stamp("2026-08-20 18:11:01"), "August 20, 2026");
+        assert_eq!(stamp("2024-03-15T10:00:00Z"), "March 15, 2024");
+        assert_eq!(stamp("who knows"), "who knows");
+        assert_eq!(stamp(""), "");
+    }
+
+    /// A card may not claim somebody rated a film they only wrote about.
+    #[tokio::test]
+    async fn a_mobile_card_says_rated_only_when_there_is_a_score() {
+        let (source, db) = graph().await;
+        let follower = {
+            let conn = lock(&db);
+            let follower = db::upsert_google_account(
+                &conn,
+                &db::GoogleAccount {
+                    sub: "2002".into(),
+                    email: None,
+                    name: "Ada Lovelace".into(),
+                    avatar: Image::new("img/a.jpg", "Ada."),
+                    handle: "ada".into(),
+                },
+            )
+            .unwrap()
+            .id;
+            db::set_follow(&conn, &follower, ME, Some(true)).unwrap();
+            db::set_user_review(&conn, ME, "le-souffle", "Words, no stars.").unwrap();
+            follower
+        };
+
+        let cards = mobile_feed(&source, &db, Some(&follower)).await.items;
+        let card = cards.iter().find(|c| c.movie.id == "le-souffle").expect("their review");
+        assert_eq!(card.rating_half_stars, None);
+        assert!(card.subtitle.ends_with(" reviewed it"), "{}", card.subtitle);
+
+        // With a score it goes back to the wording every other card uses.
+        {
+            let conn = lock(&db);
+            db::set_rating(&conn, ME, "le-souffle", 8).unwrap();
+        }
+        let cards = mobile_feed(&source, &db, Some(&follower)).await.items;
+        let card = cards.iter().find(|c| c.movie.id == "le-souffle").expect("their review");
+        assert_eq!(card.rating_half_stars, Some(8));
+        assert!(card.subtitle.ends_with(" rated it"), "{}", card.subtitle);
+    }
+
     #[test]
     fn a_blurb_stops_at_the_first_sentence() {
         assert_eq!(first_sentence("One thing. Then another."), Some("One thing.".into()));
@@ -2500,7 +2619,7 @@ mod tests {
         let dune = elena.reviews.iter().find(|r| r.movie_id == "dune-part-two").unwrap();
         assert_eq!(dune.movie_title, "Dune: Part Two");
         assert!(dune.poster.is_some());
-        assert_eq!(dune.rating_half_stars, 9);
+        assert_eq!(dune.rating_half_stars, Some(9));
         assert_eq!(dune.written_on, "March 15, 2024", "the date is pre-formatted");
         assert!(dune.author_followed);
 
@@ -2557,8 +2676,8 @@ mod tests {
         assert_eq!(followed, [true, true, false]);
         // Priya rated it higher than Marcus, and still sorts below him: friendship
         // outranks the score, and the score only breaks ties within a group.
-        assert_eq!(reviews[1].rating_half_stars, 7);
-        assert_eq!(reviews[2].rating_half_stars, 8);
+        assert_eq!(reviews[1].rating_half_stars, Some(7));
+        assert_eq!(reviews[2].rating_half_stars, Some(8));
 
         // Every id in the payload is a real one the frontend can link to.
         assert!(reviews.iter().all(|r| r.author_handle.starts_with('@')));

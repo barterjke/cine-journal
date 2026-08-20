@@ -35,13 +35,11 @@
 //! rows are the app's own afterwards: following writes to `follows`, and nothing
 //! about a person is re-fetched. See `content::people`.
 
-use std::collections::BTreeMap;
-
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::auth::random_token;
 use crate::models::Image;
-use crate::state::{PostedComment, PostedReply, Store};
+use crate::state::Store;
 
 /// Where the database file lives, relative to the crate root (`cargo run` runs
 /// from `backend/`). Override with `DATABASE_PATH`, and `:memory:` works for a
@@ -103,8 +101,21 @@ pub fn prepare(conn: &Connection) -> Result<()> {
     for table in &PER_USER_TABLES {
         conn.execute_batch(table.create)?;
     }
-    migrate(conn)
+    migrate(conn)?;
+    // After `migrate`, not before: it rebuilds the two tables these are on, and a
+    // rebuild takes the old table's indexes away with it.
+    conn.execute_batch(PER_USER_INDEXES)
 }
+
+/// Indexes on tables `migrate` may rebuild.
+///
+/// Both serve reads that were per-user before and are shared now: `visitor_reviews`
+/// is scanned by film for a film's review list, and `liked_comments` by comment to
+/// count a comment's likes. Their primary keys lead with `user_id`, so neither lookup
+/// could use one.
+const PER_USER_INDEXES: &str =
+    "CREATE INDEX IF NOT EXISTS visitor_reviews_by_movie ON visitor_reviews(movie_id);
+     CREATE INDEX IF NOT EXISTS liked_comments_by_comment ON liked_comments(comment_id);";
 
 /// Everything that is not per-user: people, their seeded content, sessions, and the
 /// two posting tables whose ids the frontend holds.
@@ -1198,15 +1209,14 @@ pub struct FollowRow {
 /// about the same fact. Those rails are gone entirely, and the feed's rails are
 /// built from this same list.
 pub fn following(conn: &Connection, user_id: &str) -> Result<Vec<FollowRow>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT p.id AS id, p.name AS name, p.avatar_src AS avatar_src,
                 p.avatar_alt AS avatar_alt, p.handle AS handle, p.bio AS bio,
-                (SELECT COUNT(*) FROM user_reviews r WHERE r.person_id = p.id)
-                    AS review_count
+                {REVIEW_COUNT} AS review_count
          FROM people p
          JOIN follows f ON f.person_id = p.id AND f.user_id = ?1
-         ORDER BY f.followed_at DESC, p.name",
-    )?;
+         ORDER BY f.followed_at DESC, p.name"
+    ))?;
     let rows = stmt.query_map([user_id], |row| {
         Ok(FollowRow {
             id: row.get("id")?,
@@ -1257,16 +1267,20 @@ pub struct UserRow {
 /// gated on there *being* somebody asking (`?1 <> ''`, which is `ANONYMOUS`) —
 /// otherwise the seeded flag would tell a signed-out reader that eight people follow
 /// them.
-const USER_SELECT: &str = "SELECT p.id AS id, p.name AS name, p.handle AS handle,
-            p.avatar_src AS avatar_src, p.avatar_alt AS avatar_alt, p.bio AS bio,
-            p.is_account AS is_account,
-            f.user_id IS NOT NULL AS following,
-            (?1 <> '' AND (p.follows_visitor = 1
-                           OR EXISTS(SELECT 1 FROM follows b
-                                     WHERE b.user_id = p.id
-                                       AND b.person_id = ?1))) AS follows_you,
-            (SELECT COUNT(*) FROM user_reviews r WHERE r.person_id = p.id) AS review_count
-     FROM people p LEFT JOIN follows f ON f.person_id = p.id AND f.user_id = ?1";
+fn user_select() -> String {
+    format!(
+        "SELECT p.id AS id, p.name AS name, p.handle AS handle,
+                p.avatar_src AS avatar_src, p.avatar_alt AS avatar_alt, p.bio AS bio,
+                p.is_account AS is_account,
+                f.user_id IS NOT NULL AS following,
+                (?1 <> '' AND (p.follows_visitor = 1
+                               OR EXISTS(SELECT 1 FROM follows b
+                                         WHERE b.user_id = p.id
+                                           AND b.person_id = ?1))) AS follows_you,
+                {REVIEW_COUNT} AS review_count
+         FROM people p LEFT JOIN follows f ON f.person_id = p.id AND f.user_id = ?1"
+    )
+}
 
 fn user_from_row(row: &rusqlite::Row) -> Result<UserRow> {
     Ok(UserRow {
@@ -1297,8 +1311,9 @@ pub fn search_people(conn: &Connection, user_id: &str, query: &str) -> Result<Ve
     // would match "axb". ESCAPE makes them literal.
     let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
     let pattern = format!("%{}%", escaped.trim_start_matches('@'));
+    let select = user_select();
     let mut stmt = conn.prepare(&format!(
-        "{USER_SELECT}
+        "{select}
          WHERE p.is_user = 1 AND p.id <> ?1
            AND (?2 = '' OR p.handle LIKE ?3 ESCAPE '\\' OR p.name LIKE ?3 ESCAPE '\\')
          ORDER BY following DESC, review_count DESC, p.name"
@@ -1315,22 +1330,24 @@ pub fn person_by_handle(
     handle: &str,
 ) -> Result<Option<UserRow>> {
     let handle = format!("@{}", handle.trim_start_matches('@'));
-    let mut stmt = conn.prepare(&format!("{USER_SELECT} WHERE p.handle = ?2"))?;
+    let mut stmt = conn.prepare(&format!("{} WHERE p.handle = ?2", user_select()))?;
     let row = stmt.query_row(params![user_id, handle], user_from_row).optional()?;
     Ok(row)
 }
 
 /// One user by id — what the follow endpoint takes, since a button knows the id.
 pub fn person_by_id(conn: &Connection, user_id: &str, id: &str) -> Result<Option<UserRow>> {
-    let mut stmt = conn.prepare(&format!("{USER_SELECT} WHERE p.id = ?2 AND p.is_user = 1"))?;
+    let mut stmt =
+        conn.prepare(&format!("{} WHERE p.id = ?2 AND p.is_user = 1", user_select()))?;
     let row = stmt.query_row(params![user_id, id], user_from_row).optional()?;
     Ok(row)
 }
 
 /// The users one account follows, most recently followed first.
 pub fn followed_users(conn: &Connection, user_id: &str) -> Result<Vec<UserRow>> {
+    let select = user_select();
     let mut stmt = conn.prepare(&format!(
-        "{USER_SELECT} WHERE f.user_id IS NOT NULL ORDER BY f.followed_at DESC, p.name"
+        "{select} WHERE f.user_id IS NOT NULL ORDER BY f.followed_at DESC, p.name"
     ))?;
     let rows = stmt.query_map([user_id], user_from_row)?.collect();
     rows
@@ -1339,10 +1356,11 @@ pub fn followed_users(conn: &Connection, user_id: &str) -> Result<Vec<UserRow>> 
 /// The users who follow one account — the seeded people who follow everybody, plus
 /// the real accounts that wrote a row.
 pub fn followers(conn: &Connection, user_id: &str) -> Result<Vec<UserRow>> {
+    let select = user_select();
     let mut stmt = conn.prepare(&format!(
         // The `follows_you` expression again rather than the alias: SQLite would
         // accept the alias here, but only SQLite would.
-        "{USER_SELECT}
+        "{select}
          WHERE p.is_user = 1 AND p.id <> ?1
            AND ?1 <> '' AND (p.follows_visitor = 1
                              OR EXISTS(SELECT 1 FROM follows b
@@ -1404,7 +1422,10 @@ pub struct UserReviewRow {
     pub avatar: Image,
     pub followed: bool,
     pub movie_id: String,
-    pub half_stars: u8,
+    /// `None` for prose written without a score. A seeded review always has one —
+    /// the harvest never separated them — but an account can write about a film
+    /// without rating it, and showing that as zero stars would be a lie about it.
+    pub half_stars: Option<u8>,
     pub body: String,
     pub created_at: String,
 }
@@ -1423,16 +1444,64 @@ fn review_from_row(row: &rusqlite::Row) -> Result<UserReviewRow> {
     })
 }
 
-/// As `USER_SELECT`: `?1` is the account asking, and every query below starts its
-/// own parameters at `?2`.
-const REVIEW_SELECT: &str = "SELECT r.person_id AS person_id, p.name AS name, p.handle AS handle,
-            p.avatar_src AS avatar_src, p.avatar_alt AS avatar_alt,
-            f.user_id IS NOT NULL AS followed,
-            r.movie_id AS movie_id, r.half_stars AS half_stars,
-            r.body AS body, r.created_at AS created_at
-     FROM user_reviews r
-     JOIN people p ON p.id = r.person_id
-     LEFT JOIN follows f ON f.person_id = r.person_id AND f.user_id = ?1";
+/// Every review anybody wrote, from the two tables that hold them.
+///
+/// There are two because the app keeps a *rating* and the *prose* about a film apart:
+/// clearing a score must not delete what you wrote. A seeded person's review arrives
+/// from the harvest with both in one `user_reviews` row; an account writes prose to
+/// `visitor_reviews` and a score to `ratings`, separately, so its review is assembled
+/// here by joining them.
+///
+/// Without this union an account's reviews were invisible to everybody — including
+/// the people following them, which is the whole point of following somebody.
+///
+/// `NOT EXISTS` keeps `UNION ALL` honest: nobody has rows in both tables for the same
+/// film today, and if anybody ever did the review would otherwise be listed twice.
+/// `UNION ALL` rather than `UNION` because that guard already rules out duplicates,
+/// and `UNION` would pay for a sort to prove it.
+const REVIEW_SOURCE: &str = "SELECT person_id, movie_id, half_stars, body, created_at
+       FROM user_reviews
+     UNION ALL
+     SELECT v.user_id AS person_id, v.movie_id AS movie_id, r.half_stars AS half_stars,
+            v.body AS body, v.written_at AS created_at
+       FROM visitor_reviews v
+       LEFT JOIN ratings r ON r.user_id = v.user_id AND r.movie_id = v.movie_id
+      WHERE NOT EXISTS(SELECT 1 FROM user_reviews u
+                       WHERE u.person_id = v.user_id AND u.movie_id = v.movie_id)";
+
+/// How many reviews one person has written, counted the same way `REVIEW_SOURCE`
+/// lists them. `p.id` is the person, so this only reads inside `USER_SELECT` and
+/// `following`.
+const REVIEW_COUNT: &str = "((SELECT COUNT(*) FROM user_reviews r WHERE r.person_id = p.id)
+      + (SELECT COUNT(*) FROM visitor_reviews v
+         WHERE v.user_id = p.id
+           AND NOT EXISTS(SELECT 1 FROM user_reviews u
+                          WHERE u.person_id = v.user_id AND u.movie_id = v.movie_id)))";
+
+/// The columns every review query selects, over both source tables.
+///
+/// A function rather than a const because it interpolates `REVIEW_SOURCE`, and a const
+/// cannot call `format!`. One copy of that union, so the six queries built from this
+/// cannot drift apart.
+///
+/// As `USER_SELECT`: `?1` is the account asking, and every query below starts its own
+/// parameters at `?2`.
+///
+/// The `JOIN people` is what publishes a review: an author has to be somebody with a
+/// page. Every account is, so an account's reviews reach the same screens a seeded
+/// person's do, with the same attribution.
+fn review_select() -> String {
+    format!(
+        "SELECT r.person_id AS person_id, p.name AS name, p.handle AS handle,
+                p.avatar_src AS avatar_src, p.avatar_alt AS avatar_alt,
+                f.user_id IS NOT NULL AS followed,
+                r.movie_id AS movie_id, r.half_stars AS half_stars,
+                r.body AS body, r.created_at AS created_at
+         FROM ({REVIEW_SOURCE}) r
+         JOIN people p ON p.id = r.person_id
+         LEFT JOIN follows f ON f.person_id = r.person_id AND f.user_id = ?1"
+    )
+}
 
 /// The reviews of one film, **the people the visitor follows first**.
 ///
@@ -1446,8 +1515,12 @@ pub fn reviews_for_movie(
     user_id: &str,
     movie_id: &str,
 ) -> Result<Vec<UserReviewRow>> {
+    let select = review_select();
+    // `half_stars` is NULL for prose written without a score. SQLite sorts NULLs first
+    // ascending, so DESC puts an unrated review below every rated one — which is the
+    // right place for it in a list meant to lead with a recommendation.
     let mut stmt = conn.prepare(&format!(
-        "{REVIEW_SELECT} WHERE r.movie_id = ?2
+        "{select} WHERE r.movie_id = ?2
          ORDER BY followed DESC, r.half_stars DESC, r.created_at DESC, r.person_id"
     ))?;
     let rows = stmt.query_map(params![user_id, movie_id], review_from_row)?.collect();
@@ -1460,8 +1533,9 @@ pub fn reviews_by_person(
     user_id: &str,
     person_id: &str,
 ) -> Result<Vec<UserReviewRow>> {
+    let select = review_select();
     let mut stmt = conn.prepare(&format!(
-        "{REVIEW_SELECT} WHERE r.person_id = ?2 ORDER BY r.created_at DESC, r.movie_id"
+        "{select} WHERE r.person_id = ?2 ORDER BY r.created_at DESC, r.movie_id"
     ))?;
     let rows = stmt.query_map(params![user_id, person_id], review_from_row)?.collect();
     rows
@@ -1485,8 +1559,9 @@ pub fn review_by_id(
     user_id: &str,
     review_id: &str,
 ) -> Result<Option<UserReviewRow>> {
+    let select = review_select();
     let mut stmt =
-        conn.prepare(&format!("{REVIEW_SELECT} WHERE r.person_id || '-' || r.movie_id = ?2"))?;
+        conn.prepare(&format!("{select} WHERE r.person_id || '-' || r.movie_id = ?2"))?;
     stmt.query_row(params![user_id, review_id], review_from_row).optional()
 }
 
@@ -1496,8 +1571,9 @@ pub fn review_by_id(
 /// Public content: it is every user's reviews, not one account's, so this is also
 /// what an anonymous reader's feed is built from.
 pub fn recent_reviews(conn: &Connection, user_id: &str, limit: u32) -> Result<Vec<UserReviewRow>> {
+    let select = review_select();
     let mut stmt = conn.prepare(&format!(
-        "{REVIEW_SELECT}
+        "{select}
          ORDER BY followed DESC, r.created_at DESC, r.half_stars DESC, r.person_id, r.movie_id
          LIMIT ?2"
     ))?;
@@ -1516,8 +1592,9 @@ pub fn reviews_from_followed(
     user_id: &str,
     limit: u32,
 ) -> Result<Vec<UserReviewRow>> {
+    let select = review_select();
     let mut stmt = conn.prepare(&format!(
-        "{REVIEW_SELECT}
+        "{select}
          WHERE f.user_id IS NOT NULL
          ORDER BY r.created_at DESC, r.half_stars DESC, r.person_id, r.movie_id
          LIMIT ?2"
@@ -1549,17 +1626,17 @@ pub fn followed_with_newest_review(
     user_id: &str,
     limit: u32,
 ) -> Result<Vec<StoryRow>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT p.id AS id, p.name AS name, p.handle AS handle,
                 p.avatar_src AS avatar_src, p.avatar_alt AS avatar_alt,
-                (SELECT r.person_id || '-' || r.movie_id FROM user_reviews r
+                (SELECT r.person_id || '-' || r.movie_id FROM ({REVIEW_SOURCE}) r
                  WHERE r.person_id = p.id
                  ORDER BY r.created_at DESC, r.movie_id LIMIT 1) AS newest_review
          FROM people p JOIN follows f ON f.person_id = p.id AND f.user_id = ?1
          WHERE p.is_user = 1
          ORDER BY newest_review IS NULL, f.followed_at DESC, p.name
-         LIMIT ?2",
-    )?;
+         LIMIT ?2"
+    ))?;
     let rows = stmt.query_map(params![user_id, limit], |row| {
         Ok(StoryRow {
             id: row.get("id")?,
@@ -1747,6 +1824,129 @@ pub fn set_user_bio(conn: &Connection, user_id: &str, bio: &str) -> Result<Optio
     Ok(stored)
 }
 
+// --- Comment threads ----------------------------------------------------------
+
+/// One comment on a review, with its author and its likes joined in.
+///
+/// Comments are **content**, like reviews: everybody sees the whole thread. They used
+/// to be per-viewer deltas in `state::Store`, which meant you saw only your own and
+/// every one of them was captioned "You" — true only while there was one visitor.
+#[derive(Debug, Clone)]
+pub struct CommentRow {
+    /// The wire id, `comment-<rowid>`.
+    pub id: String,
+    pub author_id: String,
+    pub author_name: String,
+    pub author_handle: String,
+    pub author_avatar: Image,
+    pub body: String,
+    pub created_at: String,
+    /// How many people have liked it, the reader included.
+    ///
+    /// No "did *you* like it" flag beside it: that comes from the reader's own
+    /// `Store`, which is already loaded, and `hydrate::review` stamps it on. One place
+    /// for every per-viewer flag rather than two that can disagree.
+    pub like_count: u32,
+    /// Its replies, oldest first.
+    pub replies: Vec<ReplyRow>,
+}
+
+/// One reply under a comment. No likes: the export drew no like button on a reply.
+#[derive(Debug, Clone)]
+pub struct ReplyRow {
+    pub id: String,
+    pub author_id: String,
+    pub author_name: String,
+    pub author_handle: String,
+    pub author_avatar: Image,
+    pub body: String,
+    pub created_at: String,
+}
+
+/// The whole conversation on one review, oldest first.
+///
+/// Two queries rather than one join, because a join would repeat every comment once
+/// per reply and the grouping would have to be undone in Rust anyway. Both are ordered
+/// by rowid, which is the order things were written in.
+///
+/// The same thread for everybody, signed in or not: a reader with no account can
+/// follow a conversation, they just cannot join it.
+pub fn thread(conn: &Connection, review_id: &str) -> Result<Vec<CommentRow>> {
+    // `JOIN people` for the same reason `review_select` does it: an author is somebody
+    // with a page. Only accounts can post, and every account has a row.
+    //
+    // `'comment-' || c.id` rebuilds the wire id `comment_id` mints, because that is
+    // what `liked_comments` stores — the id the frontend sends back, not the rowid.
+    let mut stmt = conn.prepare(
+        "SELECT c.id AS id, c.body AS body, c.created_at AS created_at,
+                p.id AS author_id, p.name AS author_name, p.handle AS author_handle,
+                p.avatar_src AS avatar_src, p.avatar_alt AS avatar_alt,
+                (SELECT COUNT(*) FROM liked_comments l
+                 WHERE l.comment_id = 'comment-' || c.id) AS like_count
+         FROM comments c
+         JOIN people p ON p.id = c.user_id
+         WHERE c.review_id = ?1
+         ORDER BY c.id",
+    )?;
+    let mut comments: Vec<CommentRow> = stmt
+        .query_map([review_id], |row| {
+            Ok(CommentRow {
+                id: comment_id(row.get("id")?),
+                author_id: row.get("author_id")?,
+                author_name: row.get("author_name")?,
+                author_handle: row.get::<_, Option<String>>("author_handle")?.unwrap_or_default(),
+                author_avatar: Image::new(
+                    &row.get::<_, String>("avatar_src")?,
+                    &row.get::<_, String>("avatar_alt")?,
+                ),
+                body: row.get("body")?,
+                created_at: row.get("created_at")?,
+                like_count: row.get("like_count")?,
+                replies: Vec::new(),
+            })
+        })?
+        .collect::<Result<_>>()?;
+
+    let mut stmt = conn.prepare(
+        "SELECT r.id AS id, r.comment_id AS comment_id, r.body AS body,
+                r.created_at AS created_at,
+                p.id AS author_id, p.name AS author_name, p.handle AS author_handle,
+                p.avatar_src AS avatar_src, p.avatar_alt AS avatar_alt
+         FROM replies r
+         JOIN people p ON p.id = r.user_id
+         WHERE r.review_id = ?1
+         ORDER BY r.id",
+    )?;
+    let replies = stmt.query_map([review_id], |row| {
+        Ok((
+            row.get::<_, String>("comment_id")?,
+            ReplyRow {
+                id: reply_id(row.get("id")?),
+                author_id: row.get("author_id")?,
+                author_name: row.get("author_name")?,
+                author_handle: row.get::<_, Option<String>>("author_handle")?.unwrap_or_default(),
+                author_avatar: Image::new(
+                    &row.get::<_, String>("avatar_src")?,
+                    &row.get::<_, String>("avatar_alt")?,
+                ),
+                body: row.get("body")?,
+                created_at: row.get("created_at")?,
+            },
+        ))
+    })?;
+
+    for row in replies {
+        let (parent, reply) = row?;
+        // A reply whose parent is gone is dropped rather than shown at the top level,
+        // where it would read as a comment somebody never wrote.
+        if let Some(comment) = comments.iter_mut().find(|comment| comment.id == parent) {
+            comment.replies.push(reply);
+        }
+    }
+
+    Ok(comments)
+}
+
 // --- The visitor's state ------------------------------------------------------
 
 /// Rebuild one account's whole `Store` from disk.
@@ -1798,42 +1998,10 @@ pub fn load_store(conn: &Connection, user_id: &str) -> Result<Store> {
         store.liked_comments.insert(id?);
     }
 
-    let mut stmt =
-        conn.prepare("SELECT review_id, id, body FROM comments WHERE user_id = ?1 ORDER BY id")?;
-    let mut posted: BTreeMap<String, Vec<PostedComment>> = BTreeMap::new();
-    for row in stmt.query_map([user_id], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?))
-    })? {
-        let (review_id, id, body) = row?;
-        posted.entry(review_id).or_default().push(PostedComment { id: comment_id(id), body });
-    }
-    store.posted_comments = posted;
-
-    let mut stmt = conn.prepare(
-        "SELECT review_id, comment_id, id, body FROM replies WHERE user_id = ?1 ORDER BY id",
-    )?;
-    let mut replies: BTreeMap<(String, String), Vec<PostedReply>> = BTreeMap::new();
-    for row in stmt.query_map([user_id], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, i64>(2)?,
-            row.get::<_, String>(3)?,
-        ))
-    })? {
-        let (review_id, parent, id, body) = row?;
-        replies.entry((review_id, parent)).or_default().push(PostedReply { id: reply_id(id), body });
-    }
-    store.posted_replies = replies;
-
-    // The face on the comments they posted. Read here rather than passed in, so
-    // `hydrate` keeps taking nothing but a `&Store` — see `state::Store::avatar`.
-    store.avatar = conn
-        .query_row("SELECT avatar_src, avatar_alt FROM people WHERE id = ?1", [user_id], |row| {
-            Ok(Image::new(&row.get::<_, String>(0)?, &row.get::<_, String>(1)?))
-        })
-        .optional()?;
-
+    // Nothing about comments themselves. They used to be loaded here, per user, and
+    // `hydrate` appended them to a review as the whole thread — so you saw only your
+    // own. They are content now: `thread` reads everybody's, and what stays in the
+    // store is the one part that really is per-viewer, which likes you pressed.
     Ok(store)
 }
 
@@ -1906,35 +2074,67 @@ pub fn set_rating(
     Ok(Some(half_stars))
 }
 
-/// Toggle one account's like on a review. Returns whether it is now liked.
-pub fn toggle_review_like(conn: &Connection, user_id: &str, review_id: &str) -> Result<bool> {
+/// Toggle one account's like on a review. Returns whether *they* now like it, and how
+/// many people do in total.
+///
+/// Both, from one call, because the button needs both and asking separately would let
+/// a handler return a count that disagrees with the state it just wrote. The total
+/// includes the caller's own like, so nothing downstream adds one.
+pub fn toggle_review_like(
+    conn: &Connection,
+    user_id: &str,
+    review_id: &str,
+) -> Result<(bool, u32)> {
     let removed = conn.execute(
         "DELETE FROM liked_reviews WHERE user_id = ?1 AND review_id = ?2",
         [user_id, review_id],
     )?;
-    if removed > 0 {
-        return Ok(false);
+    if removed == 0 {
+        conn.execute(
+            "INSERT INTO liked_reviews (user_id, review_id) VALUES (?1, ?2)",
+            [user_id, review_id],
+        )?;
     }
-    conn.execute(
-        "INSERT INTO liked_reviews (user_id, review_id) VALUES (?1, ?2)",
-        [user_id, review_id],
+    let total: u32 = conn.query_row(
+        "SELECT COUNT(*) FROM liked_reviews WHERE review_id = ?1",
+        [review_id],
+        |row| row.get(0),
     )?;
-    Ok(true)
+    Ok((removed == 0, total))
 }
 
-pub fn toggle_comment_like(conn: &Connection, user_id: &str, comment_id: &str) -> Result<bool> {
+/// The same, for a comment.
+pub fn toggle_comment_like(
+    conn: &Connection,
+    user_id: &str,
+    comment_id: &str,
+) -> Result<(bool, u32)> {
     let removed = conn.execute(
         "DELETE FROM liked_comments WHERE user_id = ?1 AND comment_id = ?2",
         [user_id, comment_id],
     )?;
-    if removed > 0 {
-        return Ok(false);
+    if removed == 0 {
+        conn.execute(
+            "INSERT INTO liked_comments (user_id, comment_id) VALUES (?1, ?2)",
+            [user_id, comment_id],
+        )?;
     }
-    conn.execute(
-        "INSERT INTO liked_comments (user_id, comment_id) VALUES (?1, ?2)",
-        [user_id, comment_id],
+    let total: u32 = conn.query_row(
+        "SELECT COUNT(*) FROM liked_comments WHERE comment_id = ?1",
+        [comment_id],
+        |row| row.get(0),
     )?;
-    Ok(true)
+    Ok((removed == 0, total))
+}
+
+/// How many people have liked one review. What the review page prints beside the
+/// button before anybody presses it.
+pub fn review_like_count(conn: &Connection, review_id: &str) -> Result<u32> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM liked_reviews WHERE review_id = ?1",
+        [review_id],
+        |row| row.get(0),
+    )
 }
 
 /// Store a comment and return its wire id.
@@ -1965,27 +2165,23 @@ pub fn add_reply(
     Ok(reply_id(conn.last_insert_rowid()))
 }
 
-/// Whether this account posted this comment — needed before accepting a reply to
-/// it or a like on it, since it isn't in the upstream content.
+/// Whether this comment exists on this review — the guard in front of a reply or a
+/// like, since a comment is not in the upstream content and a bogus id would be
+/// stored under a key nothing renders.
 ///
-/// Scoped to the account, not just to the review. A thread only ever shows the
-/// comments you wrote (see `hydrate::review`), so somebody else's comment is not
-/// something you can see, and letting you reply to it would file the reply under a
-/// comment that never appears on your screen.
-pub fn comment_exists(
-    conn: &Connection,
-    user_id: &str,
-    review_id: &str,
-    comment_id: &str,
-) -> Result<bool> {
+/// Scoped to the review and **not** to the asker. A thread is shared, so anybody who
+/// can read a comment can reply to it and like it, which is what makes it a
+/// conversation. There is deliberately no endpoint that edits or deletes one, so
+/// "can act on it" never means "can change somebody else's words".
+pub fn comment_exists(conn: &Connection, review_id: &str, comment_id: &str) -> Result<bool> {
     let rowid = match comment_id.strip_prefix("comment-").and_then(|n| n.parse::<i64>().ok()) {
         Some(rowid) => rowid,
         None => return Ok(false),
     };
     Ok(conn
         .query_row(
-            "SELECT 1 FROM comments WHERE id = ?1 AND review_id = ?2 AND user_id = ?3",
-            params![rowid, review_id, user_id],
+            "SELECT 1 FROM comments WHERE id = ?1 AND review_id = ?2",
+            params![rowid, review_id],
             |_| Ok(()),
         )
         .optional()?
@@ -2138,22 +2334,47 @@ mod tests {
         assert!(load_store(&conn, ME).unwrap().ratings.is_empty());
     }
 
+    /// A toggle reports the presser's own state and the shared total together.
     #[test]
-    fn likes_toggle() {
+    fn likes_toggle_and_report_the_real_total() {
         let conn = db();
-        assert!(toggle_review_like(&conn, ME, "r").unwrap());
+        assert_eq!(toggle_review_like(&conn, ME, "r").unwrap(), (true, 1));
         assert!(load_store(&conn, ME).unwrap().liked_reviews.contains("r"));
-        assert!(!toggle_review_like(&conn, ME, "r").unwrap());
+        assert_eq!(toggle_review_like(&conn, ME, "r").unwrap(), (false, 0));
         assert!(load_store(&conn, ME).unwrap().liked_reviews.is_empty());
 
-        assert!(toggle_comment_like(&conn, ME, "comment-1").unwrap());
+        assert_eq!(toggle_comment_like(&conn, ME, "comment-1").unwrap(), (true, 1));
         assert!(load_store(&conn, ME).unwrap().liked_comments.contains("comment-1"));
     }
 
-    /// The ids `hydrate` and the frontend exchange, rebuilt from rowids.
+    /// The count is everybody's, so a second liker makes it 2 for both of them —
+    /// where it used to read 1 to each, being per-viewer.
     #[test]
-    fn posted_comments_and_replies_reload_with_their_ids() {
+    fn a_like_total_counts_everybody() {
         let conn = db();
+        let other = "account-2002";
+
+        assert_eq!(toggle_review_like(&conn, ME, "r").unwrap(), (true, 1));
+        assert_eq!(toggle_review_like(&conn, other, "r").unwrap(), (true, 2));
+        assert_eq!(review_like_count(&conn, "r").unwrap(), 2);
+
+        // One of them unliking leaves the other's like standing.
+        assert_eq!(toggle_review_like(&conn, ME, "r").unwrap(), (false, 1));
+        assert!(load_store(&conn, other).unwrap().liked_reviews.contains("r"));
+        assert!(!load_store(&conn, ME).unwrap().liked_reviews.contains("r"));
+
+        // A review nobody has liked counts zero rather than failing to find a row.
+        assert_eq!(review_like_count(&conn, "never-liked").unwrap(), 0);
+
+        assert_eq!(toggle_comment_like(&conn, ME, "comment-1").unwrap(), (true, 1));
+        assert_eq!(toggle_comment_like(&conn, other, "comment-1").unwrap(), (true, 2));
+    }
+
+    /// A thread reads back with the ids the frontend exchanges, rebuilt from rowids,
+    /// and scoped to its own review.
+    #[test]
+    fn a_thread_reads_back_with_its_ids_and_stays_on_its_review() {
+        let conn = graph();
         let first = add_comment(&conn, ME, "review-a", "Mine").unwrap();
         let second = add_comment(&conn, ME, "review-a", "Also mine").unwrap();
         let elsewhere = add_comment(&conn, ME, "review-b", "Different review").unwrap();
@@ -2164,18 +2385,78 @@ mod tests {
         let reply = add_reply(&conn, ME, "review-a", &first, "A follow-up").unwrap();
         assert_eq!(reply, "reply-1");
 
-        let store = load_store(&conn, ME).unwrap();
-        let on_a = &store.posted_comments["review-a"];
+        let on_a = thread(&conn, "review-a").unwrap();
         assert_eq!(on_a.len(), 2);
         assert_eq!(on_a[0].id, "comment-1");
         assert_eq!(on_a[0].body, "Mine");
         assert_eq!(on_a[1].id, "comment-2");
-        // Scoped to their review, exactly as the in-memory store was.
-        assert_eq!(store.posted_comments["review-b"].len(), 1);
+        assert_eq!(thread(&conn, "review-b").unwrap().len(), 1);
+        assert!(thread(&conn, "review-nobody-commented-on").unwrap().is_empty());
 
-        let thread = &store.posted_replies[&("review-a".to_string(), "comment-1".to_string())];
-        assert_eq!(thread.len(), 1);
-        assert_eq!(thread[0].id, "reply-1");
+        // The reply hangs off its own comment and nowhere else.
+        assert_eq!(on_a[0].replies.len(), 1);
+        assert_eq!(on_a[0].replies[0].id, "reply-1");
+        assert_eq!(on_a[0].replies[0].body, "A follow-up");
+        assert!(on_a[1].replies.is_empty());
+        assert!(thread(&conn, "review-b").unwrap()[0].replies.is_empty());
+    }
+
+    /// The point of a shared thread: two accounts talking to each other, each row
+    /// credited to whoever wrote it.
+    #[test]
+    fn a_thread_is_shared_and_credits_every_author() {
+        let conn = graph();
+        let other = sign_in(&conn, "2002", "ada").id;
+        let review = "user-elenarostova-le-souffle";
+
+        let mine = add_comment(&conn, ME, review, "Loved the café scene.").unwrap();
+        add_comment(&conn, &other, review, "Overrated, sorry.").unwrap();
+        // Anybody can reply to anybody: this is the other account under my comment.
+        add_reply(&conn, &other, review, &mine, "You would.").unwrap();
+
+        let rows = thread(&conn, review).unwrap();
+        assert_eq!(rows.len(), 2, "one account could not see the other's comment");
+        // Oldest first, as it was written.
+        assert_eq!(rows[0].body, "Loved the café scene.");
+        assert_eq!(rows[0].author_id, ME);
+        assert_eq!(rows[0].author_handle, "@testviewer");
+        assert!(rows[0].author_avatar.src.starts_with('/'));
+        assert_eq!(rows[1].author_id, other);
+        assert_eq!(rows[1].author_handle, "@ada");
+
+        // And the reply under mine is theirs, not mine.
+        assert_eq!(rows[0].replies.len(), 1);
+        assert_eq!(rows[0].replies[0].author_id, other);
+        assert_eq!(rows[0].replies[0].body, "You would.");
+
+        // Every row carries a real timestamp now — a comment used to have none worth
+        // printing, so the thread said "Just now" on all of them.
+        assert!(!rows[0].created_at.is_empty());
+        assert!(!rows[0].replies[0].created_at.is_empty());
+
+        // The same thread whoever asks, including nobody.
+        assert_eq!(thread(&conn, review).unwrap().len(), 2);
+    }
+
+    /// A comment's like total is everybody's, and it is the one thing `thread`
+    /// reports about likes — whose heart is filled comes from the reader's `Store`.
+    #[test]
+    fn a_comments_like_total_counts_every_liker() {
+        let conn = graph();
+        let other = sign_in(&conn, "2002", "ada").id;
+        let review = "user-elenarostova-le-souffle";
+        let id = add_comment(&conn, ME, review, "Worth it.").unwrap();
+
+        assert_eq!(thread(&conn, review).unwrap()[0].like_count, 0);
+
+        toggle_comment_like(&conn, ME, &id).unwrap();
+        toggle_comment_like(&conn, &other, &id).unwrap();
+        assert_eq!(thread(&conn, review).unwrap()[0].like_count, 2);
+
+        // Each of them sees their own heart, out of their own store.
+        assert!(load_store(&conn, ME).unwrap().liked_comments.contains(&id));
+        assert!(load_store(&conn, &other).unwrap().liked_comments.contains(&id));
+        assert!(!load_store(&conn, "account-3003").unwrap().liked_comments.contains(&id));
     }
 
     /// The bug the rowid scheme exists to prevent: the old in-memory counter
@@ -2198,17 +2479,14 @@ mod tests {
     }
 
     #[test]
-    fn comment_existence_is_scoped_to_the_review() {
+    fn comment_existence_is_scoped_to_the_review_and_not_to_the_asker() {
         let conn = db();
         let id = add_comment(&conn, ME, "review-a", "Mine").unwrap();
-        assert!(comment_exists(&conn, ME, "review-a", &id).unwrap());
-        assert!(!comment_exists(&conn, ME, "review-b", &id).unwrap());
+        assert!(comment_exists(&conn, "review-a", &id).unwrap());
+        assert!(!comment_exists(&conn, "review-b", &id).unwrap());
         // A malformed or upstream id is simply not ours.
-        assert!(!comment_exists(&conn, ME, "review-a", "comment-marcus").unwrap());
-        assert!(!comment_exists(&conn, ME, "review-a", "nonsense").unwrap());
-        // And it is not somebody else's, either: a thread only shows your own
-        // comments, so another account cannot reply to or like this one.
-        assert!(!comment_exists(&conn, "account-2002", "review-a", &id).unwrap());
+        assert!(!comment_exists(&conn, "review-a", "comment-marcus").unwrap());
+        assert!(!comment_exists(&conn, "review-a", "nonsense").unwrap());
     }
 
     #[test]
@@ -2218,8 +2496,6 @@ mod tests {
         assert!(store.ratings.is_empty());
         assert!(store.liked_reviews.is_empty());
         assert!(store.liked_comments.is_empty());
-        assert!(store.posted_comments.is_empty());
-        assert!(store.posted_replies.is_empty());
     }
 
     /// The profile grid shows the newest first, which is the reverse of what
@@ -2488,7 +2764,11 @@ mod tests {
         assert!(theirs.favorites.is_empty() && nobodys.favorites.is_empty());
         assert!(theirs.written_reviews.is_empty() && nobodys.written_reviews.is_empty());
         assert!(theirs.liked_reviews.is_empty() && nobodys.liked_reviews.is_empty());
-        assert!(theirs.posted_comments.is_empty() && nobodys.posted_comments.is_empty());
+        // Comments are shared content, so both accounts see the one that was posted —
+        // but only its author is credited with it.
+        let posted = thread(&conn, "user-elenarostova-dune-part-two").unwrap();
+        assert_eq!(posted.len(), 1);
+        assert_eq!(posted[0].author_id, ME);
 
         // Both can watchlist the same film, which the old single-column primary key
         // made impossible.
@@ -2861,6 +3141,159 @@ mod tests {
         assert_eq!(found, ["user-marcusdrey"]);
     }
 
+    // --- An account's own reviews ----------------------------------------------
+
+    /// The gap this closes: an account wrote reviews and nobody could see them, so
+    /// following somebody bought you nothing.
+    ///
+    /// One review, and every screen that lists reviews has to find it — the author's
+    /// public page, the film's page, the whole graph's list, and the feed of somebody
+    /// who follows them.
+    #[test]
+    fn an_accounts_review_reaches_every_screen_a_seeded_one_does() {
+        let conn = graph();
+        let follower = sign_in(&conn, "2002", "ada").id;
+        set_follow(&conn, &follower, ME, Some(true)).unwrap();
+
+        set_rating(&conn, ME, "le-souffle", 9).unwrap();
+        set_user_review(&conn, ME, "le-souffle", "Still the best hour of the New Wave.").unwrap();
+
+        let id = review_id(ME, "le-souffle");
+
+        // Their own page.
+        let theirs = reviews_by_person(&conn, &follower, ME).unwrap();
+        assert_eq!(theirs.len(), 1);
+        assert_eq!(theirs[0].body, "Still the best hour of the New Wave.");
+        assert_eq!(theirs[0].half_stars, Some(9), "the score came from `ratings`");
+        // Attributed to them, with the name, nickname and face their profile shows.
+        assert_eq!(theirs[0].name, "testviewer the viewer");
+        assert_eq!(theirs[0].handle, "@testviewer");
+        assert!(theirs[0].followed, "the asker follows them");
+
+        // The film's page, beside the seeded people's reviews of it.
+        let on_film: Vec<String> = reviews_for_movie(&conn, &follower, "le-souffle")
+            .unwrap()
+            .into_iter()
+            .map(|row| row.person_id)
+            .collect();
+        assert!(on_film.contains(&ME.to_string()));
+        assert!(on_film.len() > 1, "the seeded reviews of this film went missing");
+
+        // The follower's feed, which is the whole reason any of this matters.
+        let followed: Vec<String> = reviews_from_followed(&conn, &follower, 50)
+            .unwrap()
+            .into_iter()
+            .map(|row| review_id(&row.person_id, &row.movie_id))
+            .collect();
+        assert!(followed.contains(&id), "a follower's feed misses the review");
+
+        // And not the feed of somebody who does not follow them.
+        let stranger = sign_in(&conn, "3003", "stranger").id;
+        let theirs_too: Vec<String> = reviews_from_followed(&conn, &stranger, 50)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.person_id)
+            .collect();
+        assert!(!theirs_too.contains(&ME.to_string()));
+
+        // The graph-wide list, and the id resolves from either direction.
+        assert!(recent_reviews(&conn, &follower, 50)
+            .unwrap()
+            .iter()
+            .any(|row| row.person_id == ME));
+        assert_eq!(review_by_id(&conn, &follower, &id).unwrap().map(|row| row.movie_id),
+                   Some("le-souffle".to_string()));
+
+        // A seeded person's reviews still work exactly as before.
+        assert_eq!(reviews_by_person(&conn, &follower, "user-elenarostova").unwrap().len(), 5);
+    }
+
+    /// Prose without a score is a real state here — the two are separate acts — so it
+    /// publishes with no rating rather than with zero stars.
+    #[test]
+    fn a_review_written_without_a_score_has_no_rating() {
+        let conn = graph();
+        set_user_review(&conn, ME, "endless", "No stars from me, just words.").unwrap();
+
+        let rows = reviews_by_person(&conn, ME, ME).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].half_stars, None);
+
+        // Scoring it later fills the same review in rather than making a second one.
+        set_rating(&conn, ME, "endless", 6).unwrap();
+        let rows = reviews_by_person(&conn, ME, ME).unwrap();
+        assert_eq!(rows.len(), 1, "the rating became a second review");
+        assert_eq!(rows[0].half_stars, Some(6));
+
+        // Clearing the score leaves the prose standing, as it always has.
+        set_rating(&conn, ME, "endless", 0).unwrap();
+        assert_eq!(reviews_by_person(&conn, ME, ME).unwrap()[0].half_stars, None);
+
+        // A rating with nothing written is not a review at all: there would be no
+        // prose for the page to render.
+        set_rating(&conn, ME, "red-shift", 8).unwrap();
+        let films: Vec<String> =
+            reviews_by_person(&conn, ME, ME).unwrap().into_iter().map(|r| r.movie_id).collect();
+        assert_eq!(films, ["endless"]);
+    }
+
+    /// The count and the list have to be the same rows, whichever table they came out
+    /// of, or a page prints a number its own contents contradict.
+    #[test]
+    fn review_counts_include_an_accounts_own_reviews() {
+        let conn = graph();
+        let other = sign_in(&conn, "2002", "ada").id;
+        let counted = |conn: &Connection, id: &str| {
+            person_by_id(conn, other.as_str(), id).unwrap().unwrap().review_count
+        };
+
+        assert_eq!(counted(&conn, ME), 0);
+
+        set_user_review(&conn, ME, "le-souffle", "One.").unwrap();
+        set_user_review(&conn, ME, "endless", "Two.").unwrap();
+        assert_eq!(counted(&conn, ME), 2);
+        assert_eq!(reviews_by_person(&conn, &other, ME).unwrap().len(), 2);
+
+        // Editing is not a second review, and clearing one takes the count back down.
+        set_user_review(&conn, ME, "le-souffle", "One, rewritten.").unwrap();
+        assert_eq!(counted(&conn, ME), 2);
+        set_user_review(&conn, ME, "endless", "").unwrap();
+        assert_eq!(counted(&conn, ME), 1);
+
+        // A seeded person's count is untouched by any of it.
+        assert_eq!(counted(&conn, "user-elenarostova"), 5);
+
+        // The profile's "Following" list counts the same way its own page does.
+        set_follow(&conn, &other, ME, Some(true)).unwrap();
+        let row = following(&conn, &other).unwrap().into_iter().find(|r| r.id == ME).unwrap();
+        assert_eq!(row.review_count, 1);
+    }
+
+    /// The stories rail opens on somebody's newest review, and an account's counts as
+    /// one — otherwise following a real person leaves a dimmed, unopenable circle.
+    #[test]
+    fn a_story_circle_opens_an_accounts_newest_review() {
+        let conn = graph();
+        let follower = sign_in(&conn, "2002", "ada").id;
+        set_follow(&conn, &follower, ME, Some(true)).unwrap();
+
+        let circle = |conn: &Connection| {
+            followed_with_newest_review(conn, &follower, 50)
+                .unwrap()
+                .into_iter()
+                .find(|row| row.id == ME)
+                .expect("the followed account has a circle")
+                .newest_review
+        };
+        assert_eq!(circle(&conn), None, "nothing written yet, so nothing to open");
+
+        set_user_review(&conn, ME, "le-souffle", "Words.").unwrap();
+        let newest = circle(&conn).expect("a review to open");
+        assert_eq!(newest, review_id(ME, "le-souffle"));
+        // And it is an id that really resolves, which is what the circle relies on.
+        assert!(review_by_id(&conn, &follower, &newest).unwrap().is_some());
+    }
+
     /// The film page's ordering: friends first, then the best-rated stranger.
     #[test]
     fn a_films_reviews_put_friends_first_then_the_highest_rated() {
@@ -2889,9 +3322,9 @@ mod tests {
         let conn = graph();
         conn.execute("DELETE FROM follows", []).unwrap();
 
-        let stars: Vec<u8> =
+        let stars: Vec<Option<u8>> =
             reviews_for_movie(&conn, ME, "dune-part-two").unwrap().iter().map(|r| r.half_stars).collect();
-        assert_eq!(stars, [9, 8, 7]);
+        assert_eq!(stars, [Some(9), Some(8), Some(7)]);
     }
 
     #[test]
@@ -3062,8 +3495,12 @@ mod tests {
         assert_eq!(store.written_reviews.get("endless").map(String::as_str), Some("Held up."));
         assert!(store.liked_reviews.contains("user-elenarostova-le-souffle"));
         assert!(store.liked_comments.contains("comment-1"));
-        assert_eq!(store.posted_comments["user-elenarostova-le-souffle"].len(), 1);
-        assert_eq!(store.posted_replies.len(), 1);
+        let migrated = thread(&conn, "user-elenarostova-le-souffle").unwrap();
+        assert_eq!(migrated.len(), 1, "the adopted comment stopped rendering");
+        assert_eq!(migrated[0].author_id, LEGACY_USER_ID);
+        assert_eq!(migrated[0].body, "Agreed.");
+        assert_eq!(migrated[0].replies.len(), 1);
+        assert_eq!(migrated[0].replies[0].body, "Still agreed.");
         assert_eq!(follow_count(&conn, LEGACY_USER_ID).unwrap(), 1);
 
         // Their bio moved onto their own row, where a bio lives now.
@@ -3090,8 +3527,7 @@ mod tests {
         let conn = pre_accounts_db();
         prepare(&conn).unwrap();
 
-        let store = load_store(&conn, LEGACY_USER_ID).unwrap();
-        assert_eq!(store.posted_comments["user-elenarostova-le-souffle"][0].id, "comment-1");
+        assert_eq!(thread(&conn, "user-elenarostova-le-souffle").unwrap()[0].id, "comment-1");
         // And the next one continues the sequence rather than colliding with it.
         assert_eq!(
             add_comment(&conn, LEGACY_USER_ID, "user-elenarostova-le-souffle", "More.").unwrap(),

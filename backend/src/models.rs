@@ -127,33 +127,73 @@ pub struct MobileFeedItem {
 }
 
 /// A reply nested under a top-level comment.
+///
+/// Carries its author like a comment does, because a thread is shared now: a reply
+/// under somebody else's comment can be by a third person again.
 #[derive(Debug, Clone, Serialize)]
 pub struct Reply {
     pub id: String,
+    /// Who wrote it. `author_handle` links to their page; `author_id` is what the
+    /// follow button posts to.
+    pub author_id: String,
+    /// Their real name, always — never the literal "You". See `Comment::is_you`.
     pub author_name: String,
+    pub author_handle: String,
     pub author_avatar: Image,
+    /// Whether the viewer wrote it.
+    pub is_you: bool,
+    /// "August 20, 2026", pre-formatted as everywhere else in this file.
+    pub timestamp: String,
     pub body: String,
 }
 
+/// One comment on a review, with its replies.
+///
+/// **Everybody's comments, not just the viewer's.** A thread used to be assembled
+/// from the viewer's own `state::Store` and every row was labelled "You", which was
+/// only ever true because there was one visitor. Comments are content now: they come
+/// out of SQLite with their author joined in, and the same thread is served to
+/// whoever asks — including a reader with no account, who can read it but not post.
 #[derive(Debug, Clone, Serialize)]
 pub struct Comment {
     pub id: String,
+    /// Who wrote it, as on `Reply`.
+    pub author_id: String,
+    /// Their real name, always. The client renders "You" when `is_you` rather than
+    /// the server substituting the word, so the avatar, the handle and the link to
+    /// their page stay usable on the viewer's own rows too.
     pub author_name: String,
+    pub author_handle: String,
     pub author_avatar: Image,
+    /// Whether the viewer wrote it. The one thing a client cannot work out for
+    /// itself: the session is an `HttpOnly` cookie, so the browser never learns its
+    /// own account id unless it asks `/api/auth/me` and compares.
+    pub is_you: bool,
+    /// "August 20, 2026". Was the constant "Just now", because a posted comment had
+    /// no stored time worth printing; every comment has a real one now.
     pub timestamp: String,
     pub body: String,
-    /// Absent where the demo renders no like button.
+    /// How many people have liked it, or `null` for none.
+    ///
+    /// A real total out of `liked_comments`, the viewer's own like included. It used
+    /// to be per-viewer and read 1 to everybody.
     pub like_count: Option<u32>,
+    /// Oldest first, as the thread renders them.
     pub replies: Vec<Reply>,
-    /// Whether the visitor liked this comment. From `state`.
+    /// Whether *the viewer* liked it. From `state`.
     pub liked: bool,
 }
 
 /// One review in full, plus its conversation — what the review screen draws.
 ///
 /// The expanded form of `UserReview`, which is the same review clamped to four
-/// lines in a list. Both come from one `user_reviews` row, so the author fields are
-/// the same fields: a card and the page it opens can't credit different people.
+/// lines in a list. Both are built from the same row, so the author fields are the
+/// same fields: a card and the page it opens can't credit different people.
+///
+/// The author is whoever wrote it — a seeded person or a real account, drawn the same
+/// way either way. An account's reviews used to be invisible to everybody but their
+/// owner; they reach these screens now, which is what makes following somebody worth
+/// doing. See `db::REVIEW_SOURCE`.
 #[derive(Debug, Clone, Serialize)]
 pub struct Review {
     /// `<person_id>-<movie_id>`, the same id `UserReview` carries.
@@ -174,12 +214,20 @@ pub struct Review {
     pub author_followed: bool,
     /// Verbatim ("Reviewed on March 15, 2024").
     pub watched_on: String,
-    pub rating_half_stars: u8,
+    /// `null` for prose written without a score — see `UserReview`.
+    pub rating_half_stars: Option<u8>,
     /// One string per rendered `<p>`.
     pub paragraphs: Vec<String>,
+    /// How many people have liked this review, or `null` for none.
+    ///
+    /// A real total out of `liked_reviews`, including the viewer's own like, so two
+    /// people liking it reads 2 to both of them. It used to be per-viewer — 1 if you
+    /// had liked it and nothing otherwise — which was true only while there was one
+    /// visitor.
     pub like_count: Option<u32>,
+    /// The whole thread, oldest first. Everybody's comments, not just the viewer's.
     pub comments: Vec<Comment>,
-    /// Whether the visitor liked the review itself. From `state`.
+    /// Whether *the viewer* liked the review. From `state`.
     pub liked: bool,
 }
 
@@ -707,6 +755,9 @@ pub struct PersonCard {
 /// Carries the film *and* the author because both screens need one of them and
 /// neither can cheaply look it up: a person's page lists films, a film's page
 /// lists people, and one shape serves both.
+///
+/// The author can be a seeded person or a real account, and nothing here says which:
+/// both are somebody with a page, so the card is drawn the same way.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserReview {
     pub id: String,
@@ -719,7 +770,13 @@ pub struct UserReview {
     pub movie_id: String,
     pub movie_title: String,
     pub poster: Option<Image>,
-    pub rating_half_stars: u8,
+    /// `null` for prose written without a score.
+    ///
+    /// A seeded person's review always carries one — the harvest read both off TMDB
+    /// together. An account can write about a film without rating it, because the two
+    /// are separate acts here, and `0` would draw five empty stars and read as a
+    /// one-star-out-of-five verdict. Same shape `RatedFilm` already uses.
+    pub rating_half_stars: Option<u8>,
     pub body: String,
     /// "12 November 2014", pre-formatted as everywhere else in this file.
     pub written_on: String,

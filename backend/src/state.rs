@@ -13,28 +13,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::content::{Db, Source};
-use crate::models::Image;
-
-/// A comment the user posted, before it is dressed up as a `models::Comment`.
-#[derive(Debug, Clone)]
-pub struct PostedComment {
-    pub id: String,
-    pub body: String,
-}
-
-/// A reply the user posted under some comment.
-#[derive(Debug, Clone)]
-pub struct PostedReply {
-    pub id: String,
-    pub body: String,
-}
 
 /// One request's view of one user's state.
 ///
-/// Ordered maps rather than hash maps because `hydrate` renders posted content in
-/// insertion order and the ids sort the way they were created — `comment-1` before
-/// `comment-2`. Writes go straight to SQLite (see `db`), never through here, so
-/// there is nothing to flush.
+/// Only what is genuinely **per viewer**. Comments and replies used to live here, and
+/// that was the bug behind shared threads: a comment is content everybody can see, not
+/// a delta belonging to whoever wrote it, so `db::thread` reads the whole conversation
+/// and this keeps only which likes the viewer pressed.
+///
+/// Ordered sets and maps rather than hash ones, so a payload built from this is
+/// byte-identical between two requests over the same data. Writes go straight to
+/// SQLite (see `db`), never through here, so there is nothing to flush.
 #[derive(Debug, Default)]
 pub struct Store {
     /// Movie ids on the watchlist.
@@ -48,20 +37,11 @@ pub struct Store {
     /// Movie id -> what the user wrote about it. Independent of `ratings`, so
     /// un-rating a film leaves the prose alone and vice versa.
     pub written_reviews: BTreeMap<String, String>,
-    /// Review ids the user liked.
+    /// Review ids the user liked. Drives the filled heart, not the number beside it:
+    /// the count is everybody's and comes from `db`.
     pub liked_reviews: BTreeSet<String>,
-    /// Comment ids the user liked.
+    /// Comment ids the user liked, for the same reason.
     pub liked_comments: BTreeSet<String>,
-    /// Review id -> comments the user posted, oldest first.
-    pub posted_comments: BTreeMap<String, Vec<PostedComment>>,
-    /// (review id, comment id) -> replies the user posted, oldest first.
-    pub posted_replies: BTreeMap<(String, String), Vec<PostedReply>>,
-    /// The face to draw beside the comments they posted.
-    ///
-    /// Here rather than passed to `hydrate` separately, so that module still takes
-    /// nothing but a `&Store` and all of its tests still build one by hand. `None`
-    /// for an anonymous reader, who has posted nothing for it to appear on.
-    pub avatar: Option<Image>,
 }
 
 /// Everything a handler needs: where films come from, where the users' own rows
