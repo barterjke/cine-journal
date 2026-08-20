@@ -173,20 +173,40 @@ The same hostname goes in two places: `API_DOMAIN` (Part 3) and the rewrites in
 
 ## 3. Deploy the API
 
+**Everything in this part runs on the VM, not on your laptop.** SSH in first:
+
+```bash
+ssh -i ~/.ssh/oci-cine-journal ubuntu@<VM_PUBLIC_IP>
+```
+
+Then, on the VM:
+
 ```bash
 git clone https://github.com/barterjke/cine-journal.git
 cd cine-journal
-cp .env.deploy.example .env    # then fill it in
+cp .env.deploy.example .env
+nano .env                      # fill in the three values below
 docker compose pull            # see note
 docker compose up -d
 ```
 
+`.env` lives only on the VM. It is gitignored, so it is never committed and never
+arrives from a deploy — you create it once, by hand, here. A redeploy leaves it alone.
+
 | Variable | Required | Purpose |
 |---|---|---|
-| `API_DOMAIN` | yes | `api.example.com`. Caddy gets its cert for this. |
-| `ACME_EMAIL` | yes | Let's Encrypt contact address. |
+| `API_DOMAIN` | yes | Your hostname from Part 2, e.g. `cinema-nerd.duckdns.org`. Caddy gets its cert for this. No `https://`, no trailing slash. |
+| `ACME_EMAIL` | yes | Your own email. Let's Encrypt mails it if renewal starts failing. |
 | `TMDB_TOKEN` | no | v4 read access token. Empty = fake data + banner. |
 | `API_TAG` | no | Image tag. Defaults to `latest`. Used for rollback. |
+
+So a filled-in `.env` is three lines:
+
+```
+API_DOMAIN=cinema-nerd.duckdns.org
+ACME_EMAIL=you@example.com
+TMDB_TOKEN=eyJhbGciOi...
+```
 
 `API_DOMAIN` and `ACME_EMAIL` have no defaults — compose refuses to start without
 them. An empty `ACME_EMAIL` used to crash-loop Caddy with `wrong argument count`, so
