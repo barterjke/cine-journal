@@ -463,6 +463,18 @@ jobs:
           "${compose[@]}" up -d --remove-orphans --wait --wait-timeout 330
           "${compose[@]}" ps
 
+          # Caddy reads its Caddyfile once, at startup, and the file is a bind mount — so
+          # `up -d` above will not restart it when only the Caddyfile changed, because the
+          # service definition is identical. Without this, routing changes land on disk and
+          # never take effect, and the symptom is the previous config still serving.
+          #
+          # `reload` over `restart`: it validates the config first and swaps with no dropped
+          # connections. A restart would also re-read the certificate from the volume for no
+          # reason. Fatal on failure — a stale Caddyfile means this deploy did not do what
+          # the commit says it did.
+          "${compose[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+          echo "--- caddy config reloaded"
+
           # Every deploy leaves the old image behind, and the Always Free boot volume is
           # small. Untagged parents only, so a rollback target survives.
           docker image prune -f
