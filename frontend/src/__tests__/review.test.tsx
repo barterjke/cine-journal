@@ -1,21 +1,30 @@
 /**
- * The review screen: who a comment belongs to, and a review with no score.
+ * Reviews: who a comment belongs to, a review with no score, and a rating with
+ * nothing written.
  *
  * Comment threads are shared content now. They used to be per-viewer, so the server
  * sent "You" as the author's name and "Just now" as the date, and the screen printed
  * both verbatim. It gets real names and real dates, so "You" is derived from `is_you`
  * here — otherwise a stranger's comment carries your label, or yours carries theirs.
  *
+ * A review is a rating, or text, or both. So a bare score is a post: `body` is null
+ * on the card, `paragraphs` is empty on the page, and both have to look deliberate
+ * and stay likeable and repliable. That is the last group of cases here, and the card
+ * is mounted on its own — three screens draw it, and this is the same component on
+ * all of them.
+ *
  * Stars are queried by their glyph text, because the icon font renders as text:
  * `star` for a full one and `star_half` for the half. No other glyph on these screens
  * is called either.
  */
 import { screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 
 import { api } from '../api'
+import { ReviewCard } from '../components/People'
 import { Review } from '../pages/Review'
 import { ReviewMobile } from '../pages/ReviewMobile'
-import { aComment, aReply, aReview, renderScreen } from './support'
+import { aComment, aReply, aReview, aUserReview, renderScreen } from './support'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -25,6 +34,19 @@ vi.mock('../api', async (importOriginal) => {
 
 const desktop = { path: '/review/:id', at: '/review/elena-solaris' }
 const mobile = { path: '/review-mobile/:id', at: '/review-mobile/elena-solaris' }
+
+/** A review card on its own, at an address that isn't one of its links. */
+const card = { path: '/movie/:id', at: '/movie/solaris' }
+
+/**
+ * Every `<p>` that was drawn, as text.
+ *
+ * An empty one is the gap this change removed: a card whose prose block rendered
+ * with nothing in it.
+ */
+function paragraphs(container: HTMLElement): string[] {
+  return [...container.querySelectorAll('p')].map((p) => p.textContent ?? '')
+}
 
 describe("a review's comment thread", () => {
   it('credits a comment and its reply to the people who wrote them', async () => {
@@ -112,5 +134,123 @@ describe('a review written without a score', () => {
     renderScreen(<ReviewMobile />, mobile)
 
     expect(await screen.findByText('4.5 / 5')).toBeInTheDocument()
+  })
+})
+
+describe('a review card for a rating with nothing written', () => {
+  it('states the score in place of the prose, and draws no empty block', () => {
+    const { container } = renderScreen(<ReviewCard review={aUserReview({ body: null })} />, card)
+
+    // The stars are the score; the line says so again in words, so the space where
+    // the prose would be is filled by something deliberate.
+    expect(screen.getAllByText('star')).toHaveLength(4)
+    expect(screen.getByText('star_half')).toBeInTheDocument()
+    expect(paragraphs(container)).toEqual(['Rated 4.5 / 5 · nothing written'])
+    // The clamped prose block is not rendered at all, empty or otherwise.
+    expect(container.querySelector('.line-clamp-4')).toBeNull()
+  })
+
+  it('still links to the review page, where the likes and the replies are', () => {
+    renderScreen(<ReviewCard review={aUserReview({ body: null })} />, card)
+
+    // The whole point of the change: a score is a post you can engage with. So the
+    // link stays — it just stops promising text nobody wrote.
+    const link = screen.getByRole('link', { name: 'Like or reply →' })
+    expect(link).toHaveAttribute('href', '/review/elena-solaris')
+    expect(screen.queryByText('Read full review →')).not.toBeInTheDocument()
+  })
+
+  it('offers the whole text when there is some', () => {
+    const { container } = renderScreen(<ReviewCard review={aUserReview()} />, card)
+
+    expect(screen.getByText('A cold film that stays warm in the memory.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Read full review →' })).toHaveAttribute(
+      'href',
+      '/review/elena-solaris',
+    )
+    expect(container.querySelector('.line-clamp-4')).not.toBeNull()
+  })
+
+  it('prints no date for a row that has none', () => {
+    // Old rows have no stored date and the API sends "" for them.
+    const { container } = renderScreen(
+      <ReviewCard review={aUserReview({ written_on: '' })} />,
+      card,
+    )
+
+    expect(screen.queryByText('12 November 2014')).not.toBeInTheDocument()
+    // And nothing blank where the date used to be.
+    const spans = [...container.querySelectorAll('span')].map((span) => span.textContent)
+    expect(spans).not.toContain('')
+  })
+})
+
+describe('the review page for a rating with nothing written', () => {
+  const scoreOnly = aReview({ paragraphs: [] })
+
+  it('shows the score as the content, and invents no prose', async () => {
+    vi.mocked(api.reviewOrNewest).mockResolvedValue(scoreOnly)
+
+    const { container } = renderScreen(<Review />, desktop)
+
+    expect(await screen.findByText('Rated 4.5 / 5')).toBeInTheDocument()
+    expect(screen.getByText('Nothing written. Like it or reply below.')).toBeInTheDocument()
+    // No `<article>` at all rather than an empty one, and no sentence pretending to
+    // be theirs.
+    expect(container.querySelector('article')).toBeNull()
+  })
+
+  it('keeps the like button working', async () => {
+    vi.mocked(api.reviewOrNewest).mockResolvedValue(scoreOnly)
+    vi.mocked(api.likeReview).mockResolvedValue({
+      id: 'elena-solaris',
+      liked: true,
+      like_count: 1,
+    })
+
+    renderScreen(<Review />, desktop)
+
+    await userEvent.click(await screen.findByRole('button', { name: /LIKE REVIEW/ }))
+
+    expect(api.likeReview).toHaveBeenCalledWith('elena-solaris')
+    expect(await screen.findByRole('button', { name: /LIKED/ })).toBeInTheDocument()
+    expect(screen.getByText('1 Likes')).toBeInTheDocument()
+  })
+
+  it('posts a comment on it', async () => {
+    vi.mocked(api.reviewOrNewest).mockResolvedValue(scoreOnly)
+    vi.mocked(api.postComment).mockResolvedValue(
+      aReview({ paragraphs: [], comments: [aComment({ body: 'I liked this one too.' })] }),
+    )
+
+    renderScreen(<Review />, desktop)
+
+    await userEvent.type(
+      await screen.findByPlaceholderText('Add your thoughts...'),
+      'I liked this one too.',
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'POST' }))
+
+    expect(api.postComment).toHaveBeenCalledWith('elena-solaris', 'I liked this one too.')
+    expect(await screen.findByText('I liked this one too.')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Conversation (1)' })).toBeInTheDocument()
+  })
+
+  it('does the same on the mobile screen', async () => {
+    vi.mocked(api.reviewOrNewest).mockResolvedValue(scoreOnly)
+    vi.mocked(api.postComment).mockResolvedValue(
+      aReview({ paragraphs: [], comments: [aComment({ body: 'Agreed.' })] }),
+    )
+
+    const { container } = renderScreen(<ReviewMobile />, mobile)
+
+    expect(await screen.findByText('Rated 4.5 / 5')).toBeInTheDocument()
+    expect(container.querySelector('article')).toBeNull()
+
+    await userEvent.type(screen.getByPlaceholderText('Add a comment...'), 'Agreed.')
+    await userEvent.click(screen.getByRole('button', { name: 'Post comment' }))
+
+    expect(api.postComment).toHaveBeenCalledWith('elena-solaris', 'Agreed.')
+    expect(await screen.findByText('Agreed.')).toBeInTheDocument()
   })
 })

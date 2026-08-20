@@ -50,16 +50,18 @@ const SHARE_PILL =
 /**
  * The grey line under a review: when it was written, and how many people liked it.
  *
- * Both are optional and both are simply absent when the API sends null. "0" beside a
+ * Both are optional and both are simply absent when the API has neither. "0" beside a
  * heart is a way of saying nobody has pressed it, which is not worth the space, and
  * a date is not something to invent for a rating stored before dates were.
  */
 function ReviewMeta({ film }: { film: RatedFilm }) {
-  if (film.written_on === null && film.like_count === null) return null
+  // An empty string is a row with no date, same as null. Neither prints a blank line.
+  const date = film.written_on === null || film.written_on === '' ? null : film.written_on
+  if (date === null && film.like_count === null) return null
 
   return (
     <div className="flex items-center gap-md font-label-sm text-label-sm text-outline">
-      {film.written_on !== null && <span>{film.written_on}</span>}
+      {date !== null && <span>{date}</span>}
       {film.like_count !== null && (
         <span className="inline-flex items-center gap-xs">
           <span className="material-symbols-outlined text-[14px]" aria-hidden="true">

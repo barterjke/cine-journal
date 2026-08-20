@@ -24,7 +24,7 @@ import { api } from '../api'
 import { useApi } from '../useApi'
 import { useAction } from '../useAction'
 import { ActionError, DemoBanner, ErrorNote, Loading } from '../components/Chrome'
-import { authorLabel, personPath } from '../components/People'
+import { authorLabel, personPath, RatingOnlyNote } from '../components/People'
 import { Poster } from '../components/PosterTile'
 import { StarRating } from '../components/StarRating'
 
@@ -140,13 +140,22 @@ export function ReviewMobile() {
 
           <hr className="w-full border-t border-surface-variant my-md" />
 
-          <article className="w-full font-body-lg text-body-lg text-on-surface mb-xl">
-            {data.paragraphs.map((para, i) => (
-              <p key={i} className={i === 0 ? 'mb-md' : undefined}>
-                {para}
-              </p>
-            ))}
-          </article>
+          {/* Nothing written means this post is the score. The composer below is
+              fixed to the bottom of the screen and still posts, which is the point
+              of a bare rating having a page at all. */}
+          {data.paragraphs.length > 0 ? (
+            <article className="w-full font-body-lg text-body-lg text-on-surface mb-xl">
+              {data.paragraphs.map((para, i) => (
+                <p key={i} className={i === 0 ? 'mb-md' : undefined}>
+                  {para}
+                </p>
+              ))}
+            </article>
+          ) : (
+            <div className="w-full mb-xl">
+              <RatingOnlyNote halfStars={data.rating_half_stars} />
+            </div>
+          )}
 
           {/* Comments. Not in the export — see the file header. */}
           {data.comments.length > 0 && (

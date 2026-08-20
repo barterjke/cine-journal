@@ -46,6 +46,41 @@ export function authorLabel(author: { author_name: string; is_you: boolean }): s
 }
 
 /**
+ * The score in words: "Rated 4.5 / 5". `null` when there is no score.
+ *
+ * This is interface text, not prose. It fills the space a rating with no words
+ * would otherwise leave empty. "4.5 / 5" is the form the mobile review screen
+ * already prints, so a score reads the same way everywhere.
+ */
+export function ratingLine(halfStars: number | null): string | null {
+  return halfStars === null ? null : `Rated ${halfStars / 2} / 5`
+}
+
+/**
+ * What a review page shows when nothing was written.
+ *
+ * A rating on its own is a post. So the score is the content here. Nothing is
+ * invented: the server sends no prose, and neither do we.
+ *
+ * Both review screens draw the like button and the composer under this, which is
+ * why the second line points at them.
+ */
+export function RatingOnlyNote({ halfStars }: { halfStars: number | null }) {
+  const line = ratingLine(halfStars)
+
+  return (
+    <div className="flex flex-col gap-xs items-start w-full border border-dashed border-surface-variant rounded-lg p-lg">
+      {line !== null && (
+        <p className="font-headline-md text-headline-md text-on-surface">{line}</p>
+      )}
+      <p className="font-label-sm text-label-sm text-outline">
+        Nothing written. Like it or reply below.
+      </p>
+    </div>
+  )
+}
+
+/**
  * Follow / Following, as a toggle.
  *
  * Optimistic, like the watchlist button: the state flips immediately and reverts
@@ -171,8 +206,18 @@ export function PersonRow({
  * `showFilm` swaps which end is the subject. On a film's page every review is of
  * the same film, so the author leads; on a person's page they wrote all of them, so
  * the film leads. One component either way, because the two would otherwise drift.
+ *
+ * A rating with nothing written gets a card too. One quiet line states the score
+ * where the prose would be, so the gap reads as deliberate. The link stays: that
+ * page is where the likes and the replies are. It stops saying "Read full review",
+ * which would promise text nobody wrote.
  */
 export function ReviewCard({ review, showFilm = false }: { review: UserReview; showFilm?: boolean }) {
+  const score = ratingLine(review.rating_half_stars)
+  // "Rated 4.5 / 5 · nothing written". A score is always there in practice; the
+  // shorter line is for a row that somehow has neither.
+  const nothingWritten = score === null ? 'Nothing written' : `${score} · nothing written`
+
   return (
     <article className="flex gap-md">
       {showFilm ? (
@@ -229,21 +274,33 @@ export function ReviewCard({ review, showFilm = false }: { review: UserReview; s
           {!showFilm && review.author_followed && (
             <span className="font-label-sm text-label-sm text-primary">Following</span>
           )}
-          <span className="font-label-sm text-label-sm text-outline">{review.written_on}</span>
+          {/* An old row has no stored date, and the API sends "" for it. No blank
+              line for that. */}
+          {review.written_on !== '' && (
+            <span className="font-label-sm text-label-sm text-outline">{review.written_on}</span>
+          )}
         </div>
-        {/* Clamped: several of the real reviews run to a thousand words, and the
-            rail is a sidebar. The link below opens the whole thing. */}
-        <p className="font-body-md text-body-md text-on-surface-variant line-clamp-4 whitespace-pre-line">
-          {review.body}
-        </p>
+        {review.body === null ? (
+          // Label type, not body type. This is the interface saying there is nothing
+          // to read, so it must not look like the author's own words.
+          <p className="font-label-sm text-label-sm text-outline">{nothingWritten}</p>
+        ) : (
+          /* Clamped: several of the real reviews run to a thousand words, and the
+             rail is a sidebar. The link below opens the whole thing. */
+          <p className="font-body-md text-body-md text-on-surface-variant line-clamp-4 whitespace-pre-line">
+            {review.body}
+          </p>
+        )}
         {/* Always offered, even for a review that fits: the page it opens isn't
             only the rest of the text, it's where the likes and the conversation
-            are. Without it a clamped review was a dead end. */}
+            are. Without it a clamped review was a dead end.
+            A bare score has no text to read, so the label names what the page
+            actually offers instead. */}
         <Link
           to={reviewPath(review.id)}
           className="font-label-sm text-label-sm text-primary uppercase tracking-widest hover:opacity-70 transition-opacity self-start"
         >
-          Read full review →
+          {review.body === null ? 'Like or reply →' : 'Read full review →'}
         </Link>
       </div>
     </article>

@@ -200,7 +200,9 @@ export function aPeopleResponse(overrides: Partial<PeopleResponse> = {}): People
 /**
  * One person's review of one film, as a review card draws it.
  *
- * `poster` is optional in the API, so `poster: null` is the case a test overrides to.
+ * The boring case is scored and written. Three fields are allowed to be absent, so
+ * those are the cases a test overrides to: `poster: null`, `body: null` for a rating
+ * with nothing written, and `written_on: ''` for a row with no stored date.
  */
 export function aUserReview(overrides: Partial<UserReview> = {}): UserReview {
   return {

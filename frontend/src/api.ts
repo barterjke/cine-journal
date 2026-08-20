@@ -156,6 +156,12 @@ export interface Review {
   watched_on: string
   /** `null` for prose written without a score — see `UserReview`. Draws no stars. */
   rating_half_stars: number | null
+  /**
+   * One string per `<p>`, and empty for a rating with nothing written.
+   *
+   * The page has to render without prose. The score is the content then, and the
+   * likes and the comments are still the point — see `RatingOnlyNote`.
+   */
   paragraphs: string[]
   like_count: number | null
   comments: Comment[]
@@ -456,8 +462,21 @@ export interface UserReview {
    * delete what you wrote, so a review can exist with no number beside it.
    */
   rating_half_stars: number | null
-  body: string
-  /** Pre-formatted, e.g. "12 November 2014". */
+  /**
+   * What they wrote, or `null` for a rating they wrote nothing about.
+   *
+   * A review is a rating, or text, or both. At least one of this and
+   * `rating_half_stars` is set, and either can be absent. A bare score is a post of
+   * its own: it has a review page, and friends can like it and reply to it. The
+   * wording for "nothing written" is ours — the server invents no prose.
+   */
+  body: string | null
+  /**
+   * Pre-formatted, e.g. "12 November 2014".
+   *
+   * `""` for an old row with no stored date. Treat that as no date and print
+   * nothing, rather than an empty line.
+   */
   written_on: string
 }
 

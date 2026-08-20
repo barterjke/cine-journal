@@ -35,7 +35,7 @@ import {
   TopAppBar,
 } from '../components/Chrome'
 import { Poster } from '../components/PosterTile'
-import { authorLabel, FollowButton, personPath } from '../components/People'
+import { authorLabel, FollowButton, personPath, RatingOnlyNote } from '../components/People'
 import { StarRating } from '../components/StarRating'
 
 /** One reply, indented under its comment. No likes and no replies of its own. */
@@ -441,11 +441,21 @@ export function Review() {
                 </div>
               </div>
 
-              <article className="font-body-lg text-body-lg text-on-background space-y-6 mb-xl leading-relaxed">
-                {data.paragraphs.map((para, i) => (
-                  <p key={i}>{para}</p>
-                ))}
-              </article>
+              {/* No paragraphs means a rating with nothing written. That is a post
+                  too, so the score stands in for the prose and everything below —
+                  the like button, the thread, the composer — works as it always
+                  does. */}
+              {data.paragraphs.length > 0 ? (
+                <article className="font-body-lg text-body-lg text-on-background space-y-6 mb-xl leading-relaxed">
+                  {data.paragraphs.map((para, i) => (
+                    <p key={i}>{para}</p>
+                  ))}
+                </article>
+              ) : (
+                <div className="mb-xl">
+                  <RatingOnlyNote halfStars={data.rating_half_stars} />
+                </div>
+              )}
 
               {actionError && (
                 <div className="mb-lg">
