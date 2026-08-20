@@ -718,7 +718,7 @@ pub async fn profile(source: &Source, db: &Db, user: &str) -> Option<Profile> {
             .await,
         watchlist: movies_for(source, watchlist_ids.iter().map(String::as_str), WATCHLIST_SHOWN)
             .await,
-        recent_reviews: rated_films(source, &journal).await,
+        recent_reviews: rated_films(source, user, &journal).await,
         // The graph's own count, not `following.len()`: the same number the friend
         // directory prints, and the two screens saying different things about how
         // many people you follow is the one thing this must not do.
@@ -1512,13 +1512,20 @@ async fn movies_for<'a>(
 /// A row they wrote shows their own words; a row they only rated falls back to the
 /// synopsis' first sentence, which is what the tile did before there was anywhere to
 /// write.
-async fn rated_films(source: &Source, journal: &[db::JournalRow]) -> Vec<RatedFilm> {
+async fn rated_films(source: &Source, user: &str, journal: &[db::JournalRow]) -> Vec<RatedFilm> {
     let mut out = Vec::new();
     for row in journal.iter().take(REVIEWS_SHOWN) {
         // A film the source can't resolve still gets its row: what the visitor wrote is
         // the point of the tile, and losing it because TMDB was unreachable would make
         // the profile shrink for reasons of its own. Same rule as `user_reviews`.
         let detail = movie_detail_by_id(source, &row.movie_id).await;
+        // `db::review_id` rather than a format string of our own, so the row opens the
+        // same page the film's list and the feeds link to. There is only one definition
+        // of a review's address, and this is not a second one.
+        //
+        // `None` for a score with nothing written: there is no review to open. A
+        // `visitor_reviews` row is what makes a review exist — see `db::REVIEW_SOURCE`.
+        let review_id = row.body.is_some().then(|| db::review_id(user, &row.movie_id));
         out.push(RatedFilm {
             id: row.movie_id.clone(),
             title: detail
@@ -1535,7 +1542,14 @@ async fn rated_films(source: &Source, journal: &[db::JournalRow]) -> Vec<RatedFi
             },
             poster: detail.and_then(|detail| artwork(detail.poster)),
             written_on: row.written_at.as_deref().and_then(map::short_date),
-            like_count: hydrate::like_count(row.like_count),
+            // Gated on there being a review, so the two cannot disagree: a like left
+            // behind by prose that has since been deleted would otherwise report a
+            // count for a review this row says does not exist.
+            like_count: match review_id {
+                Some(_) => hydrate::like_count(row.like_count),
+                None => None,
+            },
+            review_id,
         });
     }
     out
@@ -2731,6 +2745,151 @@ mod tests {
         assert_eq!(poster("not-a-catalogue-film"), None);
         // Never the placeholder: that is what `None` is standing in for.
         assert!(rows.iter().all(|row| row.poster.as_ref() != Some(&Image::missing_poster())));
+    }
+
+    /// A journal row carries the review's own address, and it is the *same* address the
+    /// review has everywhere else. That equality is the point: one definition of a
+    /// review's id, so a card and the page it opens cannot disagree.
+    ///
+    /// Without it the tile could only link to the film, so there was no way to read,
+    /// like or reply to your own review from your own profile.
+    #[tokio::test]
+    async fn a_journal_rows_review_id_is_the_one_used_everywhere_else() {
+        let source = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+        {
+            let conn = lock(&db);
+            db::seed_graph(&conn, &db::demo_graph()).unwrap();
+        }
+        let me = sign_in(&db);
+        // Somebody who follows them, so the review reaches a feed as well.
+        let follower = {
+            let conn = lock(&db);
+            let follower = db::upsert_google_account(
+                &conn,
+                &db::GoogleAccount {
+                    sub: "2002".into(),
+                    email: None,
+                    name: "Ada Lovelace".into(),
+                    avatar: Image::new("img/a.jpg", "Ada."),
+                    handle: "ada".into(),
+                },
+            )
+            .unwrap()
+            .id;
+            db::set_follow(&conn, &follower, &me, Some(true)).unwrap();
+            db::set_rating(&conn, &me, "le-souffle", 9).unwrap();
+            db::set_user_review(&conn, &me, "le-souffle", "The cafe scene, forever.").unwrap();
+            follower
+        };
+
+        let row = profile(&source, &db, &me)
+            .await
+            .unwrap()
+            .recent_reviews
+            .into_iter()
+            .find(|row| row.id == "le-souffle")
+            .expect("the row");
+        let review_id = row.review_id.expect("a review to open");
+
+        // The address really resolves — this is what `GET /api/reviews/{id}` does.
+        let opened = review_by_id(&source, &db, Some(&me), &review_id)
+            .await
+            .expect("the review id did not resolve");
+        assert_eq!(opened.id, review_id);
+        assert_eq!(opened.paragraphs.join(" "), "The cafe scene, forever.");
+
+        // The film's own list of reviews calls it the same thing.
+        let on_film = reviews_of_movie(&source, &db, Some(&me), "le-souffle").await;
+        let mine = on_film.iter().find(|review| review.author_id == me).expect("mine, on the film");
+        assert_eq!(mine.id, review_id, "the film page and the profile disagree");
+
+        // And so does a follower's feed, which is the third place the id appears.
+        let feed = feed_page(&source, &db, Some(&follower), None).await;
+        let carded = feed
+            .items
+            .iter()
+            .find_map(|item| match item {
+                FeedItem::Review(review) if review.author_id == me => Some(review.id.clone()),
+                _ => None,
+            })
+            .expect("the review reached the follower's feed");
+        assert_eq!(carded, review_id, "the feed and the profile disagree");
+
+        // Not a scheme of its own: it is what `db::review_id` mints.
+        assert_eq!(review_id, db::review_id(&me, "le-souffle"));
+    }
+
+    /// A score with nothing written has no review to open, and says so in both fields at
+    /// once — a row that offers a like count always offers somewhere to go.
+    #[tokio::test]
+    async fn a_score_with_no_prose_has_no_review_to_open() {
+        let source = Source::Demo { reason: "testing".into() };
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+        let me = sign_in(&db);
+        {
+            let conn = lock(&db);
+            db::set_rating(&conn, &me, "red-shift", 7).unwrap();
+        }
+
+        let row = profile(&source, &db, &me).await.unwrap().recent_reviews.remove(0);
+        assert_eq!(row.id, "red-shift");
+        assert_eq!(row.rating_half_stars, Some(7));
+        assert_eq!(row.review_id, None);
+        assert_eq!(row.like_count, None);
+
+        // The two stay in step even when a like outlives the prose it was for: deleting
+        // a review leaves the `liked_reviews` row behind, and the count must not come
+        // back for a review the row says is not there.
+        {
+            let conn = lock(&db);
+            db::set_user_review(&conn, &me, "red-shift", "Briefly.").unwrap();
+            db::toggle_review_like(&conn, &me, &db::review_id(&me, "red-shift")).unwrap();
+            db::set_user_review(&conn, &me, "red-shift", "").unwrap();
+        }
+        let row = profile(&source, &db, &me).await.unwrap().recent_reviews.remove(0);
+        assert_eq!(row.review_id, None, "the prose is gone, so there is nothing to open");
+        assert_eq!(row.like_count, None, "a count without a review to open");
+    }
+
+    /// A review whose film the source can no longer resolve keeps its address. The prose
+    /// is the point, as everywhere else.
+    ///
+    /// The id is the real one — `db::review_by_id` finds the row it names. The *page* at
+    /// that address is a 404 while the film is missing, which is `full_review`'s existing
+    /// rule for every review of a vanished film and not something about this row.
+    #[tokio::test]
+    async fn a_review_whose_film_is_gone_keeps_its_review_id() {
+        // A TMDB source cannot address a demo slug, so nothing here resolves and nothing
+        // touches the network.
+        let tmdb = dead_tmdb();
+        let db: Db = Arc::new(Mutex::new(db::open(":memory:").unwrap()));
+        let me = sign_in(&db);
+        {
+            let conn = lock(&db);
+            db::set_user_review(&conn, &me, "le-souffle", "Words about a film that went.")
+                .unwrap();
+        }
+
+        let row = profile(&tmdb, &db, &me).await.unwrap().recent_reviews.remove(0);
+        assert_eq!(row.poster, None);
+        assert_eq!(row.body.as_deref(), Some("Words about a film that went."));
+        let review_id = row.review_id.expect("the review kept its address");
+        assert_eq!(review_id, db::review_id(&me, "le-souffle"));
+
+        // The id names a review that is really there, whatever the film is doing.
+        let stored = {
+            let conn = lock(&db);
+            db::review_by_id(&conn, &me, &review_id).unwrap()
+        };
+        assert_eq!(stored.expect("the stored review").body, "Words about a film that went.");
+
+        // And under a source that can resolve the film, the page opens at that same id.
+        let demo = Source::Demo { reason: "testing".into() };
+        assert_eq!(
+            review_by_id(&demo, &db, Some(&me), &review_id).await.expect("the page").id,
+            review_id
+        );
     }
 
     /// The like count on a journal row is everybody's, and absent until somebody

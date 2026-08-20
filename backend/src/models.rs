@@ -890,9 +890,23 @@ pub struct RatedFilm {
     ///
     /// A real total, as on `Review` and `Comment`. `null` at zero rather than `0`, so
     /// the row draws no number until somebody presses the button — see
-    /// `hydrate::like_count`. Always `null` for a score with no prose, since there is
-    /// no review there to like.
+    /// `hydrate::like_count`. Always `null` when `review_id` is, since there is no
+    /// review there to like.
     pub like_count: Option<u32>,
+    /// Where the review lives: the id `GET /api/reviews/{id}` takes.
+    ///
+    /// The row's own link. Without it the tile could only open the *film*, so there was
+    /// no way to read, like or reply to your own review from your own profile — and the
+    /// client is not the right place to assemble an id, because its format is the
+    /// server's business.
+    ///
+    /// The same id the film's review list and the feeds carry for that review, minted by
+    /// `db::review_id`. One definition, so a card and the page it opens cannot disagree.
+    ///
+    /// `null` for a score with nothing written: there is no review to open. `like_count`
+    /// is `null` in exactly the same cases, so a row that offers a count always offers
+    /// somewhere to go.
+    pub review_id: Option<String>,
 }
 
 /// `GET /api/profile` — the signed-in user's whole profile screen in one request.
